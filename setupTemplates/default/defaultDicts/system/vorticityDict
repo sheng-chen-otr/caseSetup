@@ -1,0 +1,21 @@
+vorticityMean
+{
+type        	vorticity;
+libs       	(fieldFunctionObjects);
+field           UMean;
+result          vorticityMean;
+region          region0;
+enabled         true;
+log             true;
+}
+
+vorticity
+{
+type 		vorticity;
+libs 		(fieldFunctionObjects);
+field 		UMean;
+result 		vorticity;
+region 		region0;
+enabled 	true;
+log 		true;
+}
