@@ -23,7 +23,7 @@ dictDict = {'solverType':{'steady':steadyTurb,'transient':transientTurb},
 
 foList = ['averageFieldsDict','forceCoeffs','forceCoeffsExport','forceCoeffSetup','ctpMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
 
-prefixToIgnore = ['IDOM','SMP'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
+prefixToIgnore = ['IDOM','SMP','REFX'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
 
 forceVecDict = {'drag':{'default':'1 0 0'},
                 'lift':{'default':'0 0 1'},
