@@ -1,0 +1,24 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Version:  v2112
+    \\  /    A nd           | Website:  www.openfoam.com
+     \\/     M anipulation  |
+-------------------------------------------------------------------------------
+\*---------------------------------------------------------------------------*/
+
+surfaces{
+
+#includeEtc "caseDicts/postProcessing/visualization/surfaces.cfg"
+
+fields       (p U QMean wallShearStress yPlus pMean UMean pMeanNear UPrime2Mean pPrime2Mean UMeanNear ctpMean Vorticity k kMean kPrime2Mean);
+surfaces
+(
+<SURFACE_PATCHES>
+isoQ {type isoSurface;isoField QMean;isoValue <ISOQ>;interpolate true; }
+isoCtp {type isoSurface;isoField ctpMean;isoValue <ISOCTP>;interpolate true; }
+#include "surfaceSetupList"  
+);
+}
+
+// ************************************************************************* //

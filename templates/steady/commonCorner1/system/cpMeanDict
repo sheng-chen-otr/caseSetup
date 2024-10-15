@@ -1,0 +1,21 @@
+cpMean
+{
+    // Mandatory entries (unmodifiable)
+    type            pressure;
+    libs            (fieldFunctionObjects);
+
+    // Mandatory entries (runtime modifiable)
+    mode            staticCoeff;
+
+    // Optional entries (runtime modifiable)
+    p              	pMean;
+    U               UrelMean;
+    rho             rhoInf;
+    rhoInf          1.225; // enabled if rho=rhoInf
+    pRef            0.0;
+    hydroStaticMode none;
+    result	cpMean;
+    
+    pInf            0.0;
+	UInf            (<INLET_VELOCITY>); 
+}

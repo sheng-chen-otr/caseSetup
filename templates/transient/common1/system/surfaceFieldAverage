@@ -1,0 +1,13 @@
+<RAD_PATCH>
+{
+type            surfaceFieldValue;
+libs            (fieldFunctionObjects);
+fields          (UMean pMean);
+operation       weightedAreaAverage;
+regionType      patch;
+name            <RAD_PATCH>;
+weightField     phi;
+writeFields     false;
+writeToFile     true;
+writeControl    timeStep;
+}

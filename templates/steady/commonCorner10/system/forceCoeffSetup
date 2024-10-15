@@ -1,0 +1,16 @@
+type            forceCoeffs;
+libs            ("libforces.so");
+writeControl    timeStep;
+log             no;
+U 				Urel;
+rho             rhoInf;      // Indicates incompressible
+rhoInf          1;           // Redundant for incompressible
+liftDir         (0 0 1);
+dragDir         (<DRAGVEC>);
+CofR            (<REFCOR>);  // Axle midpoint on ground
+pitchAxis       (0 1 0);
+magUInf         <INLETMAG>; 
+lRef            <REFLEN>;        // Wheelbase length
+Aref            <REFAREA>;        // Estimated
+porosity	    <POROSITY>;
+

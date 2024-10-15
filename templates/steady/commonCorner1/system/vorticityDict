@@ -1,0 +1,10 @@
+vorticity
+{
+type        vorticity;
+libs        (fieldFunctionObjects);
+field           UrelMean;
+result          Vorticity;
+region          region0;
+enabled         true;
+log             false;
+}

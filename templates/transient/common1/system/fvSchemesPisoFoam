@@ -1,0 +1,88 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  8
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSchemes;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+ddtSchemes
+{
+    default backward;
+}
+
+d2dt2Schemes
+{
+}
+
+gradSchemes
+{
+    default         Gauss linear;
+
+    grad(nuTilda)   cellLimited Gauss linear 1;
+    grad(U)         cellLimited Gauss linear 1;
+}
+
+divSchemes
+{
+    default         none;
+
+    //div(phi,U)      bounded Gauss linearFit 0.5;
+    //div(phi,U)      bounded Gauss limitWith quadraticLinearFit 0.5 filteredLinear2V 0.5 0;
+    //    div(phi,U)      bounded Gauss filteredLinear2V 0.2 0;
+
+    //div(phi,U)      bounded Gauss TSlocalBlended upwind LUST unlimitedGrad(U);
+    div(phi,U)      bounded Gauss LUST unlimitedGrad(U);
+
+    div(phi,k)      bounded Gauss limitedLinear 1;
+    div(phi,B)      bounded Gauss limitedLinear 1;
+
+    // div(phi,nuTilda) bounded Gauss TSlocalBlended upwind limitedLinear 1;
+    div(phi,nuTilda) bounded Gauss limitedLinear 1;
+
+    div(B)          Gauss linear;
+    div((nuEff*dev(grad(U).T()))) Gauss linear;
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+
+    default         none;
+
+    laplacian(nuEff,U) Gauss linear limited 0.33;
+    laplacian((1|A(U)),p) Gauss linear limited 0.33;
+    laplacian(rAU,p) Gauss linear limited 0.33;
+    laplacian(DnuTildaEff,nuTilda) Gauss linear limited 0.33;
+    laplacian(diffusivity,cellMotionU)  Gauss linear limited 0.3333;
+    laplacian(diffusivity,cellDisplacement)  Gauss linear limited 0.3333;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+   default         limited 0.33;
+}
+
+wallDist
+{
+    method meshWave;
+}
+
+
+
+
+// ************************************************************************* //

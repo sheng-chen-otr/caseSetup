@@ -1,0 +1,57 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=8
+#SBATCH --partition=solve1
+#SBATCH --output=04_%x_postPro_%j.out
+#SBATCH --job-name=CP_PP205_half 
+SP=FALSE		#To run single precision set as TRUE
+VERSION=of2206 	#change to of2112 or of2206 if desired   
+PVPATH=/home/openfoam/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch
+POSTPATH=/home/openfoam/openFoam/scripts/postProHL.py
+result=${PWD##*/} 
+CWD=${result:-/}
+cd $SLURM_SUBMIT_DIR 	#changes to submission directory
+#changes solve precision to SP if true
+PLOTFORCES='python3.8 /home/openfoam/openFoam/scripts/plotForces_v3_0.py -n -s'
+SUMMARY="python3.8 /home/openfoam/openFoam/scripts/summary-v1.0.py"
+CONFPLOT="/home/openfoam/openFoam/scripts/dist/confidencePlot/confidencePlot"
+STAT="/home/openfoam/openFoam/scripts/dist/status-v1.0/status-v1.0"
+AVG="python3.8 /home/openfoam/openFoam/scripts/averageScript-v2.0.py"
+PPT="python3.8 /home/openfoam/openFoam/scripts/pptGeneration.py"
+DBUPLOAD="python3.8 /home/openfoam/openFoam/scripts/uploadToDb.py -d -p -i -m -o"
+BINFORCE="python3.8 /home/openfoam/openFoam/scripts/binPlotForces_v2_0.py -n -s"
+if [ SP = "TRUE" ]; then
+	echo "Running Solve Script in SP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP
+	
+else
+	echo "Running Solve Script in DP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP
+fi
+
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+echo "Removing old logs..."
+rm -r log.postPro
+if [ -d postProcessing/images ]; then
+	$PVPATH --mpi $POSTPATH > log.postPro
+else
+	mkdir postProcessing/images
+	$PVPATH --mpi $POSTPATH > log.postPro
+fi
+
+if [ $? -eq 0 ]; then
+	$SUMMARY > log.summary
+	$STAT > log.status
+	$AVG > log.runAverage
+	$CONFPLOT > log.confidencePlot
+	$PLOTFORCES > log.plotForces
+	$BINFORCE > log.binForce
+	$PPT > log.pptGeneration
+	$DBUPLOAD > log.reportUpload
+	
+else
+  echo "postPro was not succesful threw an error code!"
+fi
+	
+	
+#------------------------------------------------------------------------------

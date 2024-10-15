@@ -1,0 +1,71 @@
+#!/bin/bash
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=36
+#SBATCH --partition=solve2
+#SBATCH --exclusive
+#SBATCH --output=%x_solve_%j.out
+#SBATCH --job-name=CP_SO195
+SP=TRUE		#To run single precision set as TRUE
+POTENTIAL_FOAM=TRUE	#to turn running potentialFoam on, set as TRUE
+VERSION=of2206		#change to of2112 or of2206 if desired       
+RESTART=FALSE
+
+       
+cd $SLURM_SUBMIT_DIR 	#changes to submission directory
+CASE=${PWD##*/};CASE=${result:-/}
+
+#changes solve precision to SP if true
+if [ $SP = "TRUE" ]; then
+	echo "Running Solve Script in SP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP
+	export SP="TRUE"
+	
+else
+	
+	echo "Running Solve Script in DP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP
+	export SP="FALSE"
+	
+fi
+	
+	
+	
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+MPI='/usr/bin/mpirun'
+FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'
+caseTemplates='~/openFoam/CODEHOST/zeroTemplates'
+cp system/controlDictSimpleFoam system/controlDict
+if [ $RESTART = "FALSE" ]; then
+	if [[ -d postProcessing/postMeshSurfaces ]]; then
+		mkdir postMeshPostProcessing
+		mv postProcessing/postMeshSurfaces postMeshPostProcessing/.
+	fi
+	if [[ -d "fidelityMesh_$CASE" ]]; then
+		rm -r "fidelityMesh_$CASE"
+	fi
+	
+	rm -r postProcessing
+	rm -r log.potentialFoam
+	rm -r log.simpleFoam
+	rm -r log.createZeroDirectory
+	
+	echo 'creating zero directories...'
+	$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir "$caseTemplates" >> log.createZeroDirectory
+	if [ $POTENTIAL_FOAM = "TRUE" ]; then
+		echo 'running potentialFoam...'
+		cp -r system/fvSolutionPotentialFoam system/fvSolution
+		$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec potentialFoam -parallel >> log.potentialFoam
+		cp -r system/fvSolutionSimpleFoam system/fvSolution
+	fi
+fi
+cp system/controlDictSimpleFoam system/controlDict
+echo 'running simpleFoam...'
+$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec simpleFoam -parallel >> log.simpleFoam	
+	
+	
+	
+	
+	
+	
+	
+#------------------------------------------------------------------------------

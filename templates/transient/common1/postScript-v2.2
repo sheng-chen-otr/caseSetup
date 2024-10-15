@@ -1,0 +1,55 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --partition=solve2
+#SBATCH --nodelist=headNode
+#SBATCH --output=%x_post_%j.out
+#SBATCH --job-name=CP_PO231_half 
+    
+
+       
+cd $SLURM_SUBMIT_DIR 	#changes to submission directory
+CASE=${PWD##*/};CASE=${result:-/}
+
+
+#changes solve precision to SP if true
+if [ $SP = "TRUE" ]; then
+	echo "Running Solve Script in SP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP
+	export SP="TRUE"
+	
+else
+	
+	echo "Running Solve Script in DP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP
+	export SP="FALSE"
+	
+fi
+	
+	
+	
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+MPI='/usr/bin/mpirun'
+FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'
+caseTemplates='~/openFoam/CODEHOST/zeroTemplates'
+PVBATCH='/home/openfoam/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch'
+PLOTFORCES='python3 /home/openfoam/openFoam/scripts/plotForces_v3_0.py -n -s'
+SUMMARY="/home/openfoam/openFoam/scripts/dist/summary-v1.0/summary-v1.0"
+CONFPLOT="python3 /home/openfoam/openFoam/scripts/confidencePlot.py"
+STAT="/home/openfoam/openFoam/scripts/dist/status-v1.0/status-v1.0"
+AVG="python3 /home/openfoam/openFoam/scripts/averageScriptTransient-v2.0.py"
+POSTPRO='/home/openfoam/scripts/postProHL.py'
+
+
+$SUMMARY > log.summary
+$STAT > log.status
+$AVG > log.runAverage
+
+	
+	
+	
+	
+	
+	
+	
+#------------------------------------------------------------------------------

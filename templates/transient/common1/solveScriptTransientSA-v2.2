@@ -1,0 +1,112 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=36
+#SBATCH --partition=solve1
+#SBATCH --exclusive
+#SBATCH --job-name=CP_TR114_half
+#SBATCH --output=02_%x_solveTransient_%j.out
+
+SP=TRUE		#To run single precision set as TRUE
+POTENTIAL_FOAM=TRUE	#to turn running potentialFoam on, set as TRUE
+VERSION=of2206		#change to of2112 or of2206 if desired       
+RESTART=FALSE      
+       
+      
+cd $SLURM_SUBMIT_DIR 	#changes to submission directory
+
+#changes solve precision to SP if true
+if [ $SP = "TRUE" ]; then
+	echo "Running Solve Script in SP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP
+	export SP="TRUE"
+	
+else
+	
+	echo "Running Solve Script in DP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP
+	export SP="FALSE"
+	
+
+fi
+
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+
+MPI='/usr/bin/mpirun'
+FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'
+caseTemplates='~/openFoam/CODEHOST/zeroTemplatesSA'
+if [ $RESTART = "FALSE" ]; then
+	
+	rm log.pisoFoam
+	rm log.simpleFoam
+	rm log.potentialFoam
+	rm postProcessing*
+	
+	cp constant/turbulencePropertiesSimpleFoam constant/turbulenceProperties
+	cp system/averageFieldsDictSimpleFoam system/averageFieldsDict
+	cp system/controlDictSimpleFoam system/controlDict
+	cp system/fvSolutionSimpleFoam system/fvSolution
+	cp system/fvSchemesSimpleFoam system/fvSchemes
+	echo 'creating zero directories...'
+	$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir "$caseTemplates" >> log.createZeroDirectory
+
+	if [ $POTENTIAL_FOAM = "TRUE" ]; then
+		echo 'running potentialFoam...'
+		cp -r system/fvSolutionPotentialFoam system/fvSolution
+		echo 'running potentialFoam...'
+		$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec potentialFoam -parallel >> log.potentialFoam
+		cp -r system/fvSolutionSimpleFoam system/fvSolution
+	fi
+	
+	
+	echo 'running simpleFoam...'
+	$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec simpleFoam -parallel >> log.simpleFoam
+	echo "running export in DP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP
+	cp system/controlDictExportSimpleFoam system/controlDict
+	echo 'running steady export...'
+	rm log.steadyMeanExports
+	$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec simpleFoam -postProcess -parallel -latestTime -fields "(pMean UMean)" >> log.steadyMeanExports
+
+	mv postProcessing postProcessing_RAS
+
+	if [ -d processor0/1000 ]; then
+		# restart from iteration 1000, setting iteration 1000 to 0
+		ls -d processor* | xargs -I {} rm -rf ./{}/0
+		ls -d processor* | xargs -I {} mv -f ./{}/1000 ./{}/0
+		ls -d processor* | xargs -I {} rm -rf ./{}/0/uniform
+	fi
+
+fi
+
+#changes solve precision to SP if true
+if [ $SP = "TRUE" ]; then
+	echo "Running Solve Script in SP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP
+	export SP="TRUE"	
+else
+	echo "Running Solve Script in DP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP
+	export SP="FALSE"
+fi
+
+cp constant/turbulencePropertiesPisoFoam constant/turbulenceProperties
+cp system/averageFieldsDictPisoFoam system/averageFieldsDict
+cp system/controlDictPisoFoam system/controlDict
+cp system/fvSolutionPisoFoam system/fvSolution
+cp system/fvSchemesPisoFoam system/fvSchemes
+echo 'running pisoFoam...'
+$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec pisoFoam -parallel >> log.pisoFoam
+
+	
+
+	
+	
+	
+	
+	
+	
+
+
+
+
+#------------------------------------------------------------------------------

@@ -1,0 +1,16 @@
+averageFields
+{	
+type	fieldAverage;
+libs	(fieldFunctionObjects);
+fields
+(
+Urel{base time;mean on; prime2Mean on;}
+p{base time;mean on; prime2Mean on;}
+phi{base time;mean on; prime2Mean on;}
+);
+restartOnRestart false;
+timeStart       <AVGSTART>;
+executeControl  timeStep;
+executeInterval 1;
+writeControl    onEnd;
+}
