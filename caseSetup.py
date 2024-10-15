@@ -257,6 +257,8 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                 refType = fullCaseSetupDict[geomName]['REF_TYPE'][0]
                 if refType not in refinementRegionStrings['REFX'].keys():
                     print('ERROR! Invalid refinement type for %s' % (geomName))
+                    print('Possible refinement types are: %s' % (list(refinementRegionStrings['REFX'].keys())))
+                    sys.exit()
                 
                 if refType == 'distance':
                     distanceStringArray = []
@@ -270,7 +272,6 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                     
                     regRefString = regRefString.replace('GEOM_NAME',geomName)\
                                                .replace('GEOM_LEVEL',geomLevel)\
-                                               .replace('POR_POINT',str(porPoint))\
                                                .replace('REF_TYPE',str(refType))\
                                                .replace('REF_LEVELS',str(refLevels))\
                                                .replace('REF_LEVELS',str(refLevels))
@@ -284,8 +285,9 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                     refLevel = int(refLevel)
                 except:
                     print('ERROR! Invalid refinement values for %s' % (geomName))
+                    
                     return
-                    exit()
+                    sys.exit()
 
             #test if refinement geometry
             regRefString = regRefString.replace('GEOM_NAME',geomName)\
@@ -696,7 +698,7 @@ def checkRefinements(geomDict,writeCaseSetupDict,fullCaseSetupDict):
                             refTemplate = refTypes[refType]
                         else:
                             print('ERROR! Available REF_TYPE for [%s] are %s.' % (refName, list(refTypes.keys())))
-                            exit()
+                            sys.exit()
                     except: 
                         
                         print('WARNING: Invalid input for [%s]: REF_TYPE' % (refName))
