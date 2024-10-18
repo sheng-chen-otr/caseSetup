@@ -1,0 +1,55 @@
+[DEFAULTS]
+DEFAULT_MODULES = defaultBCSetup defaultGlobalDecomposition defaultGlobalRefinement
+ADDON_MODULES = 
+
+[TITLES]
+CASENAME = cat
+CASEDESCRP = default description
+JOBCODE = TS
+
+[GEOMETRY]
+GEOM = trial003.stl,1,8,5,1.1,high
+	fr-wh-lhs-updated.stl,1,8,5,1.1,high
+	fr-wh-rhs-updated.stl,1,8,5,1.1,high
+	rr-wh-lhs.stl,1,8,5,1.1,high
+	rr-wh-rhs.stl,1,8,5,1.1,high
+	body-front-suspension.stl,1,8,5,1.1,high
+	body-rear-suspension.stl,1,8,5,1.1,high
+	body-sidepod-v2.obj.gz,1,9,5,1.1,high
+	body-diffuser-v7.obj.gz,1,8,5,1.1,high
+	rearWing_v5_X_-400.obj.gz,1,9,5,1.1,high
+	frontWing_v7.obj.gz,1,9,5,1.1,high
+	POR-radiator-v2-lhs.obj.gz,1,9,0,1.1,high
+	REFX-bargeboard-v2.obj.gz,1,9,5,1.1,high
+	body-wheel-spats.obj.gz,1,9,5,1.1,high
+
+[GLOBAL_CONTROL]
+STARTFROM = startTime
+ENDTIME = 2000
+DT = 1
+WRITEINT = 500
+PURGEINT = 1
+AVGSTART = 500
+
+[GLOBAL_SIM_CONTROL]
+SIM_TYPE = steady
+SIM_INIT = potential
+SIM_SYM = half
+TURB_MODEL = kosst
+
+[GLOBAL_MATERIAL]
+NPHASE = 1
+MATERIAL_TYPES = air
+VISCOSITY = 1.46e-5
+
+[POR-radiator-v2-lhs]
+DCOEFFS = 1000
+FCOEFFS = 1000
+VEC1 = 1 0 0
+VEC2 = 0 1 0
+POINT = 0 0 0
+
+[REFX-bargeboard-v2]
+REF_TYPE = outside
+REF_LEVEL = 9
+

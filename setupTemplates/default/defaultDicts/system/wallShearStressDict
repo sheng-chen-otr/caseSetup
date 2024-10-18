@@ -10,6 +10,6 @@ wallShearStress
 type            wallShearStress;
 libs            (fieldFunctionObjects);
 field           UMean;
-patches         (<ALL_PATCHES>); 
+patches         (".*"); 
 }
 // ************************************************************************* //

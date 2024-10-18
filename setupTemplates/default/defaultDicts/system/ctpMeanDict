@@ -1,4 +1,4 @@
-cpMean
+cptMean
 {
     // Mandatory entries (unmodifiable)
     type            pressure;
@@ -11,11 +11,11 @@ cpMean
     p               pMean;
     U               UMean;
     rho             rhoInf;
-    rhoInf          1.225; // enabled if rho=rhoInf
+    rhoInf          1.205; // enabled if rho=rhoInf
     pRef            0.0;
     hydroStaticMode none;
     result ctpMean;
     
     pInf            0.0;
-	UInf            (<INLET_VELOCITY>); 
+	UInf            (<INLET_MAG> 0 0); 
 }

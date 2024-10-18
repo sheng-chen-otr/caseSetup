@@ -1,0 +1,78 @@
+
+
+clusterDict = {'slurm':{'header':   '''
+                                    #SBATCH --nodes=NUM_NODES
+                                    #SBATCH --ntasks-per-node=TASK_PER_NODE
+                                    #SBATCH --partition=PARTITION_NAME
+                                    #SBATCH --output=01_%x_meshing_%j.out
+                                    #SBATCH --exclusive
+                                    #SBATCH --job-name=JOB_CODE_CASENAME_SYMMETRY
+                                    ''' ,
+[HEADER]
+							
+									
+									
+[MESH]
+HEADER = #SBATCH --nodes=NUM_NODES
+		#SBATCH --ntasks-per-node=TASK_PER_NODE
+		#SBATCH --partition=PARTITION
+		#SBATCH --output=01_%x_meshing_%j.out
+		#SBATCH --exclusive
+		#SBATCH --job-name=QUEUE_NAME		
+		
+NUM_NODES = default
+TASK_PER_NODE = default
+PARTITION = default
+QUEUE_NAME = JOB_CODE_MS:CASENAME_SYM
+
+[SOLVE]
+HEADER = #SBATCH --nodes=NUM_NODES
+		#SBATCH --ntasks-per-node=TASK_PER_NODE
+		#SBATCH --partition=PARTITION
+		#SBATCH --output=01_%x_meshing_%j.out
+		#SBATCH --exclusive
+		#SBATCH --job-name=QUEUE_NAME		
+		
+NUM_NODES = default
+TASK_PER_NODE = default
+PARTITION = default
+QUEUE_NAME = JOB_CODE_SO:CASENAME_SYM
+
+[EXPORT]
+HEADER = #SBATCH --nodes=NUM_NODES
+		#SBATCH --ntasks-per-node=TASK_PER_NODE
+		#SBATCH --partition=PARTITION
+		#SBATCH --output=01_%x_meshing_%j.out
+		#SBATCH --exclusive
+		#SBATCH --job-name=QUEUE_NAME		
+		
+NUM_NODES = default
+TASK_PER_NODE = default
+PARTITION = default
+QUEUE_NAME = JOB_CODE_EX:CASENAME_SYM
+
+[POSTPRO]
+HEADER = #SBATCH --nodes=NUM_NODES
+		#SBATCH --ntasks-per-node=TASK_PER_NODE
+		#SBATCH --partition=PARTITION
+		#SBATCH --output=01_%x_meshing_%j.out
+		#SBATCH --exclusive
+		#SBATCH --job-name=QUEUE_NAME		
+		
+NUM_NODES = 1
+TASK_PER_NODE = 8
+PARTITION = default
+QUEUE_NAME = JOB_CODE_PP:CASENAME_SYM
+
+[POST]
+HEADER = #SBATCH --nodes=NUM_NODES
+		#SBATCH --ntasks-per-node=TASK_PER_NODE
+		#SBATCH --partition=PARTITION
+		#SBATCH --output=01_%x_meshing_%j.out
+		#SBATCH --exclusive
+		#SBATCH --job-name=QUEUE_NAME		
+		
+NUM_NODES = 1
+TASK_PER_NODE = 1
+PARTITION = default
+QUEUE_NAME = JOB_CODE_PP:CASENAME_SYM

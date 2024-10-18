@@ -15,9 +15,10 @@ fields       (p U QMean wallShearStress yPlus pMean UMean pMeanNear UPrime2Mean 
 surfaces
 (
 <SURFACE_PATCHES>
-isoQ {type isoSurface;isoField QMean;isoValue <ISOQ>;interpolate true; }
-isoCtp {type isoSurface;isoField ctpMean;isoValue <ISOCTP>;interpolate true; }
-#include "surfaceSetupList"  
+
+	isoQ {type isoSurface;isoField QMean;isoValue <ISOQ>;interpolate true; }
+	isoCtp {type isoSurface;isoField ctpMean;isoValue <ISOCPT>;interpolate true; }
+	#include "surfaceSetupList"  
 );
 }
 

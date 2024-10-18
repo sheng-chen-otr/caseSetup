@@ -23,7 +23,7 @@ fields
 (UMean UMeanNear)
 (pMean pMeanNear)
 );
-patches     (<ALL_PATCHES>);
+patches     (".*");
 distance        0.001;
 enabled         true;
 log             false;
