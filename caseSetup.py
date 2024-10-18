@@ -14,6 +14,7 @@ import subprocess as sp
 from writeSystem import *
 from utilities import *
 from writeConstant import *
+from writeScripts import *
 
 #these lines get the path which the program is run from
 path = os.path.split(os.getcwd())[0] #path of the case
@@ -75,7 +76,7 @@ def main():
         writeBlockMesh(templateLoc,fullCaseSetupDict)
         writeDecomposeParDict(templateLoc, fullCaseSetupDict)
         writeControlDict(templateLoc, fullCaseSetupDict)
-        copyFunctionObjects(templateLoc,foList)
+        copyFunctionObjects(templateLoc,foList,geomDict,fullCaseSetupDict)
         writeSurfaceFieldAverage(geomDict,fullCaseSetupDict)
         writeBoundaries(templateLoc,geomDict,fullCaseSetupDict)
         
@@ -83,8 +84,11 @@ def main():
         writeSchemes(templateLoc,fullCaseSetupDict)
         writeSolution(templateLoc,fullCaseSetupDict)
         
-        writeForceCoeff(geomDict,fullCaseSetupDict)
+        writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict)
         writeOptions(templateLoc,geomDict,fullCaseSetupDict)
+        writeSurfaces(templateLoc, geomDict,fullCaseSetupDict)
+        
+        getClusterType(templateLoc,fullCaseSetupDict)
   
 
        
