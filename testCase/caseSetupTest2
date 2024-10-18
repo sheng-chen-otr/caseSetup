@@ -1,0 +1,69 @@
+[DEFAULTS]
+DEFAULT_MODULES = 
+ADDON_MODULES = 
+
+[TITLES]
+CASENAME = casename
+CASEDESCRP = default description
+JOBCODE = TS
+
+[GEOMETRY]
+GEOM = fr-wh-lhs-updated.stl,1,8,5,1.1,high
+	fr-wh-rhs-updated.stl,1,8,5,1.1,high
+	rr-wh-lhs.stl,1,8,5,1.1,high
+	rr-wh-rhs.stl,1,8,5,1.1,high
+	body-front-suspension.stl,1,8,5,1.1,high
+	body-rear-suspension.stl,1,8,5,1.1,high
+	body-sidepod-v2.obj.gz,1,9,5,1.1,high
+	body-diffuser-v7.obj.gz,1,8,5,1.1,high
+	rearWing_v5_X_-400.obj.gz,1,9,5,1.1,high
+	frontWing_v7.obj.gz,1,9,5,1.1,high
+	POR-radiator-v2-lhs.obj.gz,1,9,0,1.1,high
+	body-bargeboard-v2.obj.gz,1,9,5,1.1,high
+	body-wheel-spats.obj.gz,1,9,5,1.1,high
+
+[GLOBAL_CONTROL]
+STARTFROM = latestTime
+ENDTIME = 2000
+DT = 1
+WRITEINT = 500
+PURGEINT = 1
+AVGSTART = 500
+
+[GLOBAL_SIM_CONTROL]
+SIM_TYPE = steady
+SIM_INIT = potential
+SIM_SYM = half
+TURB_MODEL = kosst
+
+[BC_SETUP]
+INLET_MAG = 30
+YAW = 0
+GROUND = moving
+REFCOR = 1.17678 0 0
+REFLEN = 2.311671
+REFAREA = 1
+POROSITY = yes
+
+[GLOBAL_COMPUTE_SETUP]
+QUEUE_TYPE = slurm
+PARTITION_NAME = solve1
+NUM_NODES = 1
+DECOMP = 9 2 2
+
+[GLOBAL_MATERIAL]
+NPHASE = 1
+MATERIAL_TYPES = air
+VISCOSITY = 1.46e-5
+
+[GLOBAL_REFINEMENT]
+TEMPLATE_TYPE = snappyTemplate1
+MIN_GEOM_LEVEL = 8
+REF_FEAT_ANGLE = 25
+GEOM_REF_DIST = 0.03 0.1 0.2
+GEOM_REF_LEVELS = 9 8 7
+DEFAULT_WAKE_REF = true
+LOC_IN_MESH = -1 -1 4
+LAYER_TYPE = relative
+DEF_EX_RATIO = 1.2
+

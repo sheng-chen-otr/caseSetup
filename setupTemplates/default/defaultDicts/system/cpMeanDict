@@ -17,5 +17,5 @@ cpMean
     result	cpMean;
     
     pInf            0.0;
-	UInf            (<INLET_VELOCITY>); 
+	UInf            (<INLET_MAG> 0 0); 
 }

@@ -1,0 +1,23 @@
+[DEFAULTS]
+DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultBCSetup defaultGlobalDecomposition defaultGlobalMaterial defaultGlobalRefinement
+
+[TITLES]
+CASENAME = casename
+CASEDESCRP = default description
+JOBCODE = TS
+
+[GEOMETRY]
+GEOM = fr-wh-lhs-updated.stl,1,8,5,1.1,high
+	fr-wh-rhs-updated.stl,1,8,5,1.1,high
+	rr-wh-lhs.stl,1,8,5,1.1,high
+	rr-wh-rhs.stl,1,8,5,1.1,high
+	body-front-suspension.stl,1,8,5,1.1,high
+	body-rear-suspension.stl,1,8,5,1.1,high
+	body-sidepod-v2.obj.gz,1,9,5,1.1,high
+	body-diffuser-v7.obj.gz,1,8,5,1.1,high
+	rearWing_v5_X_-400.obj.gz,1,9,5,1.1,high
+	frontWing_v7.obj.gz,1,9,5,1.1,high
+	POR-radiator-v2-lhs.obj.gz,1,9,0,1.1,high
+	body-bargeboard-v2.obj.gz,1,9,5,1.1,high
+	body-wheel-spats.obj.gz,1,9,5,1.1,high
+
