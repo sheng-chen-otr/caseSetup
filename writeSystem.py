@@ -5,7 +5,6 @@ import subprocess as sp
 import math
 from utilities import *
 
-#fix averagefields dict please
 
 steadyTurb = {'sa':'SpalartAllmaras','kosst':'kOmegaSST'}
 
@@ -21,9 +20,9 @@ dictDict = {'solverType':{'steady':steadyTurb,'transient':transientTurb},
             'initType': initDict,
             'controlDictType':controlDictDict}
 
-foList = ['averageFieldsDict','forceCoeffs','forceCoeffsExport','forceCoeffSetup','ctpMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
-
-prefixToIgnore = ['IDOM','SMP','REFX'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
+foList = ['averageFieldsDict','ctpMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
+coeffList = ['forceCoeffs','forceCoeffsExport','forceCoeffSetup']
+prefixToIgnore = ['IDOM','SMP','REFX','REF'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
 
 forceVecDict = {'drag':{'default':'1 0 0'},
                 'lift':{'default':'0 0 1'},
@@ -97,7 +96,7 @@ def writeControlDict(templateLoc, fullCaseSetupDict):
         print('\tPossible sim types are: %s' % (list(dictDict['solverType'].keys()))) 
         sys.exit()
     
-def copyFunctionObjects(templateLoc,foList):
+def copyFunctionObjects(templateLoc,foList,geomDict,fullCaseSetupDict):
     print('\tCopying functionObjects...')
     for fo in foList:
         print('\t\t%s' % (fo))
@@ -106,10 +105,27 @@ def copyFunctionObjects(templateLoc,foList):
         try:
             copyTemplateToCase(foLoc,localPath)
         except Exception as e:
-            print('\t\t%s' % (e))
+            sys.exit('\t\t%s' % (e))
+            
             continue
+        for section in fullCaseSetupDict.keys():
+            for var in fullCaseSetupDict[section].keys():
+                search_and_replace(localPath, '<%s>' % (var), ' '.join(fullCaseSetupDict[section][var]))
+        
+        
 
-def writeForceCoeff(geomDict,fullCaseSetupDict):
+def writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict):
+
+    #copying forceCoeff templates
+    print('\tCopying forceCoeff templates...')
+    for coeff in coeffList:
+        print('\t\t%s' % (coeff))
+        foLoc = '%s/defaultDicts/system/%s' % (templateLoc,coeff)
+        localPath = 'system/%s' % (coeff)
+        try:
+            copyTemplateToCase(foLoc,localPath)
+        except Exception as e:
+            sys.exit('\t\t%s' % (e))
     #writing to the forceCoeffs and forceCoeffsExport
     allList = []
     geomList = []
@@ -158,13 +174,35 @@ def writeForceCoeff(geomDict,fullCaseSetupDict):
                 search_and_replace("system/forceCoeffSetup", "<%s>" % (key),' '.join(fullCaseSetupDict['BC_SETUP'][key])) 
             search_and_replace("system/forceCoeffsExport", "<%s>" % (key),fullCaseSetupDict['BC_SETUP'][key][0]) 
             search_and_replace("system/forceCoeffSetup", "<%s>" % (key),fullCaseSetupDict['BC_SETUP'][key][0])
+    
     except Exception as e:
         sys.exit('ERROR! Unable to find forceCoeffsExport in system directory! %s' % (e))
     
 
     
-        
-        
+def writeSurfaces(templateLoc,geomDict,fullCaseSetupDict):        
+    #no need to copy surfacesTemplate due to it being copied by fo copy
+    geomList = []
+    geomOutList = []
+    for geom in geomDict:
+        if any(x in geom for x in prefixToIgnore):
+            continue
+        else:          
+            geomName = geom.split('.')[0]
+            geomList.append("""".*%s.*" """ % (geomName))
+            geomOut = """\t%s{$patchSurface;patches (".*%s.*");}\n""" % (geomName,geomName)
+            geomOutList.append(geomOut)
+
+    geomString = ''.join(geomList)
+    allLine = """\tall{$patchSurface;patches (%s);}\n""" % (geomString)
+    geomOutList.append(allLine)
+    geomOutList = "".join(geomOutList)
+
+    print("\tSetting up surfaces...")
+    search_and_replace("system/surfaces", "<SURFACE_PATCHES>",geomOutList)
+    for var in fullCaseSetupDict['GLOBAL_POST_PRO'].keys():
+        val = ''.join(fullCaseSetupDict['GLOBAL_POST_PRO'][var])
+        search_and_replace("system/surfaces", "<%s>" % (var), val)
         
         
         
