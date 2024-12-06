@@ -87,8 +87,11 @@ def main():
         writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict)
         writeOptions(templateLoc,geomDict,fullCaseSetupDict)
         writeSurfaces(templateLoc, geomDict,fullCaseSetupDict)
-        
-        getClusterType(templateLoc,fullCaseSetupDict)
+        writeTransportProperties(templateLoc, fullCaseSetupDict)
+        writeTurbulenceProperties(templateLoc, fullCaseSetupDict)
+        copyScripts(templateLoc, fullCaseSetupDict,case)
+        #getClusterType(templateLoc,fullCaseSetupDict)
+        print('\nCase setup completed successfully!')
   
 
        

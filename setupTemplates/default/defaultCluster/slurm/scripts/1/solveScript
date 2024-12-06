@@ -1,0 +1,88 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=36
+#SBATCH --partition=solve1
+#SBATCH --exclusive
+#SBATCH --output=02_%x_solve_%j.out
+#SBATCH --job-name=TS_SO900_transient
+
+
+
+
+
+
+
+
+
+SP=TRUE
+POTENTIAL_FOAM=	#to turn running potentialFoam on, set as TRUE
+VERSION=of2206		#change to of2112 or of2206 if desired       
+RESTART=FALSE
+
+       
+cd $SLURM_SUBMIT_DIR 	#changes to submission directory
+CASE=${PWD##*/};CASE=${result:-/}
+
+
+#changes solve precision to SP if true
+if [ $SP = "TRUE" ]; then
+	echo "Running Solve Script in SP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP
+	export SP="TRUE"
+	
+else
+	
+	echo "Running Solve Script in DP!"
+	. ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP
+	export SP="FALSE"
+	
+fi
+	
+	
+	
+. $WM_PROJECT_DIR/bin/tools/RunFunctions
+MPI='/usr/bin/mpirun'
+FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'
+caseTemplates='~/openFoam/CODEHOST/zeroTemplates'
+PLOTFORCES='/home/openfoam/openFoam/scripts/dist/plotForces_v3_0/plotForces_v3_0 -n -s'
+SUMMARY="/home/openfoam/openFoam/scripts/dist/summary-v1.0/summary-v1.0"
+CONFPLOT="/home/openfoam/openFoam/scripts/dist/confidencePlot/confidencePlot"
+STAT="/home/openfoam/openFoam/scripts/dist/status-v1.0/status-v1.0"
+AVG="python3 /home/openfoam/openFoam/scripts/averageScript-v2.0.py"
+
+cp system/controlDictSimpleFoam system/controlDict
+if [ $RESTART = "FALSE" ]; then
+	
+	if [[ -d "fidelityMesh_$CASE" ]]; then
+		rm -r "fidelityMesh_$CASE"
+	fi
+	
+	rm -r postProcessing
+	rm -r log.potentialFoam
+	rm -r log.simpleFoam
+	rm -r log.createZeroDirectory
+	
+	echo 'creating zero directories...'
+	$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir "$caseTemplates" >> log.createZeroDirectory
+	if [ $POTENTIAL_FOAM = "TRUE" ]; then
+		if [[ -f "system/controlDictPotential" ]]; then
+			cp system/controlDictPotential system/controlDict
+			cp system/fvSolutionPotential system/fvSolution
+			echo 'running potentialFoam...'
+			$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec potentialFoam -parallel >> log.potentialFoam
+		fi
+	fi
+fi
+cp -r system/fvSolutionSimple system/fvSolution
+cp system/controlDictSimple system/controlDict
+echo 'running simpleFoam...'
+$MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec simpleFoam -parallel >> log.simpleFoam	
+
+	
+	
+	
+	
+	
+	
+	
+#------------------------------------------------------------------------------

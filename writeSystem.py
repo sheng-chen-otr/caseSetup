@@ -8,10 +8,10 @@ from utilities import *
 
 steadyTurb = {'sa':'SpalartAllmaras','kosst':'kOmegaSST'}
 
-transientTurb = {'sa':'SpalartAllmaras'}
+transientTurb = {'sa':'SpalartAllmarasDDES'}
 
 initDict = {'steady': {'potential':'controlDictPotential','none':''},
-            'transient':{'potential':'controlDictPotentialInit','steady':'controlDictSimpleInit','none':''}}
+            'transient':{'potential':'controlDictPotential','steady':'controlDictSimple','none':''}}
             
 controlDictDict = {'steady':'controlDictSimple',
                    'transient':'controlDictPiso'}
@@ -305,22 +305,34 @@ def writePostProSurfaceList(fullCaseSetupDict):
 def writeSolution(templateLoc, fullCaseSetupDict):
     print('\tWriting fvSolution...')
     simType = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0]
+    templatePathRefLims = '%s/defaultDicts/system/refsAndLimitsIncludeDict' % (templateLoc) 
     templatePathPiso = '%s/defaultDicts/system/fvSolutionPiso' % (templateLoc) 
-    templatePathSimple = '%s/defaultDicts/system/fvSolutionSimple' % (templateLoc) 
+    templatePathSimple = '%s/defaultDicts/system/fvSolutionSimple' % (templateLoc)
+    templatePathPotential = '%s/defaultDicts/system/fvSolutionPotential' % (templateLoc) 
+    copyTemplateToCase(templatePathRefLims, 'system/refsAndLimitsIncludeDict')
     
     if simType.lower() == 'transient':
         #copying over the fvSchemesPiso
         print('\t\tIs transient case:')
-        print('\t\t\tCopying fvSolutionSimple')
+        
         print('\t\t\tCopying fvSolutionPiso')
         
-        copyTemplateToCase(templatePathPiso, 'system/fvSolutionPiso')
-        copyTemplateToCase(templatePathSimple, 'system/fvSolutionSimple')
+        copyTemplateToCase(templatePathPiso, 'system/fvSolutionPiso')       
+        if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0].lower() == 'potential':
+            print('\t\t\tCopying fvSolutionPotential')
+            copyTemplateToCase(templatePathPotential, 'system/fvSolutionPotential')
+        elif fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0].lower() == 'steady':   
+            print('\t\t\tCopying fvSolutionSimple')
+            copyTemplateToCase(templatePathSimple, 'system/fvSolutionSimple')
     elif simType.lower() == 'steady':
         print('\t\tIs steady case:')
         print('\t\t\tCopying fvSolutionSimple')
 
         copyTemplateToCase(templatePathSimple, 'system/fvSolutionSimple')
+        
+        if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0].lower() == 'potential':
+            print('\t\t\tCopying fvSolutionPotential')
+            copyTemplateToCase(templatePathPotential, 'system/fvSolutionPotential')
     else:
         sys.exit('ERROR! SIM_TYPE is invalid!')
 
@@ -334,16 +346,21 @@ def writeSchemes(templateLoc, fullCaseSetupDict):
     if simType.lower() == 'transient':
         #copying over the fvSchemesPiso
         print('\t\tIs transient case:')
-        print('\t\t\tCopying fvSchemesSimple')
+
         print('\t\t\tCopying fvSchemesPiso')
         
         copyTemplateToCase(templatePathPiso, 'system/fvSchemesPiso')
-        copyTemplateToCase(templatePathSimple, 'system/fvSchemesSimple')
+        
+        if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0].lower() == 'steady':   
+            print('\t\t\tCopying fvSchemesSimple')
+            copyTemplateToCase(templatePathSimple, 'system/fvSchemesSimple')
+
     elif simType.lower() == 'steady':
         print('\t\tIs steady case:')
         print('\t\t\tCopying fvSchemesSimple')
 
         copyTemplateToCase(templatePathSimple, 'system/fvSchemesSimple')
+        
     else:
         sys.exit('ERROR! SIM_TYPE is invalid!')
         
@@ -407,9 +424,10 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                           'symmetry':'symmetry{category symmetry; type symmetry; patches (z-max y-max);}'
                           }
     internalDomainDict = {'inlet':'NAME{category inlet; type subSonic; patches (PATCHNAME); options {flowSpecification fixedVelocity;} values {INITIAL_CONDITIONS}}',
-                          'movingWall':'NAME{category wall; type noSlip; patches PATCHNAME); options {wallFunction highReynolds; motion moving;} values {INITIAL_CONDITIONS}}',
+                          'movingwall':'NAME{category wall; type noSlip; patches PATCHNAME); options {wallFunction highReynolds; motion moving;} values {INITIAL_CONDITIONS}}',
                           'outlet':'NAME{category outlet; type subSonic; patches (PATCHNAME); options {returnFlow default} values {$:initialConditions;}}',
                           'wall':'NAME{category wall; type slip; patches (PATCHNAME); values {$:initialConditions;}}',
+                          'noslipwall':'NAME{category wall; type noSlip; patches (PATCHNAME); options {wallFunction highReynolds; motion stationary;} values {$:initialConditions;}}',
                           'symmetry':'NAME{category symmetry; type symmetry; patches (PATCHNAME);}'
                           }
     internalDomain = False
@@ -448,7 +466,7 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                     patchString = domainWallDict['inlet'].replace('PATCHNAME',"%s.*" % (section))\
                                                          .replace('NAME','%s' % (section))\
                                                          .replace('INITIAL_CONDITIONS',initialConditions)
-                elif patchType.lower() == 'movingWall':
+                elif patchType.lower() == 'movingwall':
                         if fullCaseSetupDict[section]['PATCH_MOV'][0].lower() == 'default':
                             initialConditions = '$:initialConditions;'
                         else:
@@ -457,7 +475,7 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                             inletVelY = patchVel[1]
                             inletVelZ = patchVel[2]
                             initialConditions = 'U uniform (%1.4f %1.4f %1.4f); p uniform 0; k uniform 0.24; omega uniform 1.78; nut uniform 0; nuTilda uniform 0.05;' % (inletVelX,inletVelY, inletVelZ)
-                        patchString = domainWallDict['movingWall'].replace('PATCHNAME',"%s.*" % (section))\
+                        patchString = domainWallDict['movingwall'].replace('PATCHNAME',"%s.*" % (section))\
                                                                 .replace('NAME',"%s" % (section))\
                                                                 .replace('INITIAL_CONDITIONS',initialConditions)
                 elif patchType.lower() == 'outlet':
@@ -465,6 +483,9 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                                                               .replace('NAME',"%s" % (section))
                 elif patchType.lower() == 'wall':
                         patchString = domainWallDict['wall'].replace('PATCHNAME',"%s.*" % (section))\
+                                                            .replace('NAME',"%s" % (section))
+                elif patchType.lower() == 'noslipwall':
+                        patchString = domainWallDict['noslipwall'].replace('PATCHNAME',"%s.*" % (section))\
                                                             .replace('NAME',"%s" % (section))
                 elif patchType.lower() == 'symmetry':
                         patchString = domainWallDict['symmetry'].replace('PATCHNAME',"%s.*" % (section))\
@@ -516,7 +537,7 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                             
                     xcenter,ycenter,zcenter,radius = getRotaCoordinates(bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ)
                     whOrig = '%1.6f %1.6f %1.6f' % (xcenter, ycenter, zcenter) #sets the wheel origin based on bounding box
-                    whAxis = '0 1 0'
+                    whAxis = '0 -1 0'
                 if fullCaseSetupDict[geom.split('.')[0]]['WH_RAD'][0].lower() != 'default':
                     try:
                         radius = float(fullCaseSetupDict[geom.split('.')[0]]['WH_RAD'][0])
