@@ -299,7 +299,6 @@ def writeSnappy(geomDict,fullCaseSetupDict):
             #test if refinement geometry
             regRefString = regRefString.replace('GEOM_NAME',geomName)\
                                             .replace('GEOM_LEVEL',geomLevel)\
-                                            .replace('POR_POINT',str(porPoint))\
                                             .replace('REF_TYPE',str(refType))\
                                             .replace('REF_LEVEL',str(refLevel))                     
          

@@ -385,7 +385,11 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
     print('\t\tCreating initial conditions:')
     inletMag = fullCaseSetupDict['BC_SETUP']['INLET_MAG']
     yaw = fullCaseSetupDict['BC_SETUP']['YAW']
-    inletVec = velVector(float(inletMag[0]),float(yaw[0]),0)
+    sim_sym = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM']
+    if sim_sym[0].lower() == 'half':
+        inletVec = velVector(float(inletMag[0]),0,0)
+    else:
+        inletVec = velVector(float(inletMag[0]),float(yaw[0]),0)
     velString = 'U uniform (%s);' % (inletVec[0])
     initStringArray.append(velString)   
     
