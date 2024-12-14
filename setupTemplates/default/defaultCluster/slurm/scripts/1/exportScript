@@ -10,7 +10,7 @@
 
 
 
-
+ENSIGHT=TRUE
 SP=FALSE		#To run single precision set as TRUE
 VERSION=of2206 	#change to of2112 or of2206 if desired    
 cd $SLURM_SUBMIT_DIR 	#changes to submission directory
@@ -28,7 +28,15 @@ fi
 	echo "Removing old logs..."
 	rm -r log.exportScript
 	cp system/controlDictExport system/controlDict
-	/usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec simpleFoam -postProcess -parallel -latestTime -fields "(pMean UMean phiMean)" >> log.meanExports
+	echo "Exporting post fields..."
+	
+	/usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec simpleFoam -postProcess -parallel -latestTime -fields "(pMean UMean phiMean nuTildaMean omegaMean kMean nutMean U p phi nuTilda omega k nut)" >> log.meanExports
+	if [ $? -eq 0 ]; then
+		if [ $ENSIGHT = "TRUE" ]; then
+			echo "Running foamToEnsight"
+			/usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec foamToEnsight -parallel -latestTime -noZero >> log.EnSight
+		fi
+	fi
 	if [ $? -eq 0 ]; then
 	
 		if [ -d postProcessing/surfaces ]; then
@@ -38,7 +46,7 @@ fi
 	else
 		echo "Export threw an error code!"
 	fi
-	cp system/controlDictSimpleFoam system/controlDict	
+	cp system/controlDictSimple system/controlDict	
 	echo "Export complete, check log file for errors."
 
 	

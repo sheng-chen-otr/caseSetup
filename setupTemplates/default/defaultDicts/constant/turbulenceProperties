@@ -14,5 +14,5 @@ FoamFile
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 simulationType <SIMTYPE>;
-<TURBMODEL>{<TURBMODEL>Model <TURBMODEL>;turbulence on;printCoeffs on;}
+<SIMTYPE>{<SIMTYPE>Model <TURBMODEL>;turbulence on;printCoeffs on;}
 // ************************************************************************* //

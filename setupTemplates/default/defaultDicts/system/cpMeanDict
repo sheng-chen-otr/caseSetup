@@ -11,7 +11,7 @@ cpMean
     p              	pMean;
     U               UMean;
     rho             rhoInf;
-    rhoInf          1.225; // enabled if rho=rhoInf
+    rhoInf          1.205; // enabled if rho=rhoInf
     pRef            0.0;
     hydroStaticMode none;
     result	cpMean;

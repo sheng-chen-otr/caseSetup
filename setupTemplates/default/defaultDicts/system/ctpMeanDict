@@ -14,7 +14,7 @@ cptMean
     rhoInf          1.205; // enabled if rho=rhoInf
     pRef            0.0;
     hydroStaticMode none;
-    result ctpMean;
+    result cptMean;
     
     pInf            0.0;
 	UInf            (<INLET_MAG> 0 0); 

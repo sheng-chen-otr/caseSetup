@@ -14,14 +14,33 @@ Description
 
 \*---------------------------------------------------------------------------*/
 
+nearWallFieldsMean
+{
+type            nearWallFields;
+libs            (fieldFunctionObjects);
+fields
+(
+(UMean UnwMean)
+(pMean pnwMean)
+);
+patches     (".*");
+distance        0.001;
+enabled         true;
+log             false;
+executeControl  timeStep;
+executeInterval 1;
+writeControl    writeTime;
+
+}
+
 nearWallFields
 {
 type            nearWallFields;
 libs            (fieldFunctionObjects);
 fields
 (
-(UMean UMeanNear)
-(pMean pMeanNear)
+(U Unw)
+(p pnw)
 );
 patches     (".*");
 distance        0.001;

@@ -14,7 +14,15 @@ yPlusMean
 type            yPlus;
 field			UMean;
 libs            ("libfieldFunctionObjects.so");
+result 			yPlusMean;
 }
 
+/*yPlus
+{
+type            yPlus;
+libs            ("libfieldFunctionObjects.so");
+result 			yPlus;
+}
+*/
 
 // ************************************************************************* //
