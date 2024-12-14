@@ -16,9 +16,13 @@ initDict = {'steady': {'potential':'controlDictPotential','none':''},
 controlDictDict = {'steady':'controlDictSimple',
                    'transient':'controlDictPiso'}
 
+exportDict = {'steady':'controlDictSimpleExport',
+              'transient':'controlDictPisoExport'}
+
 dictDict = {'solverType':{'steady':steadyTurb,'transient':transientTurb},
             'initType': initDict,
-            'controlDictType':controlDictDict}
+            'controlDictType':controlDictDict,
+            'exportDictType':exportDict}
 
 foList = ['averageFieldsDict','ctpMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
 coeffList = ['forceCoeffs','forceCoeffsExport','forceCoeffSetup']
@@ -73,6 +77,7 @@ def writeControlDict(templateLoc, fullCaseSetupDict):
             if controlDictTemplate != '':
                 localControlDictPath = 'system/%s' % (controlDictTemplate)
                 copyTemplateToCase(initTemplatePath,localControlDictPath)
+
                 print('\t\tWriting controlDict for initialization: %s' % (simInit))
                 for key in setupDict.keys():
                     search_and_replace(localControlDictPath, '<%s>' % (key), setupDict[key][0])
@@ -86,9 +91,13 @@ def writeControlDict(templateLoc, fullCaseSetupDict):
         #sets up the controlDict for actual run
         print('\t\tWriting controlDict for solver: %s' % (simType))
         controlDictTemplate = dictDict['controlDictType'][simType]
+        exportDictTemplate = dictDict['exportDictType'][simType]
         solverPath = '%s/%s' % (controlDictTemplatePath,controlDictTemplate)
+        exportPath = '%s/%s' % (controlDictTemplatePath,exportDictTemplate)
         localControlDictPath = 'system/%s' % (controlDictTemplate)
+        localExportDictPath = 'system/controlDictExport'
         copyTemplateToCase(solverPath,localControlDictPath)
+        copyTemplateToCase(exportPath,localExportDictPath)
         for key in setupDict.keys():
             search_and_replace(localControlDictPath, '<%s>' % (key), setupDict[key][0])
     else:
@@ -297,7 +306,7 @@ def writePostProSurfaceList(fullCaseSetupDict):
                     basePoint = [0,0,i]
                     normalVector = [0,0,1]
                     normal = 'z'
-                stringToAdd = """%s_%sNormal_%04d{type cuttingPlane; planeType pointAndNormal; pointAndNormalDict{ basePoint (%1.4f %1.4f %1.4f); normalVector (%s %s %s);} interpolate true;}\n""" % (sliceType,normal,float(n),basePoint[0],basePoint[1],basePoint[2],normalVector[0],normalVector[1],normalVector[2])
+                stringToAdd = """%s_%sNormal_%04d{type cuttingPlane; planeType pointAndNormal; pointAndNormalDict{ point (%1.4f %1.4f %1.4f); normal (%s %s %s);} interpolate true;}\n""" % (sliceType,normal,float(n),basePoint[0],basePoint[1],basePoint[2],normalVector[0],normalVector[1],normalVector[2])
                 n = n + 1
                 surfacesList.append(stringToAdd)
         surfaceSetupList.write(''.join(surfacesList))
@@ -368,9 +377,9 @@ def writeSchemes(templateLoc, fullCaseSetupDict):
 
 def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
     print('\n\tWriting out caseProperties...')
-    bcStrings = {'GEOM':'GEOM_NAME{category wall; type noSlip; patches ("GEOM_NAME.*"); options {wallFunction WALL_MODEL; motion stationary;} values{$:initialConditions;}}',
-                 'ROTA':'GEOM_NAME{category wall; type noSlip; patches ("GEOM_NAME.*"); options {wallFunction WALL_MODEL; motion rotating;}values{type rotatingWallVelocity;origin (WH_ORIG); axis (WH_AXIS); rotVel WH_VEL; $:initialConditions;}}',
-                 'MOVG':'GEOM_NAME{category wall; type noSlip; patches ("GEOM_NAME.*"); options {wallFunction WALL_MODEL; motion stationary;} values{$:initialConditions;}}'
+    bcStrings = {'GEOM':'GEOM_NAME{category wall; type noSlip; patches ("GEOM_NAME.*"); options {wallFunction WALL_MODEL; motion stationary;} values {$:initialConditions;}}',
+                 'ROTA':'GEOM_NAME{category wall; type noSlip; patches ("GEOM_NAME.*"); options {wallFunction WALL_MODEL; motion rotating;} values {type rotatingWallVelocity;origin (WH_ORIG); axis (WH_AXIS); rotVel WH_VEL; $:initialConditions;}}',
+                 'MOVG':'GEOM_NAME{category wall; type noSlip; patches ("GEOM_NAME.*"); options {wallFunction WALL_MODEL; motion stationary;} values {$:initialConditions;}}'
                 }
     initDict = {'U':{'default':'uniform (INLET_VECTOR);'},
                 'p':{'default':'p uniform 0;','userinput':'p uniform INIT_P;','csname':'INIT_P'},
@@ -418,18 +427,18 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
     #set up the domain boundaries first
     domainWallDictFull = {'inlet':'inlet{category inlet; type subSonic; patches (x-min y-min); options {flowSpecification fixedVelocity;} values {$:initialConditions;}}',
                           'ground':'ground{category wall; type noSlip; patches (z-min); options {wallFunction highReynolds; motion GROUND_MOV;} values {$:initialConditions;}}',
-                          'outlet':'outlet{category outlet; type subSonic; patches (x-max y-max); options {returnFlow default} values {$:initialConditions;}}',
+                          'outlet':'outlet{category outlet; type subSonic; patches (x-max y-max); options {returnFlow default;} values {$:initialConditions;}}',
                           'walls':'walls{category wall; type slip; patches (z-max); values {$:initialConditions;}}'
                           }
     domainWallDictHalf = {'inlet':'inlet{category inlet; type subSonic; patches (x-min); options {flowSpecification fixedVelocity;} values {$:initialConditions;}}',
                           'ground':'ground{category wall; type noSlip; patches (z-min); options {wallFunction highReynolds; motion GROUND_MOV;} values {$:initialConditions;}}',
-                          'outlet':'outlet{category outlet; type subSonic; patches (x-max); options {returnFlow default} values {$:initialConditions;}}',
-                          'walls':'walls{category wall; type slip; patches (z-max y-max); values {$:initialConditions;}}',
-                          'symmetry':'symmetry{category symmetry; type symmetry; patches (z-max y-max);}'
+                          'outlet':'outlet{category outlet; type subSonic; patches (x-max); options {returnFlow default;} values {$:initialConditions;}}',
+                          'walls':'walls{category wall; type slip; patches (z-max y-min); values {$:initialConditions;}}',
+                          'symmetry':'symmetry{category symmetry; type symmetry; patches (y-max);}'
                           }
     internalDomainDict = {'inlet':'NAME{category inlet; type subSonic; patches (PATCHNAME); options {flowSpecification fixedVelocity;} values {INITIAL_CONDITIONS}}',
                           'movingwall':'NAME{category wall; type noSlip; patches PATCHNAME); options {wallFunction highReynolds; motion moving;} values {INITIAL_CONDITIONS}}',
-                          'outlet':'NAME{category outlet; type subSonic; patches (PATCHNAME); options {returnFlow default} values {$:initialConditions;}}',
+                          'outlet':'NAME{category outlet; type subSonic; patches (PATCHNAME); options {returnFlow default;} values {$:initialConditions;}}',
                           'wall':'NAME{category wall; type slip; patches (PATCHNAME); values {$:initialConditions;}}',
                           'noslipwall':'NAME{category wall; type noSlip; patches (PATCHNAME); options {wallFunction highReynolds; motion stationary;} values {$:initialConditions;}}',
                           'symmetry':'NAME{category symmetry; type symmetry; patches (PATCHNAME);}'
@@ -506,6 +515,12 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
         print('\t\t\t%s' % (geom.split('.')[0]))
         geomPrefix = geom.split('-')[0]
         geomWallModel = geomDict[geom]['wallmodel'] #put in the wall model for the geometry
+        if geomWallModel.lower() == 'high':
+            geomWallModel = 'highReynolds'
+        elif geomWallModel.lower() == 'low':
+            geomWallModel = 'lowReynolds'
+        else:
+            sys.exit('ERROR! Wall model not valid for %s!' % (geom))
         whAxis = '0 1 0' #initialize the default values
         whVel = '' 
         whOrig = ''

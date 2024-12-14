@@ -90,6 +90,7 @@ def main():
         writeTransportProperties(templateLoc, fullCaseSetupDict)
         writeTurbulenceProperties(templateLoc, fullCaseSetupDict)
         copyScripts(templateLoc, fullCaseSetupDict,case)
+        writeToCaseSetup(fullCaseSetupDict,'fullCaseSetupDict')
         #getClusterType(templateLoc,fullCaseSetupDict)
         print('\nCase setup completed successfully!')
   
@@ -506,7 +507,7 @@ def writeNewCaseSetup(defaultDict):
     
     writeToCaseSetup(writeCaseSetupDict)
         
-def writeToCaseSetup(writeCaseSetupDict):
+def writeToCaseSetup(writeCaseSetupDict,output='default'):
     writeConfig = configparser.ConfigParser()
     writeConfig.optionxform = str
     for module in writeCaseSetupDict.keys():
@@ -517,8 +518,12 @@ def writeToCaseSetup(writeCaseSetupDict):
     
     try:
         #caseSetupConfig.read_file(open("%s/%s/caseSetup" % (path,case)))
-        with open("%s/%s/caseSetup" % (path,case),'w') as caseSetupFile:
-            writeConfig.write(caseSetupFile)
+        if output == 'default':
+            with open("%s/%s/caseSetup" % (path,case),'w') as caseSetupFile:
+                writeConfig.write(caseSetupFile)
+        else:
+            with open("%s/%s/%s" % (path,case,output),'w') as caseSetupFile:
+                writeConfig.write(caseSetupFile)
     except:
         print('\nERROR! Unable to write caseSetup!')
         
@@ -548,6 +553,7 @@ def getGlobalDefaults():
         print('\t\t%s' % (file))
         defaultConfigRead = configparser.ConfigParser()
         defaultConfigRead.optionxform = str
+
         try:
             defaultConfigRead.read_file(open("%s/defaultSetup/%s" % (templateLoc,file)))
         except:

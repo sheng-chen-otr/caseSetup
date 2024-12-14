@@ -5,11 +5,19 @@
     \\  /    A nd           | Version:  8
      \\/     M anipulation  |
 \*---------------------------------------------------------------------------*/
-wallShearStress
+tauwMean
 {
 type            wallShearStress;
 libs            (fieldFunctionObjects);
 field           UMean;
 patches         (".*"); 
 }
+
+/*tauw
+{
+type            wallShearStress;
+libs            (fieldFunctionObjects);
+field           U;
+patches         (".*"); 
+}*/
 // ************************************************************************* //

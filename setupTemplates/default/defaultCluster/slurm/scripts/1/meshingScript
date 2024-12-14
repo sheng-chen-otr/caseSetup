@@ -50,10 +50,13 @@ fi
 	else
 		exit 1
 	fi
+	if [ $? != 0 ]; then exit 1; fi
 	echo "running surfaceFeatureExtract..."
 	~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec surfaceFeatureExtract >> log.surfaceFeatureExtract
+	if [ $? != 0 ]; then exit 1; fi
 	echo "running blockMesh..."
 	~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec blockMesh >> log.blockMesh
+	if [ $? != 0 ]; then exit 1; fi
 	echo "running decomposePar..."
 	~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec decomposePar -copyZero >> log.decomposePar
 	
@@ -64,18 +67,23 @@ fi
 		cp system/fvSchemesPiso system/fvSchemes
 		cp system/fvSolutionPiso system/fvSolution
 	else
+		echo "ERROR! Unable to find the right fvSchemes or fvSolution files for the appropriate simulation type!"
 		exit 1
 	fi
-	
+	if [ $? != 0 ]; then exit 1; fi
 	echo 'running snappyHexMesh...'
 	/usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec snappyHexMesh -parallel -overwrite >> log.snappyHexMesh
+	if [ $? != 0 ]; then exit 1; fi
 	echo 'running renumberMesh...'
 	/usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec renumberMesh -parallel -constant -overwrite >> log.renumberMesh
+	if [ $? != 0 ]; then exit 1; fi
 	echo 'running checkMesh...'
 	/usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec checkMesh -parallel >> log.checkMesh
+	if [ $? != 0 ]; then exit 1; fi
 	cp system/controlDictSimpleFoam system/controlDict
 	echo 'Exporting mesh...'
 	/usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec postProcess -func postMeshSurfaces -parallel -constant >> log.postMeshSurfaces
+	if [ $? != 0 ]; then exit 1; fi
 	if [[ -d postProcessing/postMeshSurfaces ]]; then
 		if [[ -d postMeshPostProcessing ]]; then
 			rm -r postMeshPostProcessing
