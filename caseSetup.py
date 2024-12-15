@@ -15,6 +15,9 @@ from writeSystem import *
 from utilities import *
 from writeConstant import *
 from writeScripts import *
+import gzip
+import re
+import multiprocessing
 
 #these lines get the path which the program is run from
 path = os.path.split(os.getcwd())[0] #path of the case

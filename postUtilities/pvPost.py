@@ -5,6 +5,8 @@ import pandas as pd
 import time as time
 import re
 import configparser
+import glob
+import json
 
 #import paraview modules
 from paraview.simple import *
@@ -16,7 +18,9 @@ paraview.simple._DisableFirstRenderCameraReset()
 
 #getting case information
 casePath = os.getcwd() #path of directory this script is being run in
-caseName = casePath.split('/')[-1] #directory name 
+caseName = casePath.split('/')[-1] #directory name
+templateLoc = '/home/openfoam/openFoam/scripts/caseSetup/caseSetup/postUtilities'
+
 
 
 #debug options
@@ -27,7 +31,7 @@ PRE_DEF_VAR_LIST = ['UMean','pMean']
 def main():
     #global renderView, caseName, availableCellArrays
     global UREF,LREF,CREF,FREF,fullCaseSetupDict
-    #pvPostSetupDict = getPVSetup()
+    
 
     print('''\n\t####\t\tEZ-CFD PARAVIEW POST-PROCESSING V1.0\t\t ####\n\n''')
 
@@ -39,6 +43,14 @@ def main():
     
     #Getting reference values and geometries
     UREF,LREF,CREF,FREF,fullCaseSetupDict = getRef()
+    
+    #Getting pvPostSetup file
+    pvPostSetupDict = getPVSetup(templateLoc)
+
+    generateSurfaceContours('%s/default/defaultVariables.csv'% (templateLoc),'views')
+    getVariableDicts('%s/default/defaultVariables.csv'% (templateLoc))
+
+    sys.exit()
 
     #getting the boundaries
     geomKeys = list(getGeometry(fullCaseSetupDict).keys())
@@ -49,10 +61,6 @@ def main():
             geomList.append(geom.split('.')[0])
     
 
-    
-    
-
-    
     # Initialize the renderView
     print('\n\tGenerating the initial render view')
     renderView                           = GetRenderView()
@@ -105,15 +113,54 @@ def main():
     print('\tData Read Time (s): ' + str(round(time.time()-begin,3)) + '\n\n')
 
     #getting the boundaries
-    
     print('\tGetting boundaries...')
     boundaries, selections = getBoundaries(source)
-    include_patches = geomList
+    include_patches = geomList #including the geometry surfaces that are PID's
+    #selecting the geometry surfaces
     selectors = includeSelectors(selections,include_patches)
-    geomSurface  = ExtractBlock(Input = source)
-
     
-def getPVSetup():
+    #extract the geometry surface for surface processing
+    geomSurface                         = ExtractBlock(Input = source)
+    geomSurface.Selectors               = selectors
+
+    #extracting internal domain
+    internalVolume                      = ExtractBlock(Input = source)
+    internalVolume.Selectors            = '/Root/internalMesh'
+
+
+def getVariableDicts(variablePaths, viewsPath):
+    with open(variablePaths) as f: 
+        varDict = f.read()
+        varDict = varDict.replace('\\','\\\\')
+    #print(varDict)
+        
+    #varDict = json.load(open(variablePaths))
+    varDict = json.loads(varDict)
+    print('\t\tAvailable variables:')
+    for key in varDict.keys():
+        for postType in varDict[key].keys():
+            print('\t\t\t%s:' % (postType))
+            for variable in varDict[key][postType].keys():
+                print('\t\t\t\t%s: %s' % (variable,varDict[key][postType][variable]))
+
+    return varDict
+
+
+def generateSurfaceContours(surfaceVariablesPath,views):
+    '''
+        Generates surface contour plots, the variables are given in a csv file.
+
+    '''
+    surfaceVars = surfaceVariablesPath
+    #print(surfaceVars)
+
+
+def generateDefaultViews():
+
+
+
+
+def getPVSetup(templateLoc):
     '''
         Looks for the setup config file to know the settings
         - if the file cannot be found in CWD it will use the default setup file
@@ -121,8 +168,36 @@ def getPVSetup():
         populate based on the default config file
         
     '''
-    pass
-    pvPostSetupDict = 1
+    print('\tGetting pvPostSetup file...')
+    pvSetupList = glob.glob('pvPostSetup')
+    if len(pvSetupList) == 0:
+        print('\t\tUnable to find pvPostSetup file! Using default settings...')
+        pvSetupPath = '%s/%s/pvPostSetup' % (templateLoc,'default')
+        
+
+    pvPostSetupConfig = configparser.ConfigParser()
+    pvPostSetupConfig.optionxform = str
+    
+    try:
+        pvPostSetupConfig.read_file(open(pvSetupPath))
+    except Exception as e:
+        print('\n\n\nERROR! Unable to get the pvPostSetup!')
+        print(e)
+        exit()
+
+    print('\n\t\tpvPostSetup settings:')
+    for key in pvPostSetupConfig.keys():
+        if key == 'DEFAULT':
+            continue
+        else:        
+            print('\t\t\t%s' % (key))
+            for item in pvPostSetupConfig[key].keys():
+                value = pvPostSetupConfig[key][item]
+                print('\t\t\t\t%s: %s'% (item,value))
+
+    
+    pvPostSetupDict = pvPostSetupConfig
+    
     return pvPostSetupDict
 
 def getRef():

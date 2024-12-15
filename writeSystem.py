@@ -3,6 +3,7 @@ import sys
 import numpy as np
 import subprocess as sp
 import math
+import re
 from utilities import *
 
 
@@ -539,24 +540,28 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                 defaultOrig = fullCaseSetupDict[geom.split('.')[0]]['WH_CENTER'][0].lower() == 'default'
                 #if any are true, then run the bounding box calculation
                 if True in [defaultRad,defaultAxis,defaultOrig]:
-                    try:
+                    # try:
 
-                        bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBoxPv(geom)
+                    #     bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBoxPv(geom)
                             
+                    # except Exception as error:
+                    #     print('\t\t\t\tUnable to use paraview to calculate bounding box, using openFoam instead!')
+                    #     print('\t\t\t\t%s' % (error))
+                    try:
+                        vertices, faces = readGeomFile(geom)
+                        xcenter,ycenter,zcenter, xaxis,yaxis,zaxis = find_wheel_axis(vertices,faces)
+                        radius = zcenter
+                        #bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBox(geom.replace('.gz',''))
+                        
                     except Exception as error:
-                        print('\t\t\t\tUnable to use paraview to calculate bounding box, using openFoam instead!')
-                        print('\t\t\t\t%s' % (error))
-                        try:
-                            bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBox(geom.replace('.gz',''))
-                        except Exception as error:
-                            print('ERROR! Unable to calculate coordinates for %s, please check that your geometry is valid or manually input coordinates!' % (geom))
-                            print('%s' % (error))
-                            sys.exit()
-                            continue
+                        print('ERROR! Unable to calculate coordinates for %s, please check that your geometry is valid or manually input coordinates!' % (geom))
+                        print('%s' % (error))
+                        sys.exit()
+                        continue
                             
-                    xcenter,ycenter,zcenter,radius = getRotaCoordinates(bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ)
+                    #xcenter,ycenter,zcenter,radius = getRotaCoordinates(bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ)
                     whOrig = '%1.6f %1.6f %1.6f' % (xcenter, ycenter, zcenter) #sets the wheel origin based on bounding box
-                    whAxis = '0 -1 0'
+                    whAxis = '%1.2g %1.2g %1.2g' % (xaxis,yaxis,zaxis)
                 if fullCaseSetupDict[geom.split('.')[0]]['WH_RAD'][0].lower() != 'default':
                     try:
                         radius = float(fullCaseSetupDict[geom.split('.')[0]]['WH_RAD'][0])
