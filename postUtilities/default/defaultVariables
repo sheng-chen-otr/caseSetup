@@ -1,0 +1,47 @@
+{"surfaceVariables":{"CpMean":{"equation":"pMean/(0.5*UREF^2)","label":"$\overline{C}_p$","range":[-1.5,1.5],"color":"Cool To Warm"},
+					 "UnwMean":{"equation":"UnwMean/UREF","label":"$\overline{U}_{nw}/U_{ref}$","range":[0,1.2],"color":"Viridis (matplotlib)"},
+					 "UnwMeanX":{"equation":"UnwMean_X/UREF","label":"$\overline{U}_{nw,x}/U_{ref}$","range":[-0.5,1.2],"color":"Cool To Warm"},
+					 "UnwMeanY":{"equation":"UnwMean_Y/UREF","label":"$\overline{U}_{nw,y}/U_{ref}$","range":[-0.5,0.5],"color":"Cool To Warm"},
+					 "UnwMeanZ":{"equation":"UnwMean_Z/UREF","label":"$\overline{U}_{nw,z}/U_{ref}$","range":[-0.5,0.5],"color":"Cool To Warm"},
+					 "CfMean":{"equation":"wallShearStress/(0.5*UREF^2)","label":"$\overline{C}_f$","range":[0,0.006],"color":"Viridis (matplotlib)"},
+					 "CpPrime2Mean":{"equation":"sqrt(pPrime2Mean)/(0.5*UREF^2)","label":"$\overline{C}_{p}^\prime$","range":[0,0.8],"color":"Viridis (matplotlib)"},
+					 "UMean":{"equation":"UMean/UREF","label":"$\overline{U}/U_{ref}$","range":[0,1.2],"color":"Viridis (matplotlib)"},
+					 "UMeanX":{"equation":"UMean_X/UREF","label":"$\overline{U}_x/U_{ref}$","range":[0,1],"color":"Cool To Warm"},
+					 "UMeanY":{"equation":"UMean_Y/UREF","label":"$\overline{U}_y/U_{ref}$","range":[-0.5,0.5],"color":"Cool To Warm"},
+					 "UMeanZ":{"equation":"UMean_Z/UREF","label":"$\overline{U}_z/U_{ref}$","range":[-0.5,0.5],"color":"Cool To Warm"},
+					 "vorticityMean":{"equation":"vorticityMean*LREF/UREF","label":"$\overline{c}L_{ref}/U_{ref}$","range":[0,50],"color":"Viridis (matplotlib)"},
+					 "vorticityMeanX":{"equation":"vorticityMean_X*LREF/UREF","label":"$\overline{c}_xL_{ref}/U_{ref}$","range":[-50,50],"color":"Cool To Warm"},
+					 "vorticityMeanY":{"equation":"vorticityMean_Y*LREF/UREF","label":"$\overline{c}_yL_{ref}/U_{ref}$","range":[-50,50],"color":"Cool To Warm"},
+					 "vorticityMeanZ":{"equation":"vorticityMean_Z*LREF/UREF","label":"$\overline{c}_zL_{ref}/U_{ref}$","range":[-50,50],"color":"Cool To Warm"}
+	      			 },
+ "sliceVariables":{"CpMean":{"equation":"pMean/(0.5*UREF^2)","label":"$\overline{C}_p$","range":[-1.5,1.5],"color":"Cool To Warm"},
+					"CptMean":{"equation":"(pMean+(0.5*UMean^2))/(0.5*UREF^2)","label":"$\overline{C}_{p,total}$","range":[-0.5,1],"color":"Viridis (matplotlib)"},
+					 "CpPrime2Mean":{"equation":"sqrt(pPrime2Mean)/(0.5*UREF^2)","label":"$\overline{C}_{p}^\prime$","range":[0,0.8],"color":"Viridis (matplotlib)"},
+					 "UMean":{"equation":"UMean/UREF","label":"$\overline{U}/U_{ref}$","range":[0,1.2],"color":"Viridis (matplotlib)"},
+					 "UMeanX":{"equation":"UMean_X/UREF","label":"$\overline{U}_x/U_{ref}$","range":[0,1],"color":"Cool To Warm"},
+					 "UMeanY":{"equation":"UMean_Y/UREF","label":"$\overline{U}_y/U_{ref}$","range":[-0.5,0.5],"color":"Cool To Warm"},
+					 "UMeanZ":{"equation":"UMean_Z/UREF","label":"$\overline{U}_z/U_{ref}$","range":[-0.5,0.5],"color":"Cool To Warm"},
+					 "vorticityMean":{"equation":"vorticityMean*LREF/UREF","label":"$\overline{c}L_{ref}/U_{ref}$","range":[0,50],"color":"Viridis (matplotlib)"},
+					 "vorticityMeanX":{"equation":"vorticityMean_X*LREF/UREF","label":"$\overline{c}_xL_{ref}/U_{ref}$","range":[-50,50],"color":"Cool To Warm"},
+					 "vorticityMeanY":{"equation":"vorticityMean_Y*LREF/UREF","label":"$\overline{c}_yL_{ref}/U_{ref}$","range":[-50,50],"color":"Cool To Warm"},
+					 "vorticityMeanZ":{"equation":"vorticityMean_Z*LREF/UREF","label":"$\overline{c}_zL_{ref}/U_{ref}$","range":[-50,50],"color":"Cool To Warm"}
+	      			 }
+	
+					 
+					  
+
+	
+
+
+
+
+
+
+
+
+
+
+
+
+
+}

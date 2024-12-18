@@ -35,7 +35,7 @@ functions
 	#include "averageFieldsDict" //must be ordered before any functions that use it!
 	#include "forceCoeffsExport"
 	//#include "cpMeanDict"
-	#include "ctpMeanDict"
+	#include "cptMeanDict"
 	#include "nearWallFieldsDict"
 	#include "wallShearStressDict"
 	#include "vorticityDict"

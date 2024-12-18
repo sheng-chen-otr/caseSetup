@@ -25,7 +25,7 @@ dictDict = {'solverType':{'steady':steadyTurb,'transient':transientTurb},
             'controlDictType':controlDictDict,
             'exportDictType':exportDict}
 
-foList = ['averageFieldsDict','ctpMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
+foList = ['averageFieldsDict','cptMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
 coeffList = ['forceCoeffs','forceCoeffsExport','forceCoeffSetup']
 prefixToIgnore = ['IDOM','SMP','REFX','REF'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
 
@@ -533,7 +533,7 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
         
             geomString = bcStrings[geomPrefix]
             #sets the axis for rotational bodies, bodies that require rotating wall conditions
-            if geomPrefix == 'ROTA':
+            if geomPrefix == 'ROTA' and fullCaseSetupDict[geom.split('.')[0]]['ROT_WH'][0].lower() == 'true':
                 #checks if any of the values are default, if any are default, requires that bounding calculations are done
                 defaultRad = fullCaseSetupDict[geom.split('.')[0]]['WH_RAD'][0].lower() == 'default'
                 defaultAxis = fullCaseSetupDict[geom.split('.')[0]]['WH_AXIS'][0].lower() == 'default'
@@ -586,13 +586,27 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                     except Exception as error:
                         print('\t\t\t\tWARNING! Value given for wheel center in %s is not valid, using calculated value instead.' % (geom.split('.')[0]))
                         print('\t\t\t\t%s' % (error))
-                        bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBox(geom.replace('.gz',''))
-                        xcenter,ycenter,zcenter,radius = getRotaCoordinates(bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ)
+                        try:
+                            vertices, faces = readGeomFile(geom)
+                            xcenter,ycenter,zcenter, xaxis,yaxis,zaxis = find_wheel_axis(vertices,faces)
+                            radius = zcenter
+                            #bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBox(geom.replace('.gz',''))
+                        
+                        except Exception as error:
+                            print('ERROR! Unable to calculate coordinates for %s, please check that your geometry is valid or manually input coordinates!' % (geom))
+                            print('%s' % (error))
+                            sys.exit()
+                            continue
                         whOrig = '%1.6f %1.6f %1.6f' % (xcenter, ycenter, zcenter) #sets the wheel origin based on bounding box
    
                 print('\t\t\t\tWheel Center: %s' % (whOrig))
                 print('\t\t\t\tWheel Axis: %s' % (whAxis))
-                rotaVel = calcRotaVel(float(inletMag[0]),radius)
+                if fullCaseSetupDict[geom.split('.')[0]]['ROT_WH'][0].lower() == 'true':
+                    rotaVel = calcRotaVel(float(inletMag[0]),radius)
+                elif fullCaseSetupDict[geom.split('.')[0]]['ROT_WH'][0].lower() == 'false':
+                    rotaVel = 0
+                else:
+                    sys.exit('ERROR! [%s] -> ROT_WH input invalid!' % (geom.split('.')[0]))
                 print('\t\t\t\tCalculated Radius: %1.4f m' % (radius))
                 print('\t\t\t\tCalculated Radial Velocity: %1.4f rad/s' % (rotaVel))
                 whVel = str(rotaVel)
@@ -671,8 +685,8 @@ def writeBlockMesh(templateLoc, fullCaseSetupDict):
         print('\t\tSetting up case as: %s' % (simSym))
     
     #correcting for offset
-    minX = minX + float(xdom)*float(domOffset) - float(whctx)
-    maxX = maxX + float(xdom)*float(domOffset) - float(whctx)
+    minX = minX + float(xdom)*float(domOffset) + float(whctx)
+    maxX = maxX + float(xdom)*float(domOffset) + float(whctx)
     
     print('\t\tDomain Bounding Box: MIN[%1.4f %1.4f %1.4f] MAX[%1.4f %1.4f %1.4f]' % (minX,minY,minZ,maxX,maxY,maxZ))
     print('\t\tDomain X Length: %1.2fm' % (maxX-minX))

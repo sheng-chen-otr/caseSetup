@@ -17,7 +17,7 @@ surfaces
 <SURFACE_PATCHES>
 
 	isoQ {type isoSurface;isoField QMean;isoValue <ISOQ>;interpolate true; }
-	isoCtp {type isoSurface;isoField ctpMean;isoValue <ISOCPT>;interpolate true; }
+	isoCtp {type isoSurface;isoField cptMean;isoValue <ISOCPT>;interpolate true; }
 	#include "surfaceSetupList"  
 );
 }
