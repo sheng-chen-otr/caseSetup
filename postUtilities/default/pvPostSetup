@@ -24,6 +24,7 @@ NORMALS = default
 NSLICES = default
 SLICE_RANGE = default
 VARIABLES = default
+LIC_VARIABLES = default
 
 [ISO_SURFACE]
 VIEWS = default

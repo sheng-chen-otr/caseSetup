@@ -485,8 +485,11 @@ def readGeomFile(fileName):
     filePath = 'constant/triSurface/%s' % (fileName)
     
     if '.gz' in filePath:
-        print('\t\t\tUnzipping gz file...')
-        file = gzip.open(filePath, 'rt')
+        print('\t\t\t\tUnzipping gz file...')
+        try:
+            file = gzip.open(filePath, 'rt')
+        except:
+            file = gzip.open(filePath, 'rb')
     else:
         file = open(filePath,'rt')
 
