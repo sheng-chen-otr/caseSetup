@@ -19,7 +19,8 @@ paraview.simple._DisableFirstRenderCameraReset()
 #getting case information
 casePath = os.getcwd() #path of directory this script is being run in
 caseName = casePath.split('/')[-1] #directory name
-templateLoc = '/home/openfoam/openFoam/scripts/caseSetup/caseSetup/postUtilities'
+#templateLoc = '/home/openfoam/openFoam/scripts/caseSetup/caseSetup/postUtilities'
+templateLoc = (os.path.dirname(os.path.realpath(__file__)))
 
 ASPECT_RATIO = 16/9
 YRES = 3000
@@ -49,10 +50,12 @@ def main():
     
     #Getting pvPostSetup file
     pvPostSetupDict = getPVSetup(templateLoc)
-
-    varDict,viewsDict = getVariableDicts('%s/default/defaultVariables'% (templateLoc),pvPostSetupDict['PV_POST_MAIN']['CAMERA_VIEWS'])
+    if pvPostSetupDict['PV_POST_MAIN']['VARIABLE_DICT'] == 'default':
+        varDict,viewsDict = getVariableDicts('%s/default/defaultVariables'% (templateLoc),pvPostSetupDict['PV_POST_MAIN']['CAMERA_VIEWS'])
+    else:
+        varDict,viewsDict = getVariableDicts(pvPostSetupDict['PV_POST_MAIN']['VARIABLE_DICT'],pvPostSetupDict['PV_POST_MAIN']['CAMERA_VIEWS'])
     
-
+    
     #getting the boundaries
     geomKeys = list(getGeometry(fullCaseSetupDict).keys())
     geomList = []
@@ -171,6 +174,8 @@ def getVariableDicts(variablePaths, viewsPath):
             for variable in varDict[key][postType].keys():
                 print('\t\t\t\t\t%s: %s' % (variable,varDict[key][postType][variable]))
 
+    #if views path is not default it will use the path given to import the dict file
+    #replaces the key words with values
     if viewsPath.lower() != 'default':
         with open(viewsPath) as f: 
             viewsDict = f.read()
@@ -205,7 +210,7 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
     beginSurface = time.time()
     print('\tGenerating surface contour plots...')
     if surfaceVars == 'default':
-        surfaceVars = ['CpMean','UnwMean','UnwMeanX','UnwMeanY','UnwMeanY','UnwMeanZ','CpPrime2Mean','CfMean']
+        surfaceVars = ['Geom','CpMean','UnwMean','UnwMeanX','UnwMeanY','UnwMeanY','UnwMeanZ','CpPrime2Mean','CfMean']
     if views == 'default':
         views = ['Rear','Front','Left','Right','Top','Bottom','FrontRight','FrontLeft','RearRight','RearLeft']
 
@@ -216,64 +221,69 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
 
 
     for variable in surfaceVars:
-        #check that variable exists in varDict
-        surfaceVarsAvailable = varDict['surfaceVariables'].keys()
-        if not variable in surfaceVarsAvailable:
-            print('\n\t\t%s not available, skipping...\n' % (variable))
-            continue
-
-        #calculating variable using variable equation
-        calculator = Calculator(registrationName='calculator', Input=surfaceSource)
-        calculator.Function = str(varDict['surfaceVariables'][variable]['equation'])
-        calculator.ResultArrayName = variable
-        
-        surfaceSourceDisplay = Show(calculator,renderView,'UnstructuredGridRepresentation')
-        surfaceSourceDisplay.Representation = 'Surface'
-        surfaceSourceDisplay.BackfaceRepresentation = 'Cull Frontface'
-        
-        
-        ColorBy(surfaceSourceDisplay,('POINTS',variable))
-        LUT = GetColorTransferFunction(variable)
-        PWF  = GetOpacityTransferFunction(variable)
-        title = varDict['surfaceVariables'][variable]['label']
-        varRange = np.array(varDict['surfaceVariables'][variable]['range'])
-        tableValues = 15
-        color = varDict['surfaceVariables'][variable]['color']
-
-        LUT.NumberOfTableValues = tableValues #default
-        LUT.RescaleTransferFunction(varRange[0],varRange[1])
-        PWF.RescaleTransferFunction(varRange[0],varRange[1])
-        LUT.ApplyPreset(color,True)
-        PWF.ApplyPreset(color,True)
-        renderView.Update()
-
-
-        colorBar = GetScalarBar(LUT,renderView)
-        colorBar.Title = title
-        colorBar.TitleFontFamily = 'Times'
-        colorBar.LabelFontFamily = 'Times'
-        colorBar.ComponentTitle = ''
-        colorBar.Orientation = 'Horizontal'
-        colorBar.WindowLocation = 'Lower Center'
-        if  'Cf' in variable:
-            colorBar.LabelFormat = '%-1.3g'
-            colorBar.RangeLabelFormat = '%-1.3g'
-            colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],3)         
+        if 'geom' in variable.lower():
+            surfaceSourceDisplay = Show(surfaceSource,renderView,'UnstructuredGridRepresentation')
+            surfaceSourceDisplay.Representation = 'Surface'
         else:
-            colorBar.LabelFormat = '%-1.1f'
-            colorBar.RangeLabelFormat = '%-1.1f'
-            colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)         
-        colorBar.ScalarBarLength = 0.3
-        colorBar.ScalarBarThickness = 160
-        colorBar.TitleFontSize = 160
-        colorBar.LabelFontSize = 160
-        colorBar.TitleColor = [0,0,0]
-        colorBar.LabelColor = [0,0,0]
-        colorBar.AddRangeLabels = 1
-        colorBar.AutomaticLabelFormat = 0
-        colorBar.DrawAnnotations = 0
-        colorBar.DrawTickLabels = 1
-        colorBar.UseCustomLabels = 1
+
+            #check that variable exists in varDict
+            surfaceVarsAvailable = varDict['surfaceVariables'].keys()
+            if not variable in surfaceVarsAvailable:
+                print('\n\t\t%s not available, skipping...\n' % (variable))
+                continue
+
+            #calculating variable using variable equation
+            calculator = Calculator(registrationName='calculator', Input=surfaceSource)
+            calculator.Function = str(varDict['surfaceVariables'][variable]['equation'])
+            calculator.ResultArrayName = variable
+            
+            surfaceSourceDisplay = Show(calculator,renderView,'UnstructuredGridRepresentation')
+            surfaceSourceDisplay.Representation = 'Surface'
+            surfaceSourceDisplay.BackfaceRepresentation = 'Cull Frontface'
+            
+            
+            ColorBy(surfaceSourceDisplay,('POINTS',variable))
+            LUT = GetColorTransferFunction(variable)
+            PWF  = GetOpacityTransferFunction(variable)
+            title = varDict['surfaceVariables'][variable]['label']
+            varRange = np.array(varDict['surfaceVariables'][variable]['range'])
+            tableValues = 15
+            color = varDict['surfaceVariables'][variable]['color']
+
+            LUT.NumberOfTableValues = tableValues #default
+            LUT.RescaleTransferFunction(varRange[0],varRange[1])
+            PWF.RescaleTransferFunction(varRange[0],varRange[1])
+            LUT.ApplyPreset(color,True)
+            PWF.ApplyPreset(color,True)
+            renderView.Update()
+
+
+            colorBar = GetScalarBar(LUT,renderView)
+            colorBar.Title = title
+            colorBar.TitleFontFamily = 'Times'
+            colorBar.LabelFontFamily = 'Times'
+            colorBar.ComponentTitle = ''
+            colorBar.Orientation = 'Horizontal'
+            colorBar.WindowLocation = 'Lower Center'
+            if  'Cf' in variable:
+                colorBar.LabelFormat = '%-1.3g'
+                colorBar.RangeLabelFormat = '%-1.3g'
+                colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],3)         
+            else:
+                colorBar.LabelFormat = '%-1.1f'
+                colorBar.RangeLabelFormat = '%-1.1f'
+                colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)         
+            colorBar.ScalarBarLength = 0.3
+            colorBar.ScalarBarThickness = 160
+            colorBar.TitleFontSize = 160
+            colorBar.LabelFontSize = 160
+            colorBar.TitleColor = [0,0,0]
+            colorBar.LabelColor = [0,0,0]
+            colorBar.AddRangeLabels = 1
+            colorBar.AutomaticLabelFormat = 0
+            colorBar.DrawAnnotations = 0
+            colorBar.DrawTickLabels = 1
+            colorBar.UseCustomLabels = 1
                
                     
 
@@ -288,7 +298,10 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
             print('')
         Hide(surfaceSourceDisplay,renderView)
         Delete(surfaceSourceDisplay)
-        Delete(calculator)
+        try:
+            Delete(calculator)
+        except:
+            print('')
 
     print('\tSurface Contour Generation Time (s): ' + str(round(time.time()-beginSurface,3)) + '\n\n')
 
@@ -561,7 +574,7 @@ def getPVSetup(templateLoc):
     except Exception as e:
         print('\n\n\nERROR! Unable to get the pvPostSetup!')
         print(e)
-        exit()
+        sys.exit()
 
     print('\n\t\tpvPostSetup settings:')
     for key in pvPostSetupConfig.keys():

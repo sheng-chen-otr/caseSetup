@@ -1,6 +1,7 @@
 [PV_POST_MAIN]
 CASE_NAME = default
 CAMERA_VIEWS = default
+VARIABLE_DICT = default
 WHEEL_BASE = default
 BACKGROUND_COLOR = default
 RESOLUTION = default

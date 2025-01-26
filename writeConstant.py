@@ -71,13 +71,17 @@ def writeTransportProperties(templateLoc, fullCaseSetupDict):
     
 def writeTurbulenceProperties(templateLoc, fullCaseSetupDict):
     print('\tWriting turbulenceProperties...')
-    turbulencePropertiesPath = '%s/defaultDicts/constant/turbulenceProperties' % (templateLoc)
-    localTurbulencePropertiesiesPath = 'constant/turbulenceProperties' 
-    copyTemplateToCase(turbulencePropertiesPath,localTurbulencePropertiesiesPath)
+    turbulencePropertiesSolvePath = '%s/defaultDicts/constant/turbulencePropertiesSolve' % (templateLoc)
+    turbulencePropertiesInitPath = '%s/defaultDicts/constant/turbulencePropertiesInit' % (templateLoc)
+    localTurbulencePropertiesSolvePath = 'constant/turbulencePropertiesSolve' 
+    localTurbulencePropertiesInitPath = 'constant/turbulencePropertiesInit' 
+    copyTemplateToCase(turbulencePropertiesSolvePath,localTurbulencePropertiesSolvePath)
+    copyTemplateToCase(turbulencePropertiesInitPath,localTurbulencePropertiesInitPath)
     
     #writing viscosity
     simtype = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0]
     turbmodel = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['TURB_MODEL'][0]
+    initType = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0]
     
     if not simtype in dictDict['solverType'].keys():
         sys.exit('ERROR! Solver type is not valid in [GLOBAL_SIM_CONTROL]! Available solver types: %s' % (list(dictDict['solverType'].keys())))
@@ -85,6 +89,8 @@ def writeTurbulenceProperties(templateLoc, fullCaseSetupDict):
         sim_type = 'RAS'
     elif simtype == 'transient':
         sim_type = 'LES'
+
+    
     
     if turbmodel in dictDict['solverType'][simtype].keys():
         turb_model = dictDict['solverType'][simtype][turbmodel]
@@ -93,9 +99,13 @@ def writeTurbulenceProperties(templateLoc, fullCaseSetupDict):
         sys.exit('ERROR! Turbulence model is not valid in [GLOBAL_SIM_CONTROL]! Available turbulence models: %s' % (list(dictDict['solverType'][simtype].keys())))
         
     
+    if initType == 'steady':
+        search_and_replace(localTurbulencePropertiesInitPath,'<SIMTYPE>','RAS')
+        search_and_replace(localTurbulencePropertiesInitPath,'<TURBMODEL>',dictDict['solverType']['steady'][turbmodel])
+        
+    search_and_replace(localTurbulencePropertiesSolvePath,'<SIMTYPE>',sim_type)
+    search_and_replace(localTurbulencePropertiesSolvePath,'<TURBMODEL>',turb_model)
     
-    search_and_replace(localTurbulencePropertiesiesPath,'<SIMTYPE>',sim_type)
-    search_and_replace(localTurbulencePropertiesiesPath,'<TURBMODEL>',turb_model)
     
    
         
