@@ -1,0 +1,28 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  9
+     \\/     M anipulation  |
+-------------------------------------------------------------------------------
+Description
+    Calculates the turbulence y+, outputting the data as a yPlus field.
+
+\*---------------------------------------------------------------------------*/
+yPlusMean
+{
+type            yPlus;
+field			UMean;
+libs            ("libfieldFunctionObjects.so");
+result 			yPlusMean;
+}
+
+/*yPlus
+{
+type            yPlus;
+libs            ("libfieldFunctionObjects.so");
+result 			yPlus;
+}
+*/
+
+// ************************************************************************* //

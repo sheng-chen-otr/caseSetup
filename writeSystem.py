@@ -12,7 +12,7 @@ steadyTurb = {'sa':'SpalartAllmaras','kosst':'kOmegaSST'}
 transientTurb = {'sa':'SpalartAllmarasDDES'}
 
 initDict = {'steady': {'potential':'controlDictPotential','none':''},
-            'transient':{'potential':'controlDictPotential','steady':'controlDictSimple','none':''}}
+            'transient':{'potential':'controlDictPotential','steady':'controlDictSimpleInit','none':''}}
             
 controlDictDict = {'steady':'controlDictSimple',
                    'transient':'controlDictPiso'}
@@ -540,17 +540,11 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                 defaultOrig = fullCaseSetupDict[geom.split('.')[0]]['WH_CENTER'][0].lower() == 'default'
                 #if any are true, then run the bounding box calculation
                 if True in [defaultRad,defaultAxis,defaultOrig]:
-                    # try:
-
-                    #     bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBoxPv(geom)
-                            
-                    # except Exception as error:
-                    #     print('\t\t\t\tUnable to use paraview to calculate bounding box, using openFoam instead!')
-                    #     print('\t\t\t\t%s' % (error))
+                    
                     try:
                         vertices, faces = readGeomFile(geom)
                         xcenter,ycenter,zcenter, xaxis,yaxis,zaxis = find_wheel_axis(vertices,faces)
-                        radius = zcenter
+                        radius = zcenter - float(fullCaseSetupDict['BC_SETUP']['FRT_WH_CTR'][2]) #wheel contact patch intersection with ground
                         #bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBox(geom.replace('.gz',''))
                         
                     except Exception as error:

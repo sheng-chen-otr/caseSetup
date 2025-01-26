@@ -6,6 +6,7 @@ import math
 import glob as glob
 from utilities import *
 import fileinput
+import json
 from writeSystem import *
 from writeConstant import *
 
@@ -49,6 +50,66 @@ from writeConstant import *
 # def getClusterType(templateLoc, fullCaseSetupDict):
     
     # #replaceScript header
+
+
+
+
+
+
+
+def makeScripts(templateLoc,fullCaseSetupDict):
+
+    clusterDictPath = '%s/defaultCluster/slurm/clusterDict' % (templateLoc)
+
+    #getting default variables
+    with open(clusterDictPath) as f: 
+        clusterDict = f.read()
+
+    clusterDict = json.loads(clusterDict)
+    print('\t\tImporting cluster script values')
+    meshingScriptArray = []
+    solveScriptArray = []
+    exportScriptArray = []
+    postScriptArray = []
+    
+    for line in clusterDict['meshing'].keys():
+        meshingScriptArray.append(clusterDict['meshing'][line])
+    meshingScript = '\n'.join(meshingScriptArray)
+
+    for line in clusterDict['solve'].keys():
+        if 'initialize' in line:
+            if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0] == 'potential':
+                solveScriptArray.append(clusterDict['solve']['initialize']['initializePotential'])
+            elif fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0] == 'steady':
+                solveScriptArray.append(clusterDict['solve']['initialize']['initializeSteady'])
+
+        else:
+            solveScriptArray.append(clusterDict['solve'][line])
+    solveScript = '\n'.join(solveScriptArray)
+
+    for line in clusterDict['export'].keys():
+        exportScriptArray.append(clusterDict['export'][line])
+    exportScript = '\n'.join(exportScriptArray)
+
+    for line in clusterDict['post'].keys():
+        postScriptArray.append(clusterDict['post'][line])
+    postScript = '\n'.join(postScriptArray)
+
+
+
+
+    with open('meshingScript', 'w') as m:
+        m.write(meshingScript)
+
+    with open('solveScript', 'w') as m:
+        m.write(solveScript)
+
+    with open('exportScript', 'w') as m:
+        m.write(exportScript)
+
+    with open('postScript', 'w') as m:
+        m.write(postScript)
+    
     
     
 def copyScripts(templateLoc, fullCaseSetupDict,case):
@@ -63,11 +124,11 @@ def copyScripts(templateLoc, fullCaseSetupDict,case):
     scriptVersion = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']['SCRIPT_VERSION'][0]
     copyScriptsPath = '%s/defaultCluster/slurm/scripts/%s/*Script' % (templateLoc,scriptVersion)
     
-    
+    makeScripts(templateLoc,fullCaseSetupDict)
     scriptsList = glob.glob(copyScriptsPath)
     for script in scriptsList:
         scriptName = script.split('/')[-1]
-        copyTemplateToCase(script,scriptName)
+        #copyTemplateToCase(script,scriptName)
         if os.path.isfile(scriptName):
             for line in fileinput.  input(scriptName, inplace=True):
                 if line.strip().startswith('#SBATCH --job-name='):
@@ -79,6 +140,7 @@ def copyScripts(templateLoc, fullCaseSetupDict,case):
                             line = '#SBATCH --job-name=%s_%s%s_%s\n\n' % (jobCode,keyCode,case,sym)
                             
                 sys.stdout.write(line)
+    
            
         
     #print(scriptsList)

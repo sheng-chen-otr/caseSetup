@@ -26,22 +26,4 @@
 					 "vorticityMeanY":{"equation":"vorticityMean_Y*LREF/UREF","label":"$\overline{c}_yL_{ref}/U_{ref}$","range":[-50,50],"color":"Cool To Warm"},
 					 "vorticityMeanZ":{"equation":"vorticityMean_Z*LREF/UREF","label":"$\overline{c}_zL_{ref}/U_{ref}$","range":[-50,50],"color":"Cool To Warm"}
 	      			 }
-	
-					 
-					  
-
-	
-
-
-
-
-
-
-
-
-
-
-
-
-
 }

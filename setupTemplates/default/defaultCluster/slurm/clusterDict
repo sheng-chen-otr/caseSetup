@@ -1,0 +1,81 @@
+{"meshing":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve1\n#SBATCH --output=01_%x_meshing_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_MS035_half_half",
+
+            "precision":"SP=FALSE; VERSION=of2206; cd $SLURM_SUBMIT_DIR; if [ SP = 'TRUE' ]; then echo 'Running Meshing Script in SP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP; else echo 'Running Meshing Script in DP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; fi",
+
+            "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions; rm -r processor*; rm -r log.snappyHexMesh; rm -r log.surfaceFeatureExtract; rm -r log.blockMesh; rm -r log.decomposePar; rm -r log.renumberMesh; rm -r log.checkMesh;",
+
+            "getControlDict":"if [ -f system/controlDictSimple ]; then cp system/controlDictSimple system/controlDict; elif [ -f system/controlDictPiso ]; then cp system/controlDictPiso system/controlDict; elif [ -f system/controlDictPotential ]; then cp system/controlDictPotential system/controlDict; else exit 1; fi",
+
+            "surfaceFeatureExtract":"if [ $? != 0 ]; then exit 1; fi; echo 'running surfaceFeatureExtract...'; ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec surfaceFeatureExtract >> log.surfaceFeatureExtract;",
+
+            "blockMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running blockMesh...'; ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec blockMesh >> log.blockMesh;",
+
+            "decomposePar":"if [ $? != 0 ]; then exit 1; fi; echo 'running decomposePar...'; ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec decomposePar -copyZero >> log.decomposePar;",
+
+            "getFvDict":"if [ -f system/fvSchemesSimple ]; then cp system/fvSchemesSimple system/fvSchemes; cp system/fvSolutionSimple system/fvSolution; elif [ -f system/fvSchemesPiso ]; then cp system/fvSchemesPiso; system/fvSchemes; cp system/fvSolutionPiso system/fvSolution; else echo 'ERROR! Unable to find the right fvSchemes or fvSolution files for the appropriate simulation type!' exit 1; fi;",
+
+            "snappyHexMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running snappyHexMesh...'; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec snappyHexMesh -parallel -overwrite >> log.snappyHexMesh;",
+
+            "renumberMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running renumberMesh...'; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec renumberMesh -parallel -constant -overwrite >> log.renumberMesh;",
+
+            "checkMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running checkMesh...'; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec checkMesh -parallel >> log.checkMesh;",
+
+            "exportMesh":"if [ $? != 0 ]; then exit 1; fi; cp system/controlDictSimple system/controlDict; echo 'Exporting mesh...'; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec postProcess -func postMeshSurfaces -parallel -constant >> log.postMeshSurfaces;",
+
+            "movePostMesh":"if [ $? != 0 ]; then exit 1; fi; if [[ -d postProcessing/postMeshSurfaces ]]; then if [[ -d postMeshPostProcessing ]]; then rm -r postMeshPostProcessing; fi; mkdir postMeshPostProcessing; mv postProcessing/postMeshSurfaces postMeshPostProcessing/.; fi;"
+
+        },
+ 
+ "solve":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve1\n#SBATCH --output=02_%x_solve_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_SO035_half",
+
+          "precision":"SP=TRUE; VERSION=of2206; cd $SLURM_SUBMIT_DIR; if [ SP = 'TRUE' ]; then echo 'Running Solve Script in SP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP; else echo 'Running Solve Script in DP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; fi",
+
+          "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions; MPI='/usr/bin/mpirun'; FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'; caseTemplates='~/openFoam/scripts/caseSetup/caseSetup/zeroTemplates'; if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; fi;",
+
+          "createZeroDir":"if [ $? != 0 ]; then exit 1; fi; echo 'creating zero directories...'; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir \"$caseTemplates\" >> log.createZeroDirectory;",
+
+          "initialize": {"initializePotential":"if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; cp system/fvSchemesSimple system/fvSchemes; echo 'running potentialFoam...'; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec potentialFoam -parallel >> log.potentialFoam; fi;",
+
+                         "initializeSteady":"if [ $? != 0 ]; then exit 1; fi;cp constant/turbulencePropertiesInit constant/turbulenceProperties;  cp -r system/fvSolutionSimple system/fvSolution; cp system/controlDictSimple system/controlDict; echo 'running simpleFoam...'; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec simpleFoam -parallel >> log.simpleFoam; echo \"running export in DP!\"; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; echo 'running steady export...'; rm log.steadyMeanExports; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec simpleFoam -postProcess -parallel -latestTime -fields \"(pMean UMean)\" >> log.steadyMeanExports; mv postProcessing postProcessing_RANS; if [ -d processor0/1000 ]; then ls -d processor* | xargs -I {} rm -rf ./{}/0; ls -d processor* | xargs -I {} mv -f ./{}/1000 ./{}/0; ls -d processor* | xargs -I {} rm -rf ./{}/0/uniform; fi;"},
+
+          "solve":"if [ $? != 0 ]; then exit 1; fi; if [ $SP = \"TRUE\" ]; then echo \"Running Solve Script in SP!\"; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP; export SP=\"TRUE\"; else echo \"Running Solve Script in DP!\"; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; export SP=\"FALSE\"; fi; cp constant/turbulencePropertiesSolve constant/turbulenceProperties; if [[ -f 'system/controlDictPiso' ]]; then cp system/controlDictPiso system/controlDict; cp system/fvSolutionPiso system/fvSolution; cp system/fvSchemesPiso system/fvSchemes; echo 'running pisoFoam...'; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec pisoFoam -parallel >> log.pisoFoam; else cp system/controlDictSimple system/controlDict; cp system/fvSolutionSimple system/fvSolution; cp system/fvSchemesSimple system/fvSchemes; echo 'running simpleFoam...'; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec simpleFoam -parallel >> log.simpleFoam; fi;"},
+
+
+
+         
+
+ "export":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve1\n#SBATCH --output=03_%x_export_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_EX035_half",
+
+            "precision":"if [ $? != 0 ]; then exit 1; fi; SP=FALSE; VERSION=of2206; cd $SLURM_SUBMIT_DIR; if [ SP = 'TRUE' ]; then echo 'Running Meshing Script in SP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP; else echo 'Running Meshing Script in DP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; fi; MPI='/usr/bin/mpirun';",
+
+            "export":"if [ $? != 0 ]; then exit 1; fi; . $WM_PROJECT_DIR/bin/tools/RunFunctions; echo \"Removing old logs...\";rm -r log.meanExports; cp system/controlDictExport system/controlDict; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec pisoFoam -postProcess -parallel -latestTime -fields \"(pMean UMean)\" >> log.meanExports",
+
+            "exportEnsight":"if [ $? != 0 ]; then exit 1; fi; echo \"Running foamToEnsight...\"; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec foamToEnsight -parallel -latestTime -noZero >> log.EnSight;",
+
+            "postProcessing":"if [ -d postProcessing/surfaces ]; then sbatch postScript echo \"Export successful!\" fi;"
+
+            },
+
+
+
+ "post":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=8\n#SBATCH --partition=solve1\n#SBATCH --output=04_%x_postPro_%j.out\n#SBATCH\n#SBATCH --job-name=TS_PP035_half",
+         
+         "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pvPost.py >> log.pvpost",
+
+         "forces":"echo 'plotting forces...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/plotForces.py -p Cd Cl CoP Cl(f) Cl(r) Cs(f) Cs(r) -s >> log.plotForce"
+
+
+        }
+    
+}
+
+
+
+
+
+
+
+
+
+
+

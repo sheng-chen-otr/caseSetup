@@ -1,0 +1,3 @@
+[DEFAULTS]
+DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultBCSetup defaultGlobalDecomposition defaultGlobalMaterial defaultGlobalRefinement defaultPost
+ADDON_MODULES = 
