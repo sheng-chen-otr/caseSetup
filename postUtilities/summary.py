@@ -9,8 +9,9 @@ import glob as glob
 import pandas as pd
 import scipy.stats as st
 import configparser
+from estimateStatisticalError import *
 
-print("#### EZ-CFD CASE SUMMARY ####")
+print("#### CASE SUMMARY ####")
 parser = argparse.ArgumentParser(prog='EZ-CFD CASE SUMMARY',description='Summarizes the case into one csv file.')
 
 args = parser.parse_args()
@@ -18,6 +19,9 @@ args = parser.parse_args()
 path = os.path.split(os.getcwd())[0]
 case = os.path.split(os.getcwd())[1]
 job = os.path.basename(os.path.dirname(path))
+print(path)
+if not os.getcwd().split('/')[-2].lower() == 'cases':
+    sys.exit('ERROR! Not executed in a trial directory!')
 print('Reading caseSetup file...')
 caseSetupPath="%s/%s/caseSetup" % (path,case)
 fullCaseSetupDict = configparser.ConfigParser()
@@ -25,7 +29,33 @@ fullCaseSetupDict.optionxform = str
 fullCaseSetupDict.read_file(open(caseSetupPath))
 configSections = fullCaseSetupDict.sections()
 
-
+def main():
+    
+    coeffFiles = getCoeffPaths()
+    avgData = averageCoeffs(case,'all',coeffFiles)
+    numCells,mesher,sym = cellCount()
+    inletMag,lastTime,yaw,wheelRotation,simType,turbModel = bcParser(path,case)
+    runDate,runTime,version,solver = getOfVersion()
+    refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
+    #default datas
+    rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
+    data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),wheelRotation,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
+    try:
+        porousData = getPorousData()
+        #adding porous data
+        for key in porousData.keys():
+            rowNames.append(str(key))
+            data.append(str(porousData[key]))
+    except:
+        print('\tUnable to get porous media data, skipping...')
+    summary = pd.DataFrame(columns=rowNames)
+    summary.loc[-1] = data
+    print("\n\n")
+    for col in summary.columns:
+        print('{:>100s}{:>30s}'.format(col,str(summary[col].values[0])))
+        
+    summary = summary.transpose()
+    summary.to_csv("%s/%s/summary.csv"% (path,case),header=False)
 
 
 def getGeometry(fullCaseSetupDict):    
@@ -105,14 +135,7 @@ def getGeomArray(geometry):
         blSetup.append(row[5])
         if SINGLEGEOM == True:
             break
-# def assignVar(variable):
-#    if variable in varList:
-#       varIndex = np.where(varList == variable)
-#       variableValue = varVal[varIndex[0]]
-#       return variableValue[0]
-#    else:
-#       variableValue = False
-#       return variableValue
+
 def magnitude(vector):
     return math.sqrt(sum(pow(element, 2) for element in vector))
     
@@ -190,6 +213,7 @@ def averageCoeffs(case,part,coeffFiles):
     simType = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0]
     avgStart = float(fullCaseSetupDict['GLOBAL_CONTROL']['AVGSTART'][0])
     dataHeader = 'time,cd,cdf,cdr,cl,clf,clr,cmpitch,cmroll,cmyaw,cs,csf,csr'
+    variables = ['cd','cdf','cdr','cl','clf','clr','cmpitch','cmroll','cmyaw','cs','csf','csr']
     dataHeader = dataHeader.split(",")
     coeffs = pd.DataFrame(columns=dataHeader)
 
@@ -198,44 +222,63 @@ def averageCoeffs(case,part,coeffFiles):
         coeffs = pd.concat([coeffs,timeCoeffs],ignore_index=True,axis=0)
     endTime = coeffs['time'].iloc[-1]
     avgStartRows = coeffs[coeffs['time'] >= avgStart]
-    avgRow = avgStartRows.mean(axis=0)
-    confInt = avgStartRows.apply(lambda x: st.t.interval(0.95, len(x)-1, loc=np.mean(x), scale=st.sem(x)), axis=0)
-    confInt = confInt.diff().iloc[1,:]
-    if 'half' in case or fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
-        cd = round(avgRow['cd'] * 2,4)
-        cd_ci = round(confInt['cd'] * 2,4)
-        cl = round(avgRow['cl'] * 2,4)
-        cl_ci = round(confInt['cl'] * 2,4)
-        clf = round(avgRow['clf'] * 2,4)
-        clr = round(avgRow['clr'] * 2,4)
-        csf = round(avgRow['csf'] * 2,4)
-        csr = round(avgRow['csr'] * 2,4)
-        cop = round(((avgRow['clf'])/(avgRow['cl'])) * 100,2)
-    else:
-        cd = round(avgRow['cd'],4)
-        cd_ci = round(confInt['cd'],4)
-        cl = round(avgRow['cl'],4)
-        cl_ci = round(confInt['cl'],4)
-        clf = round(avgRow['clf'],4)
-        clr = round(avgRow['clr'],4)
-        csf = round(avgRow['csf'],4)
-        csr = round(avgRow['csr'],4)
-        cop = round(((avgRow['clf'])/(avgRow['cl'])) * 100,2)
-    clcd = round(cl/cd,3)
+    # avgRow = avgStartRows.mean(axis=0)
+    # confInt = avgStartRows.apply(lambda x: st.t.interval(0.95, len(x)-1, loc=np.mean(x), scale=st.sem(x)), axis=0)
+    # confInt = confInt.diff().iloc[1,:]
+    dt = coeffs['time'].iloc[-1] - coeffs['time'].iloc[-2]
+
+    #averagedData = pd.DataFrame(columns=['endTime','cd','cl','clf','clr','csf','csr','cd_ci','cl_ci','cop','cl_cd'])
+    averagedData = {}
+    for var in variables:
+        data = avgStartRows[var]
+        if 'half' in case or fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
+            results = estimate_statistical_error(data*2,dt)
+        else:
+            results = estimate_statistical_error(data,dt)
+        averagedData[var] = round(results['total_mean'],2)
+        averagedData[var+'_ci'] = round(np.abs(results['mean_95_confidence_interval'][1] - results['mean_95_confidence_interval'][0])/2,2)
+
+
+    
+    
+    
+    
+    # if 'half' in case or fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
+    #     cd = round(avgRow['cd'] * 2,4)
+    #     cd_ci = round(confInt['cd'] * 2,4)
+    #     cl = round(avgRow['cl'] * 2,4)
+    #     cl_ci = round(confInt['cl'] * 2,4)
+    #     clf = round(avgRow['clf'] * 2,4)
+    #     clr = round(avgRow['clr'] * 2,4)
+    #     csf = round(avgRow['csf'] * 2,4)
+    #     csr = round(avgRow['csr'] * 2,4)
+    cop = round(((averagedData['clf'])/(averagedData['cl'])) * 100,2)
+    # else:
+    #     cd = round(avgRow['cd'],4)
+    #     cd_ci = round(confInt['cd'],4)
+    #     cl = round(avgRow['cl'],4)
+    #     cl_ci = round(confInt['cl'],4)
+    #     clf = round(avgRow['clf'],4)
+    #     clr = round(avgRow['clr'],4)
+    #     csf = round(avgRow['csf'],4)
+    #     csr = round(avgRow['csr'],4)
+        # cop = round(((averagedData['clf'])/(averagedData['cl'])) * 100,2)
+    clcd = round(averagedData['cl']/averagedData['cd'],3)
     
         
-    averagedData = pd.DataFrame(columns=['endTime','cd','cl','clf','clr','csf','csr','cd_ci','cl_ci','cop','cl/cd'])
-    averagedData['endTime'] = [endTime]
-    averagedData['cd'] = [cd]
-    averagedData['cl'] = [cl]
-    averagedData['clf'] = [clf]
-    averagedData['clr'] = [clr]
-    averagedData['cop'] = [cop]
-    averagedData['cl/cd'] = [clcd]
-    averagedData['cd_ci'] = [cd_ci]
-    averagedData['cl_ci'] = [cl_ci]
-    averagedData['csf'] = [csf]
-    averagedData['csr'] = [csr]
+    #averagedData = pd.DataFrame(columns=['endTime','cd','cl','clf','clr','csf','csr','cd_ci','cl_ci','cop','cl/cd'])
+    averagedData['endTime'] = endTime
+    
+    # averagedData['cd'] = [cd]
+    # averagedData['cl'] = [cl]
+    # averagedData['clf'] = [clf]
+    # averagedData['clr'] = [clr]
+    averagedData['cop'] = cop
+    averagedData['cl/cd'] = clcd
+    # averagedData['cd_ci'] = [cd_ci]
+    # averagedData['cl_ci'] = [cl_ci]
+    # averagedData['csf'] = [csf]
+    # averagedData['csr'] = [csr]
     return averagedData
         
 
@@ -335,29 +378,6 @@ def getPorousData():
 
 
 
-#geomDict = getGeometry(fullCaseSetupDict)  
-#geomList
 
-getPorousData()
-coeffFiles = getCoeffPaths()
-avgData = averageCoeffs(case,'all',coeffFiles)
-numCells,mesher,sym = cellCount()
-inletMag,lastTime,yaw,wheelRotation,simType,turbModel = bcParser(path,case)
-runDate,runTime,version,solver = getOfVersion()
-refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
-#default datas
-rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
-data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'].values[0],simType.lower(),wheelRotation,turbModel,inletMag,yaw,avgData['cd'].values[0],avgData['cl'].values[0],avgData['cl/cd'].values[0],avgData['cop'].values[0],avgData['cd_ci'].values[0],avgData['cl_ci'].values[0]]
-porousData = getPorousData()
-#adding porous data
-for key in porousData.keys():
-    rowNames.append(str(key))
-    data.append(str(porousData[key]))
-summary = pd.DataFrame(columns=rowNames)
-summary.loc[-1] = data
-print("\n\n")
-for col in summary.columns:
-    print('{:>100s}{:>30s}'.format(col,str(summary[col].values[0])))
-    
-summary = summary.transpose()
-summary.to_csv("%s/%s/summary.csv"% (path,case),header=False)
+
+main()

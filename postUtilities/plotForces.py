@@ -8,6 +8,7 @@ import glob
 import configparser
 import scipy.stats as st
 from scipy.optimize import curve_fit
+from estimateStatisticalError import *
 params = {'mathtext.default': 'regular' }          
 plt.rcParams.update(params)
 
@@ -30,16 +31,22 @@ parser.add_argument('-p','--plotData',default=['Cd','Cl','CoP'],choices = ['Cd',
 parser.add_argument('-t','--trial',default = [caseName],nargs='+',help='selects the trials to plot, if plotting current ONLY trial do not use this flag')
 parser.add_argument('-s','--savePlots',action='store_true',help='saves all plots')
 parser.add_argument('--skipStats',action='store_true',help='skips calculating statistics')
+parser.add_argument('--yscaling',default = 'default',help = 'sets the y scaling factor for the plots',
+					choices = ['default','matDefault','bounds']) 
 parser.add_argument('--saveFormat',default = 'png',help = 'sets the format for the saved plots, by default [png]',
 					choices = ['png','eps','jpeg']) 
 parser.add_argument('--avgTime',help = 'manually set averaging start time',type=float) 
+parser.add_argument('--nchunks',default = 10,help = 'manually set chunk amount start time',type=int) 
+
 
 
 args = parser.parse_args()
 
+nchunks = args.nchunks
 
 def main():
 	global caseLoc
+	
 
 	casePathDict, caseLoc = setCasePaths(args.trial)
 
@@ -131,13 +138,6 @@ def makePandasArrays(casePathDict):
 				newForceData = pd.read_csv(casePathDict[case]['caseTimes'][caseTime],delimiter='\t',skiprows = 12)
 				forceData = pd.concat((forceData,newForceData),axis=0,ignore_index = True)
 
-			
-
-
-			
-			
-				
-			
 			n = n + 1
 
 		#make new columns
@@ -151,8 +151,6 @@ def makePandasArrays(casePathDict):
 		forceData['CoP'] = forceData['Cl(f)'].div(forceData['Cl']).mul(100)
 		maxCurrentTime = max(forceData['#Time'])
 
-
-
 		if args.avgTime != None:
 			avgt = args.avgTime
 			
@@ -162,25 +160,26 @@ def makePandasArrays(casePathDict):
 			avgForceData = forceData[forceData['#Time']>=avgt].copy()
 			
 		time = avgForceData['#Time'].to_numpy()
+		avgData = pd.DataFrame()
 		for var in args.plotData:
 			if args.skipStats == False:
 				data = avgForceData[var].to_numpy()		
 				print('\t\t\tCalculating statistics for %s' % (var))
-				if len(time) > 100:
-					sampleMean,ci,errorPercent = calcCI(time, data,100)
+				dt = time[-1]-time[-2]
+				if len(time) > 10:
+
+					statTime, avgDataArray,ciUpperArray,ciLowerArray  = calculateAcrossTime(time,data,dt=dt)
+					avgData[var+'SampleMean'] = avgDataArray
+					avgData[var+'UpperCI'] = ciUpperArray
+					avgData[var+'LowerCI'] = ciLowerArray
+					avgData[var+'StatTime'] = statTime
 
 
-					if sampleMean == 1:
-						continue
-						print('\t\t\tInsufficient averaging time to calculate statistics...')
-					else:
-						avgForceData[var+'SampleMean'] = sampleMean 
-						avgForceData[var+'CI'] = ci 
-						avgForceData[var+'Error'] = errorPercent
+						
 				else:
 					print('In-sufficient time to calculate statistics!')
 			
-			casePathDict[case]['avgData'] = avgForceData
+			casePathDict[case]['avgData'] = avgData
 
 	return casePathDict
 		
@@ -199,123 +198,66 @@ def plotData(casePathDict):
 		fig1,ax = plt.subplots(figsize=[7,4],frameon=True)
 		
 		caseMeans = []
+		caseMins = []
+		caseMax = []
 		for case in casePathDict.keys():
 			rawData = casePathDict[case]['data']
 			avgData = casePathDict[case]['avgData']
 			data = rawData[['#Time',var]]
+			avgStart = casePathDict[case]['avgStart']
+			
 			if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
-				caseMeans.append(np.mean(avgData[var][-20:])) #using this to calculate the range for scaling axis
+				caseMeans.append(np.mean(data[var][data['#Time']>=avgStart])*2) #using this to calculate the range for scaling axis
+				caseMax.append(max(data[var][data['#Time']>=avgStart])*2)
+				caseMins.append(min(data[var][data['#Time']>=avgStart])*2)
 			else:
-				caseMeans.append(np.mean(avgData[var][-20:])*2) #using this to calculate the range for scaling axis
+				caseMeans.append(np.mean(data[var][data['#Time']>=avgStart])) #using this to calculate the range for scaling axis\
+				caseMax.append(max(data[var][data['#Time']>=avgStart]))
+				caseMins.append(min(data[var][data['#Time']>=avgStart]))
 			if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
 				ax.plot(rawData['#Time'],rawData[var]*2,label=case,alpha=0.5)
 			else:
 				ax.plot(rawData['#Time'],rawData[var],label=case,alpha=0.5)
 			if args.skipStats == False:
-				#try:
-				for statvar in ['SampleMean','CI']:
-					if statvar == 'SampleMean':
-						statvarlabel = 'Fwd. Avg'
-						if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
-							ax.plot(avgData['#Time'],avgData[var+statvar]*2,label=case + '(%s)'% (statvarlabel),linestyle = '--')
-						else:
-							ax.plot(avgData['#Time'],avgData[var+statvar],label=case + '(%s)'% (statvarlabel),linestyle = '--')
-					# elif statvar == 'CI':
-					# 	statvarlabel = statvar
-					# 	ax.fill_between(avgData['#Time'],avgData[var + 'SampleMean'] - avgData[var+statvar],avgData[var + 'SampleMean'] + avgData[var+statvar],label=case + '(%s)'% (statvarlabel),alpha = 0.5)
-						
-				#except:
-					#print('WARNING! Unable to plot statistics data!')
+				try:
+					for statvar in ['SampleMean','CI']:
+						if statvar == 'SampleMean':
+							statvarlabel = 'Fwd. Avg'
+							if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
+								ax.plot(avgData[var+'StatTime'],avgData[var+statvar]*2,label=case + '(%s)'% (statvarlabel),linestyle = '--')
+							else:
+								ax.plot(avgData[var+'StatTime'],avgData[var+statvar],label=case + '(%s)'% (statvarlabel),linestyle = '--')
+						elif statvar == 'CI':
+							statvarlabel = statvar
+							
+							if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
+								ax.fill_between(avgData[var+'StatTime'],avgData[var+'UpperCI']*2,
+											avgData[var + 'LowerCI']*2,label=case + '(%s)'% (statvarlabel),alpha = 0.5)
+							else:
+								ax.fill_between(avgData[var+'StatTime'],avgData[var+'UpperCI'],
+												avgData[var + 'LowerCI'],label=case + '(%s)'% (statvarlabel),alpha = 0.5)
+				except Exception as error:
+					print('WARNING! Unable to plot statistics data!')
+					print(error)
 						
 
 		caseMeans = np.array(caseMeans)
-		ax.set_ylim(min(caseMeans)-(np.mean(caseMeans)*0.1),max(caseMeans)+(np.mean(caseMeans)*0.1))
+		if args.yscaling == 'default':
+			ax.set_ylim(min(caseMeans)-(np.mean(caseMeans)*0.1),max(caseMeans)+(np.mean(caseMeans)*0.1))
+		elif args.yscaling == 'matDefault':
+			print('')
+		elif args.yscaling == 'bounds':
+			ax.set_ylim(min(caseMins)-(min(caseMins)*0.1),max(caseMax)+(max(caseMax)*0.1))
+		
+		
 		ax.set_ylabel(labelDict[var]['label'])
 		ax.set_title(labelDict[var]['title'])
 		ax.set_xlabel('Time (s)')
 		plt.legend()
-		plt.savefig('%s_forceHistory_%s.%s' % ('_'.join(args.trial),var,args.saveFormat),dpi = 300,bbox_inches='tight')
-
-
-
-def calcCI(time,data,nchunks = 100):
-	if len(data) < nchunks:
-		
-		return 1,1,1,1,1
-
-	#calculating the 95% confidence interval for the data to gauge convergence
-	ciArrayMean = []
-	errorArrayMean = []
-	sampleMeanArrayMean = []
-	lowerBoundArrayMean = []
-	upperBoundArrayMean = []
-	ciArrayMean = []
-	errorPercentArrayMean = []
-
-	ciArrayStd = []
-	errorArrayStd = []
-	sampleStdArrayStd = []
-	lowerBoundArrayStd = []
-	upperBoundArrayStd = []
-	ciArrayStd = []
-	errorPercentArrayStd = []
-
-	totalMean = np.mean(data)
-	totalStd = np.std(data)
-	#break data into chunks, about 30 chunks
-	for n in range(len(data)):
-		if n < 1:
-			samples = data[:n+1]
-			std = data[:n+1]
-			errorChunk = np.sqrt(np.mean(data[:n+1]-totalMean)**2)/totalMean
-		else:
-			samples = []
-			std = []
-			errorChunk = []
-			#chunking data
-			chunks = np.array_split(data[:n],nchunks)
-			#calculate mean of each chunk
-			for chunk in chunks:
-				if len(chunk) > 0:
-					samples.append(float(np.mean(chunk)))
-					errorChunk.append(np.sqrt(np.mean((np.mean(chunk)-totalMean)**2))/totalMean)
-					std.append(float(np.std(chunk)))
-			samples = np.array(samples)
-			std = np.array(std)
-			errorChunk = np.array(errorChunk)
-
-		#errorMean = np.sqrt(np.mean((samples-totalMean)**2))/totalMean
-		errorMean = errorChunk
-		
-		errorStd = np.sqrt(np.mean((std-totalStd)**2))/totalStd
-
-		sampleMean = np.mean(samples)
-		sampleStd = np.std(samples)
-
-		errorArrayMean.append(errorMean)
-		lowerBoundMean = totalMean/(1+2*errorMean)
-		upperBoundMean = totalMean/(1-2*errorMean)
-		lowerBoundArrayMean.append(lowerBoundMean)
-		upperBoundArrayMean.append(upperBoundMean)
-		ciArrayMean.append((upperBoundMean-lowerBoundMean)/2)
-		errorPercentArrayMean.append(abs(100*((upperBoundMean-lowerBoundMean)/2)/totalMean))
-		sampleMeanArrayMean.append(sampleMean)
-
-		errorArrayStd.append(errorStd)
-		lowerBoundStd = totalMean/(1+2*errorStd)
-		upperBoundStd = totalMean/(1-2*errorStd)
-		lowerBoundArrayStd.append(lowerBoundStd)
-		upperBoundArrayStd.append(upperBoundStd)
-		ciArrayStd.append((upperBoundMean-lowerBoundStd)/2)
-		errorPercentArrayStd.append(abs(100*((upperBoundStd-lowerBoundStd)/2)/totalStd))
-
-
-
-	
-
-	return sampleMeanArrayMean,ciArrayMean,errorPercentArrayMean
-
-
+		if caseLoc.lower() == 'outtrial':
+			plt.savefig('%s/%s_forceHistory_%s.%s' % (list(casePathDict.keys())[0],'_'.join(args.trial),var,args.saveFormat),dpi = 300,bbox_inches='tight')
+		else :
+			plt.savefig('%s_forceHistory_%s.%s' % ('_'.join(args.trial),var,args.saveFormat),dpi = 300,bbox_inches='tight')
 
 
 
