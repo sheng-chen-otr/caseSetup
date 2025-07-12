@@ -8,6 +8,10 @@ import configparser
 import glob
 import json
 
+#importing statistical error calculator
+from estimateStatisticalError import *
+
+
 #import paraview modules
 from paraview.simple import *
 from paraview.numpy_support import vtk_to_numpy

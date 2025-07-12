@@ -32,7 +32,7 @@
 
           "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions; MPI='/usr/bin/mpirun'; FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'; caseTemplates='~/openFoam/scripts/caseSetup/caseSetup/zeroTemplates'; if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; fi;",
 
-          "createZeroDir":"if [ $? != 0 ]; then exit 1; fi; echo 'creating zero directories...'; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir \"$caseTemplates\" >> log.createZeroDirectory;",
+          "createZeroDir":"if [ $? != 0 ]; then exit 1; fi; echo 'creating zero directories...'; if [[ -f 'constant/turbulencePropertiesSolve' ]]; then cp constant/turbulencePropertiesSolve constant/turbulenceProperties; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir \"$caseTemplates\" >> log.createZeroDirectory;",
 
           "initialize": {"initializePotential":"if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; cp system/fvSchemesSimple system/fvSchemes; echo 'running potentialFoam...'; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec potentialFoam -parallel >> log.potentialFoam; fi;",
 
