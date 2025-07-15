@@ -1,0 +1,153 @@
+    
+	xNormalMesh_0
+	{
+		type         cuttingPlane;
+		planeType    pointAndNormal;
+		
+			pointAndNormalDict
+			{
+			basePoint    (-0.5 0 0);
+			normalVector (1 0 0);
+			}
+			
+		interpolate  true;
+			
+	}
+	
+	xNormalMesh_1
+	{
+		type         cuttingPlane;
+		planeType    pointAndNormal;
+		
+			pointAndNormalDict
+			{
+			basePoint    (0 0 0);
+			normalVector (1 0 0);
+			}
+			
+		interpolate  true;
+			
+	}
+	xNormalMesh_2
+	{
+		type         cuttingPlane;
+		planeType    pointAndNormal;
+		
+			pointAndNormalDict
+			{
+			basePoint    (1.651 0 0);
+			normalVector (1 0 0);
+			}
+			
+		interpolate  true;
+			
+	}
+	
+	xNormalMesh_3
+	{
+		type         cuttingPlane;
+		planeType    pointAndNormal;
+		
+			pointAndNormalDict
+			{
+			basePoint    (1.8 0 0);
+			normalVector (1 0 0);
+			}
+			
+		interpolate  true;
+			
+	}
+	
+	
+	
+	
+	
+	yNormalMesh_0
+	{
+		type         cuttingPlane;
+		planeType    pointAndNormal;
+		
+			pointAndNormalDict
+			{
+			basePoint    (0 0 0);
+			normalVector (0 1 0);
+			}
+			
+		interpolate  true;
+			
+	}
+	
+	yNormalMesh_1
+	{
+		type         cuttingPlane;
+		planeType    pointAndNormal;
+		
+			pointAndNormalDict
+			{
+			basePoint    (0 -0.3 0);
+			normalVector (0 1 0);
+			}
+			
+		interpolate  true;
+			
+	}
+	
+	yNormalMesh_2
+	{
+		type         cuttingPlane;
+		planeType    pointAndNormal;
+		
+			pointAndNormalDict
+			{
+			basePoint    (0 -0.6 0);
+			normalVector (0 1 0);
+			}
+			
+		interpolate  true;
+			
+	}
+	
+	zNormalMesh_0
+	{
+		type         cuttingPlane;
+		planeType    pointAndNormal;
+		
+			pointAndNormalDict
+			{
+			basePoint    (0 0 0.001);
+			normalVector (0 0 1);
+			}
+			
+		interpolate  true;
+			
+	}
+	
+	zNormalMesh_1
+	{
+		type         cuttingPlane;
+		planeType    pointAndNormal;
+		
+			pointAndNormalDict
+			{
+			basePoint    (0 0 0.229);
+			normalVector (0 0 1);
+			}
+			
+		interpolate  true;
+			
+	}
+	
+	zNormalMesh_2
+	{
+		type         cuttingPlane;
+		planeType    pointAndNormal;
+		
+			pointAndNormalDict
+			{
+			basePoint    (0 0 0.5);
+			normalVector (0 0 1);
+			}
+			
+		interpolate  true;
+			
+	}
