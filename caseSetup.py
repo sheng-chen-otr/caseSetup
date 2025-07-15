@@ -177,7 +177,7 @@ def writeSnappy(geomDict,fullCaseSetupDict):
             continue
         geomName = stripExt(geom)
         geomFile = geom.replace('.gz','')
-        geomLayers = geomDict[geom]['layers'][0]
+        geomLayers = geomDict[geom]['layers']
         geomLayerExp = geomDict[geom]['expansion']
         try:
             geomScale = float(geomDict[geom]['scale'])
@@ -294,6 +294,7 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                 #test if values are valid
                 try:
                     refLevel = int(refLevel)
+                    #continue
                 except:
                     print('ERROR! Invalid refinement values for %s' % (geomName))
                     
@@ -343,8 +344,13 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                 regRefString = refinementRegionStrings['GEOM'].replace('GEOM_NAME',geomName)\
                                                               .replace('REF_LEVEL',refLevels)
         
-        snappyDict['REFINEMENT_SURFACES'].append(geomRefString)
-        snappyDict['REFINEMENT_REGIONS'].append(regRefString)
+        if geomRefString != None:
+            snappyDict['REFINEMENT_SURFACES'].append(geomRefString)
+        if regRefString != None:
+            snappyDict['REFINEMENT_REGIONS'].append(regRefString)
+
+        geomRefString = None
+        regRefString = None
         
         
         #writing out feature edges to feature edges section

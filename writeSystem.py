@@ -511,17 +511,23 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                 caseSetupStringArray.append(patchString)
                 
 
-   
+    wallFunctionDict = {'high':'highReynolds',
+                        'low':'lowReynolds',
+                        'ally':'allReynolds'
+                        }
     for geom in geomDict.keys():
         print('\t\t\t%s' % (geom.split('.')[0]))
         geomPrefix = geom.split('-')[0]
         geomWallModel = geomDict[geom]['wallmodel'] #put in the wall model for the geometry
-        if geomWallModel.lower() == 'high':
-            geomWallModel = 'highReynolds'
-        elif geomWallModel.lower() == 'low':
-            geomWallModel = 'lowReynolds'
-        else:
-            sys.exit('ERROR! Wall model not valid for %s!' % (geom))
+        
+        availableWallFunctions = wallFunctionDict.keys()
+        try:
+            geomWallModel = wallFunctionDict[geomWallModel.lower()]
+        except:
+            print('ERROR! Wall model not valid, available wall models:')
+            for model in availableWallFunctions:
+                print(model)
+            sys.exit()
         whAxis = '0 1 0' #initialize the default values
         whVel = '' 
         whOrig = ''
