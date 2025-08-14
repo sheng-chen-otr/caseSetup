@@ -1,4 +1,4 @@
-{"meshing":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve1\n#SBATCH --output=01_%x_meshing_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_MS035_half_half",
+{"meshing":{"header":"#!/bin/bash\n#SBATCH --nodes=2\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve2\n#SBATCH --output=01_%x_meshing_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_MS035_half_half",
 
             "precision":"SP=FALSE; VERSION=of2206; cd $SLURM_SUBMIT_DIR; if [ SP = 'TRUE' ]; then echo 'Running Meshing Script in SP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP; else echo 'Running Meshing Script in DP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; fi",
 
@@ -10,7 +10,7 @@
 
             "blockMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running blockMesh...'; ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec blockMesh >> log.blockMesh;",
 
-            "decomposePar":"if [ $? != 0 ]; then exit 1; fi; echo 'running decomposePar...'; ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec decomposePar -copyZero >> log.decomposePar;",
+            "decomposePar":"if [ $? != 0 ]; then exit 1; fi; echo 'running decomposePar...'; ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec decomposePar -copyZero -constant>> log.decomposePar;",
 
             "getFvDict":"if [ -f system/fvSchemesSimple ]; then cp system/fvSchemesSimple system/fvSchemes; cp system/fvSolutionSimple system/fvSolution; elif [ -f system/fvSchemesPiso ]; then cp system/fvSchemesPiso; system/fvSchemes; cp system/fvSolutionPiso system/fvSolution; else echo 'ERROR! Unable to find the right fvSchemes or fvSolution files for the appropriate simulation type!' exit 1; fi;",
 
@@ -26,13 +26,13 @@
 
         },
  
- "solve":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve1\n#SBATCH --output=02_%x_solve_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_SO035_half",
+ "solve":{"header":"#!/bin/bash\n#SBATCH --nodes=2\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve2\n#SBATCH --output=02_%x_solve_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_SO035_half",
 
           "precision":"SP=TRUE; VERSION=of2206; cd $SLURM_SUBMIT_DIR; if [ SP = 'TRUE' ]; then echo 'Running Solve Script in SP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP; else echo 'Running Solve Script in DP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; fi",
 
-          "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions; MPI='/usr/bin/mpirun'; FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'; caseTemplates='~/openFoam/scripts/caseSetup/caseSetup/zeroTemplates'; if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; fi;",
+          "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions; MPI='/usr/bin/mpirun'; FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'; caseTemplates='~/openFoam/scripts/caseSetup/caseSetup/_internal/zeroTemplates'; if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; fi;",
 
-          "createZeroDir":"if [ $? != 0 ]; then exit 1; fi; echo 'creating zero directories...'; if [[ -f 'constant/turbulencePropertiesSolve' ]]; then cp constant/turbulencePropertiesSolve constant/turbulenceProperties; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir \"$caseTemplates\" >> log.createZeroDirectory;",
+          "createZeroDir":"if [ $? != 0 ]; then exit 1; fi; echo 'creating zero directories...'; if [[ -f 'constant/turbulencePropertiesSolve' ]]; then cp constant/turbulencePropertiesSolve constant/turbulenceProperties; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir \"$caseTemplates\" >> log.createZeroDirectory; fi;",
 
           "initialize": {"initializePotential":"if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; cp system/fvSchemesSimple system/fvSchemes; echo 'running potentialFoam...'; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec potentialFoam -parallel >> log.potentialFoam; fi;",
 
@@ -44,7 +44,7 @@
 
          
 
- "export":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve1\n#SBATCH --output=03_%x_export_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_EX035_half",
+ "export":{"header":"#!/bin/bash\n#SBATCH --nodes=2\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve2\n#SBATCH --output=03_%x_export_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_EX035_half",
 
             "precision":"if [ $? != 0 ]; then exit 1; fi; SP=FALSE; VERSION=of2206; cd $SLURM_SUBMIT_DIR; if [ SP = 'TRUE' ]; then echo 'Running Meshing Script in SP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP; else echo 'Running Meshing Script in DP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; fi; MPI='/usr/bin/mpirun';",
 
@@ -58,13 +58,24 @@
 
 
 
- "post":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=8\n#SBATCH --partition=solve1\n#SBATCH --output=04_%x_postPro_%j.out\n#SBATCH\n#SBATCH --job-name=TS_PP035_half",
+ "post":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=8\n#SBATCH --nodelist=cfd08\n#SBATCH --partition=solve2\n#SBATCH --output=04_%x_postPro_%j.out\n#SBATCH --job-name=TS_PP035_half",
          
-         "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pvPost.py >> log.pvpost",
+         "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/_internal/postUtilities/pvPost.py >> log.pvpost",
 
-         "forces":"echo 'plotting forces...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/plotForces.py -p Cd Cl CoP Cl(f) Cl(r) Cs(f) Cs(r) -s >> log.plotForce"
-
-
+         "forces":"echo 'plotting forces...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi /home/openfoam/openFoam/scripts/plotForces_v3_0.py -n -s >> log.plotForce",
+		 
+		 "binForces":"echo 'plotting bin forces...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi /home/openfoam/openFoam/scripts/binPlotForces_v2_0.py -n -s >> log.binForce",
+		 
+		 "confPlot":"echo 'plotting confidence intervals...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi /home/openfoam/openFoam/scripts/confidencePlot.py >> log.confForce",
+		 
+		 "stat":"echo 'writing out status...';/home/openfoam/openFoam/scripts/dist/status-v1.0/status-v1.0 >> log.status",
+		 
+		 "avgForces":"echo 'plotting confidence intervals...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi /home/openfoam/openFoam/scripts/averageScript-v2.0.py >> log.averageForce",
+		 
+		 "summary":"echo 'generating summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi /home/openfoam/openFoam/scripts/caseSetup/caseSetup/postUtilities/summary.py >> log.summary",
+		
+		"makePpt":"echo 'plotting confidence intervals...';python3.8 /home/openfoam/openFoam/scripts/pptGeneration.py >> log.pptGen"
+		
         }
     
 }

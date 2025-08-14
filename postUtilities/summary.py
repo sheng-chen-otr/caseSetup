@@ -12,14 +12,14 @@ import configparser
 from estimateStatisticalError import *
 
 print("#### CASE SUMMARY ####")
-parser = argparse.ArgumentParser(prog='EZ-CFD CASE SUMMARY',description='Summarizes the case into one csv file.')
+parser = argparse.ArgumentParser(prog='CASE SUMMARY',description='Summarizes the case into one csv file.')
 
 args = parser.parse_args()
 
 path = os.path.split(os.getcwd())[0]
 case = os.path.split(os.getcwd())[1]
 job = os.path.basename(os.path.dirname(path))
-print(path)
+
 if not os.getcwd().split('/')[-2].lower() == 'cases':
     sys.exit('ERROR! Not executed in a trial directory!')
 print('Reading caseSetup file...')
@@ -32,14 +32,17 @@ configSections = fullCaseSetupDict.sections()
 def main():
     
     coeffFiles = getCoeffPaths()
+    for part in coeffFiles:
+        if part != 'all':
+            avgData = averageCoeffs(case,part,coeffFiles)
     avgData = averageCoeffs(case,'all',coeffFiles)
     numCells,mesher,sym = cellCount()
-    inletMag,lastTime,yaw,wheelRotation,simType,turbModel = bcParser(path,case)
+    inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(path,case)
     runDate,runTime,version,solver = getOfVersion()
     refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
     #default datas
-    rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
-    data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),wheelRotation,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
+    rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
+    data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
     try:
         porousData = getPorousData()
         #adding porous data
@@ -56,6 +59,8 @@ def main():
         
     summary = summary.transpose()
     summary.to_csv("%s/%s/summary.csv"% (path,case),header=False)
+
+    
 
 
 def getGeometry(fullCaseSetupDict):    
@@ -171,13 +176,14 @@ def bcParser(path,case):
     inletMag = fullCaseSetupDict['BC_SETUP']['INLET_MAG']
     turbModel = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['TURB_MODEL']
     simType = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE']
+    movingGround = fullCaseSetupDict['BC_SETUP']['GROUND']
     if 'half' in case or simType.lower() == 'half':
         yaw = 0
     else:
         yaw = fullCaseSetupDict['BC_SETUP']['YAW'][0]
         
     
-    return inletMag,lastTime,yaw,wheelRotation,simType,turbModel
+    return inletMag,lastTime,yaw,movingGround,wheelRotation,simType,turbModel
 
 def getCoeffPaths():
     print("Getting force coefficients...")
@@ -231,17 +237,14 @@ def averageCoeffs(case,part,coeffFiles):
     averagedData = {}
     for var in variables:
         data = avgStartRows[var]
+        results = estimate_statistical_error(data,dt)
+        
         if 'half' in case or fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
-            results = estimate_statistical_error(data*2,dt)
+            averagedData[var] = round(results['total_mean']*2,3)
         else:
-            results = estimate_statistical_error(data,dt)
-        averagedData[var] = round(results['total_mean'],2)
-        averagedData[var+'_ci'] = round(np.abs(results['mean_95_confidence_interval'][1] - results['mean_95_confidence_interval'][0])/2,2)
+            averagedData[var] = round(results['total_mean'],3)
+        averagedData[var+'_ci'] = round(np.abs(results['mean_95_confidence_interval'][1] - results['mean_95_confidence_interval'][0])/2,4)
 
-
-    
-    
-    
     
     # if 'half' in case or fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
     #     cd = round(avgRow['cd'] * 2,4)
@@ -279,6 +282,8 @@ def averageCoeffs(case,part,coeffFiles):
     # averagedData['cl_ci'] = [cl_ci]
     # averagedData['csf'] = [csf]
     # averagedData['csr'] = [csr]
+    avgs = [averagedData['cd'],averagedData['cl'],averagedData['clf'],averagedData['clr'],averagedData['csf'],averagedData['csr'],averagedData['cd_ci'],averagedData['cl_ci']]
+    np.savetxt("trial%s_AVG_%s_coeff.csv" % (case, part), avgs, delimiter=",",header="Time,CD,CL,CLF,CLR,CSF,CSR,CI-CD,CI-CL")
     return averagedData
         
 

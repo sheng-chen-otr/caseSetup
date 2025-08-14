@@ -1,0 +1,51 @@
+%%%%%%%%%%%% PACKAGES %%%%%%%%%%%%
+
+\documentclass{beamer}
+%\usetheme{Boadilla}
+%\usepackage{graphicx} % Required for inserting images
+%\usepackage{graphics}
+%\usefonttheme{professionalfonts}
+%\usepackage{textpos}
+%\usepackage{subcaption}
+\usepackage{url}
+\urlstyle{sf}
+\usepackage{hyperref}
+    \hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,      
+    urlcolor=cyan,
+    pdftitle={Overleaf Example},
+    pdfpagemode=FullScreen,
+    }
+
+
+%%%%%%%%%%%% PACKAGES %%%%%%%%%%%%
+
+
+\title{OTR Report}
+\institute{Ontario Tech Racing}
+
+\date{\today}
+% \logo{
+% \includegraphics[width=3cm]{LOGO}
+% }
+
+\begin{document}
+
+
+\begin{frame}{Table of Contents}
+\label{contents}
+    \tableofcontents
+
+\end{frame}
+
+\include{Geom_plots}
+\include{Cp_plots}
+\include{UMeanNear_plots}
+\include{IsoCtp_plots}
+\include{IsoQ_plots}
+
+
+
+\end{document}

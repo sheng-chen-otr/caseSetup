@@ -1,7 +1,7 @@
 			".*-lev9.*"
 			{
 			    // Surface-wise min and max refinement level
-			    level (8 10);
+			    level (9 9);
 
 			    // Optional specification of patch type (default is wall). No
 			    // constraint types (cyclic, symmetry) etc. are allowed.
@@ -16,7 +16,7 @@
 			".*-lev10.*"
 			{
 			    // Surface-wise min and max refinement level
-			    level (8 10);
+			    level (10 10);
 
 			    // Optional specification of patch type (default is wall). No
 			    // constraint types (cyclic, symmetry) etc. are allowed.
@@ -32,7 +32,7 @@
 			".*-fine.*" 
 			{
 			    // Surface-wise min and max refinement level
-			    level (8 10);
+			    level (10 10);
 
 			    // Optional specification of patch type (default is wall). No
 			    // constraint types (cyclic, symmetry) etc. are allowed.
@@ -47,7 +47,7 @@
 			".*-extra-fine.*" 
 			{
 			    // Surface-wise min and max refinement level
-			    level (9 11);
+			    level (11 11);
 
 			    // Optional specification of patch type (default is wall). No
 			    // constraint types (cyclic, symmetry) etc. are allowed.
