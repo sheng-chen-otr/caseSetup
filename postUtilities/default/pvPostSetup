@@ -29,7 +29,8 @@ LIC_VARIABLES = default
 
 [ISO_SURFACE]
 VIEWS = default
-ISO_VARIABLES = default
+VARIABLES = default
+ISO_VALUES = default
 
 [VARIABLES]
 SURFACE_VARIABLES = default

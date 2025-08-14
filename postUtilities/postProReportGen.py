@@ -7,10 +7,11 @@ import numpy as np
 path = os.path.split(os.getcwd())[0] 		
 case = os.path.split(os.getcwd())[1]
 job = os.path.split(os.path.dirname(path))[1]
+scriptPath = os.path.dirname(os.path.abspath(__file__))
 comp = False
 
-templatePath = "/home/openfoam/openFoam/templates/postProReportTemplate"
-logoPath = "/home/openfoam/openFoam/templates/logos/otrLogo_greyOnWhite.png"
+templatePath = os.path.join(scriptPath,'postProReportTemplate')
+logoPath = os.path.join(scriptPath,'postProReportTemplate','logos','otrLogo_greyOnWhite.png')
 
 
 if len(sys.argv) > 1:

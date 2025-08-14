@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=36
-#SBATCH --partition=solve1
+#SBATCH --partition=solve2
 #SBATCH --output=01_%x_meshing_%j.out
 #SBATCH --exclusive
 #SBATCH --job-name=RC_MS033_half 

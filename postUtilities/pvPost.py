@@ -54,6 +54,7 @@ def main():
     
     #Getting pvPostSetup file
     pvPostSetupDict = getPVSetup(templateLoc)
+
     if pvPostSetupDict['PV_POST_MAIN']['VARIABLE_DICT'] == 'default':
         varDict,viewsDict = getVariableDicts('%s/default/defaultVariables'% (templateLoc),pvPostSetupDict['PV_POST_MAIN']['CAMERA_VIEWS'])
     else:
@@ -158,7 +159,10 @@ def main():
 
     if pvPostSetupDict['PV_POST_MAIN']['SLICE_IMG'].lower() == 'true':
         generateSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],varDict,viewsDict)
-
+    
+    if pvPostSetupDict['PV_POST_MAIN']['ISO_SURFACE_IMG'].lower() == 'true':
+        generateIsoSurfaces(geomSurface,renderView,pvPostSetupDict['ISO_SURFACE']['VIEWS'],varDict,viewsDict)
+        
 def getVariableDicts(variablePaths, viewsPath):
     
     #getting default variables
@@ -216,7 +220,7 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
     if surfaceVars == 'default':
         surfaceVars = ['Geom','CpMean','UnwMean','UnwMeanX','UnwMeanY','UnwMeanY','UnwMeanZ','CpPrime2Mean','CfMean']
     if views == 'default':
-        views = ['Rear','Front','Left','Right','Top','Bottom','FrontRight','FrontLeft','RearRight','RearLeft']
+        views = ['Rear','Front','Left','Right','Top','Bottom','FrontRight','FrontLeft','RearRight','RearLeft','LeftBack','LeftForward','RightBack','RightForward']
 
 
     print('\t\tRequested surface variables: %s' % (surfaceVars))
@@ -228,6 +232,10 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
         if 'geom' in variable.lower():
             surfaceSourceDisplay = Show(surfaceSource,renderView,'UnstructuredGridRepresentation')
             surfaceSourceDisplay.Representation = 'Surface'
+            surfaceSourceDisplay.BackfaceRepresentation = 'Cull Frontface'
+            ColorBy(surfaceSourceDisplay,('POINTS','Solid Color'))
+            surfaceSourceDisplay.DiffuseColor = [0.8,0.8,0.8]
+            renderView.Update()
         else:
 
             #check that variable exists in varDict
@@ -321,12 +329,12 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
         sliceVars = sliceDict['VARIABLES'].split()
 
     if sliceDict['VIEWS'].lower() == 'default':
-        sliceViews = ['Front','Left','Top']
+        sliceViews = ['Front','Left','LeftForward','LeftBack','Top']
     else:
         sliceViews = sliceDict['VIEWS'].split()
 
     if sliceDict['NORMALS'].lower() =='default':
-        normalsList = ['X','Y','Z']
+        normalsList = ['X','Y','Y','Y','Z']
     else:
         normalsList = sliceDict['NORMALS'].split()
 
@@ -466,7 +474,125 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
 
 
     
-                
+def generateIsoSurfaces(surfaceSource,renderView,views,varDict,viewsDict):
+    '''
+        Generates surface contour plots, the variables are given in a csv file.
+
+    '''
+    beginSurface = time.time()
+    print('\tGenerating iso surfaces...')
+    availableVars = list(varDict['surfaceVariables'].keys())
+
+    if views == 'default':
+        views = ['Rear','Front','Left','Right','Top','Bottom','FrontRight','FrontLeft','RearRight','RearLeft','LeftBack','LeftForward','RightBack','RightForward']
+
+
+    #generate body surface
+    surfaceSourceDisplay = Show(surfaceSource,renderView,'UnstructuredGridRepresentation')
+    surfaceSourceDisplay.Representation = 'Surface'
+    surfaceSourceDisplay.BackfaceRepresentation = 'Cull Frontface'
+    surfaceSourceDisplay.DiffuseColor = [0.8,0.8,0.8]
+    surfaceSourceDisplay.AmbientColor = [0.8,0.8,0.8]
+    ColorBy(surfaceSourceDisplay,('POINTS','Solid Color'))
+    
+
+    #find iso vtp files
+    latestTime = get_latest_time_directory(casePath + '/postProcessing/surfaces')
+    print('\t\tLatest time found: %s' % (latestTime))
+
+    isoFiles = glob.glob('%s/postProcessing/surfaces/%s/iso*.vtp' % (casePath,latestTime))
+    print('\t\tFound %s iso-surface files...' % (len(isoFiles)))
+    if len(isoFiles) == 0:
+        return print('\t\tNo iso-surface files found, skipping...')
+
+    
+    for isoFile in isoFiles:
+        isoFileName = isoFile.split('/')[-1]
+        isoVarName = isoFileName.split('.')[0].replace('iso','')
+        if isoVarName == 'Ctp':
+            isoVarName = 'Cpt'
+        print('\t\t\tProcessing iso-surface file: %s' % (isoFileName))
+        isoSource = XMLPolyDataReader(FileName=isoFile)
+        isoSource.UpdatePipeline()
+
+        if isoFileName == 'isoQ.vtp':
+            colorby = 'Solid Color'
+            isoSourceDisplay = Show(isoSource,renderView,'UnstructuredGridRepresentation')
+            isoSourceDisplay.Representation = 'Surface'
+            #isoSourceDisplay.ColorArrayName = ['POINTS',colorby]
+            ColorBy(isoSourceDisplay,('POINTS',colorby))
+            isoSourceDisplay.DiffuseColor = [1,1,0]
+        elif isoFileName == 'isoCtp.vtp':
+            variable = 'UMean'
+            #calculating variable using variable equation
+            calculator = Calculator(registrationName='calculator', Input=isoSource)
+            calculator.Function = str(varDict['isoVariables'][variable]['equation'])
+            calculator.ResultArrayName = variable
+            isoSourceDisplay = Show(calculator,renderView,'UnstructuredGridRepresentation')
+            isoSourceDisplay.Representation = 'Surface'
+            isoSourceDisplay.ColorArrayName = ['POINTS',variable]
+            renderView.Update()
+            LUT = GetColorTransferFunction(variable)
+            PWF  = GetOpacityTransferFunction(variable)
+            title = varDict['surfaceVariables'][variable]['label']
+            varRange = np.array(varDict['surfaceVariables'][variable]['range'])
+            tableValues = 15
+            color = varDict['surfaceVariables'][variable]['color']
+            LUT.NumberOfTableValues = tableValues
+            LUT.RescaleTransferFunction(varRange[0],varRange[1])
+            PWF.RescaleTransferFunction(varRange[0],varRange[1])
+            LUT.ApplyPreset(color,True)
+            PWF.ApplyPreset(color,True)
+            
+            ColorBy(isoSourceDisplay,('POINTS',variable))
+            colorBar = GetScalarBar(LUT,renderView)
+            colorBar.Title = title
+            colorBar.TitleFontFamily = 'Times'
+            colorBar.LabelFontFamily = 'Times'
+            colorBar.ComponentTitle = ''
+            colorBar.Orientation = 'Horizontal'
+            colorBar.WindowLocation = 'Lower Center'
+            colorBar.LabelFormat = '%-1.1f'
+            colorBar.RangeLabelFormat = '%-1.1f'
+            colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)
+            colorBar.ScalarBarLength = 0.3
+            colorBar.ScalarBarThickness = 160
+            colorBar.TitleFontSize = 160
+            colorBar.LabelFontSize = 160
+            colorBar.TitleColor = [0,0,0]
+            colorBar.LabelColor = [0,0,0]
+            colorBar.AddRangeLabels = 1
+            colorBar.AutomaticLabelFormat = 0
+            colorBar.DrawAnnotations = 0
+            colorBar.DrawTickLabels = 1
+            colorBar.UseCustomLabels = 1
+            colorBar.BackgroundColor = [1,1,1,1]
+            colorBar.BackgroundPadding = 10
+            
+        
+
+
+
+        HideUnusedScalarBars()  
+        for view in views:
+            renderView = setView(renderView,viewsDict[view])
+            saveImages(renderView,caseName,isoVarName,'isoSurface',view)
+        
+        try:
+            Delete(colorBar)
+        except:
+            print('')
+        
+        try:
+            Delete(calculator)
+        except:
+            print('')
+    Hide(surfaceSourceDisplay,renderView)
+    Delete(surfaceSourceDisplay)
+
+    print('\tSurface Contour Generation Time (s): ' + str(round(time.time()-beginSurface,3)) + '\n\n')
+
+
 
 def setView(renderView,view):
     renderView.CameraParallelProjection = view['pp']
@@ -532,8 +658,12 @@ def generateDefaultViews(LREF,CREF,FREF,WREF):
 
     viewsDict = {'Rear':{'pp':1,'campos':focalYZ + [LREF*10,0,0],'focalpos':focalYZ,'viewup':[0,0,1],'parallelscale':Af/2.5},
                  'Front':{'pp':1,'campos':focalYZ + [LREF*-10,0,0],'focalpos':focalYZ,'viewup':[0,0,1],'parallelscale':Af/2.5},
-                 'Left':{'pp':1,'campos':focalYZ + [LREF*0.2,LREF*-10,0],'focalpos':focalYZ + [LREF*0.2,0,0],'viewup':[0,0,1],'parallelscale':Af/2.2},
-                 'Right':{'pp':1,'campos':focalYZ + [LREF*0.2,LREF*10,0],'focalpos':focalYZ + [LREF*0.2,0,0],'viewup':[0,0,1],'parallelscale':Af/2.2},
+                 'Left':{'pp':1,'campos':focalYZ + [0,LREF*-10,0],'focalpos':focalYZ + [0,0,0],'viewup':[0,0,1],'parallelscale':Af/2.2},
+                 'Right':{'pp':1,'campos':focalYZ + [0,LREF*10,0],'focalpos':focalYZ + [0,0,0],'viewup':[0,0,1],'parallelscale':Af/2.2},
+                 'LeftForward':{'pp':1,'campos':focalYZ + [-LREF,LREF*-10,0],'focalpos':focalYZ + [-LREF,0,0],'viewup':[0,0,1],'parallelscale':Af/2.2},
+                 'LeftBack':{'pp':1,'campos':focalYZ + [LREF,LREF*-10,0],'focalpos':focalYZ + [LREF,0,0],'viewup':[0,0,1],'parallelscale':Af/2.2},
+                 'RightForward':{'pp':1,'campos':focalYZ + [-LREF,LREF*-10,0],'focalpos':focalYZ + [-LREF,0,0],'viewup':[0,0,1],'parallelscale':Af/2.2},
+                 'RightBack':{'pp':1,'campos':focalYZ + [LREF,LREF*-10,0],'focalpos':focalYZ + [LREF,0,0],'viewup':[0,0,1],'parallelscale':Af/2.2},
                  'Top':{'pp':1,'campos':focalYZ + [0,-dy,LREF*10],'focalpos':focalYZ + [0,-dy,0],'viewup':[0,1,0],'parallelscale':A/1.8},
                  'Bottom':{'pp':1,'campos':focalYZ + [0,dy,-LREF*10],'focalpos':focalYZ + [0,dy,0],'viewup':[0,-1,0],'parallelscale':A/1.8},
                  'FrontLeft':{'pp':1,'campos':focalYZ + [-LREF*5,-LREF*5,LREF*1.5],'focalpos':focalYZ + [CREF[0]*0,0,-df/2],'viewup':[0,0,1],'parallelscale':Af/2},
@@ -564,8 +694,10 @@ def getPVSetup(templateLoc):
         
     '''
     print('\tGetting pvPostSetup file...')
-    pvSetupList = glob.glob('pvPostSetup')
-    if len(pvSetupList) == 0:
+    if os.path.isfile(os.path.join(casePath,'pvPostSetup')):
+        print('\t\tFound pvPostSetup file in case directory!')
+        pvSetupPath = os.path.join(casePath,'pvPostSetup')
+    else:
         print('\t\tUnable to find pvPostSetup file! Using default settings...')
         pvSetupPath = '%s/%s/pvPostSetup' % (templateLoc,'default')
         
@@ -633,8 +765,7 @@ def getBoundaries(source):
     print("\n\t\tFinding Blocks:\n\t\t\tNumber of Blocks = {}".format(nDataSets)) # Used to be called blocks
     
     counter = 0
-    for i in range(1,nDataSets,1):
-        counter += 1
+    for i in range(1,nDataSets+1,1):
         print("\t\t\t\tFound Block Name {} ".format(source.GetDataInformation().GetBlockName(i)))
         boundaries[source.GetDataInformation().GetBlockName(i)] = counter
         selections['/Root/{}'.format(source.GetDataInformation().GetBlockName(i).replace('-',''))] = counter
@@ -689,6 +820,42 @@ def getGeometry(fullCaseSetupDict):
     
 
     return geomDict
+
+def get_latest_time_directory(base_path='postProcessing/surfaces'):
+    '''
+    Find the latest time step directory in the specified path.
+    Args:
+        base_path (str): Path where to look for time directories. 
+                        Defaults to 'postProcessing/surfaces'
+    Returns:
+        str: Name of the latest time directory or None if not found
+    '''
+    # Check if the base path exists
+    if not os.path.exists(base_path):
+        print(f"ERROR: Path {base_path} does not exist!")
+        return None
+        
+    # Get all directories in the specified path
+    time_dirs = glob.glob(os.path.join(base_path, '[0-9]*'))
+    
+    # Convert to float for proper numerical sorting
+    # Filter out any non-numeric directories
+    numeric_times = []
+    for d in time_dirs:
+        dir_name = os.path.basename(d)  # Get just the directory name, not full path
+        try:
+            float(dir_name)  # Try to convert to float
+            numeric_times.append(dir_name)
+        except ValueError:
+            continue
+    
+    if not numeric_times:
+        print(f"ERROR: No time directories found in {base_path}!")
+        return None
+    
+    # Sort numerically and get the latest time
+    latest_time = max(numeric_times)
+    return str(latest_time)
 
 def geomToDict(geomDict,geometryList,geomColumnNames):
     

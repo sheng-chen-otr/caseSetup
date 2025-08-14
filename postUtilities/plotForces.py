@@ -32,7 +32,7 @@ parser.add_argument('-t','--trial',default = [caseName],nargs='+',help='selects 
 parser.add_argument('-s','--savePlots',action='store_true',help='saves all plots')
 parser.add_argument('--skipStats',action='store_true',help='skips calculating statistics')
 parser.add_argument('--yscaling',default = 'default',help = 'sets the y scaling factor for the plots',
-					choices = ['default','matDefault','bounds']) 
+					choices = ['default','matDefault']) 
 parser.add_argument('--saveFormat',default = 'png',help = 'sets the format for the saved plots, by default [png]',
 					choices = ['png','eps','jpeg']) 
 parser.add_argument('--avgTime',help = 'manually set averaging start time',type=float) 
@@ -167,7 +167,6 @@ def makePandasArrays(casePathDict):
 				print('\t\t\tCalculating statistics for %s' % (var))
 				dt = time[-1]-time[-2]
 				if len(time) > 10:
-
 					statTime, avgDataArray,ciUpperArray,ciLowerArray  = calculateAcrossTime(time,data,dt=dt)
 					avgData[var+'SampleMean'] = avgDataArray
 					avgData[var+'UpperCI'] = ciUpperArray
@@ -208,12 +207,12 @@ def plotData(casePathDict):
 			
 			if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
 				caseMeans.append(np.mean(data[var][data['#Time']>=avgStart])*2) #using this to calculate the range for scaling axis
-				caseMax.append(max(data[var][data['#Time']>=avgStart])*2)
-				caseMins.append(min(data[var][data['#Time']>=avgStart])*2)
+				#caseMax.append(max(data[var][data['#Time']>=avgStart])*2)
+				#caseMins.append(min(data[var][data['#Time']>=avgStart])*2)
 			else:
 				caseMeans.append(np.mean(data[var][data['#Time']>=avgStart])) #using this to calculate the range for scaling axis\
-				caseMax.append(max(data[var][data['#Time']>=avgStart]))
-				caseMins.append(min(data[var][data['#Time']>=avgStart]))
+				#caseMax.append(max(data[var][data['#Time']>=avgStart]))
+				#caseMins.append(min(data[var][data['#Time']>=avgStart]))
 			if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
 				ax.plot(rawData['#Time'],rawData[var]*2,label=case,alpha=0.5)
 			else:
@@ -229,13 +228,14 @@ def plotData(casePathDict):
 								ax.plot(avgData[var+'StatTime'],avgData[var+statvar],label=case + '(%s)'% (statvarlabel),linestyle = '--')
 						elif statvar == 'CI':
 							statvarlabel = statvar
+							ci = (avgData[var+'UpperCI']-avgData[var + 'LowerCI'])/2
 							
 							if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
-								ax.fill_between(avgData[var+'StatTime'],avgData[var+'UpperCI']*2,
-											avgData[var + 'LowerCI']*2,label=case + '(%s)'% (statvarlabel),alpha = 0.5)
+								ax.fill_between(avgData[var+'StatTime'],avgData[var+'SampleMean']*2+ci,
+											avgData[var+'SampleMean']*2-ci,label=case + '(%s)'% (statvarlabel),alpha = 0.5)
 							else:
-								ax.fill_between(avgData[var+'StatTime'],avgData[var+'UpperCI'],
-												avgData[var + 'LowerCI'],label=case + '(%s)'% (statvarlabel),alpha = 0.5)
+								ax.fill_between(avgData[var+'StatTime'],avgData[var+'SampleMean']+ci,
+											avgData[var+'SampleMean']-ci,label=case + '(%s)'% (statvarlabel),alpha = 0.5)
 				except Exception as error:
 					print('WARNING! Unable to plot statistics data!')
 					print(error)
@@ -246,8 +246,8 @@ def plotData(casePathDict):
 			ax.set_ylim(min(caseMeans)-(np.mean(caseMeans)*0.1),max(caseMeans)+(np.mean(caseMeans)*0.1))
 		elif args.yscaling == 'matDefault':
 			print('')
-		elif args.yscaling == 'bounds':
-			ax.set_ylim(min(caseMins)-(min(caseMins)*0.1),max(caseMax)+(max(caseMax)*0.1))
+		# elif args.yscaling == 'bounds':
+		# 	ax.set_ylim(min(caseMins)-(min(caseMins)*0.1),max(caseMax)+(max(caseMax)*0.5))
 		
 		
 		ax.set_ylabel(labelDict[var]['label'])

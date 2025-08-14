@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=36
-#SBATCH --partition=solve2
+#SBATCH --partition=solve1
 #SBATCH --exclusive
 #SBATCH --output=03_%x_export_%j.out
 #SBATCH --job-name=RC_EX033_half

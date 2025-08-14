@@ -69,7 +69,7 @@ def estimate_statistical_error(signal, dt):
         # Number of full windows that fit in the signal
         num_windows = n_total // n_w
         if num_windows < 4: # Need enough windows for a statistical sample
-            continue
+            continue\
             
         # Truncate signal to fit an integer number of windows
         truncated_signal = signal[:num_windows * n_w]
