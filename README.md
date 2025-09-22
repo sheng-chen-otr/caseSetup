@@ -10,7 +10,7 @@ Operating system compatilibies: Ubuntu 22.XX, might work on Windows but untested
 
 ## Solvers
 
-| Solvers  | Turbulence Modeling Method | Turbulence Models |
-| ------------- | ------------- | ------------- |
-| Content Cell  | Content Cell  | ------------- |
-| Content Cell  | Content Cell  | ------------- |
+| Solvers/Utility  | Turbulence Modeling Method | Turbulence Models |
+| -------------    | -------------              | -------------     |
+| SimpleFoam       | RANS                       | KO-SST, SA        |
+| PisoFoam         | DDES                       | KO-SST, SA        |
