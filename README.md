@@ -24,7 +24,17 @@ Some template modificaitons are to be done for your own particular run case. The
 ```bash
 ... PARENT-DIR
     |
-    |---
-
+    |--- 01_INCOMING_DATA
+    |--- 02_REFERENCES
+    |       |
+    |       |--- MSH #this is the location of your trisurfaces
+    |       |--- CAD
+    |
+    |--- CASES
+            |
+            |--- 001
+            |--- 002
+            |--- 003 #these are you cases
+                  |--- caseSetup
 ```
 
