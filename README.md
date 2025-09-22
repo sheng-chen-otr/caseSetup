@@ -14,3 +14,17 @@ Operating system compatilibies: Ubuntu 22.XX, might work on Windows but untested
 | -------------    | -------------              | -------------     |
 | SimpleFoam       | RANS                       | KO-SST, SA        |
 | PisoFoam         | DDES                       | KO-SST, SA        |
+
+
+# Compilation
+This should be compiled using PyInstaller on the same operating system as you intend on running the program. 
+
+# Setting it up
+Some template modificaitons are to be done for your own particular run case. The setup was built to follow a certain folder structure as shown here:
+```
+... PARENT-DIR
+    |
+    |---
+
+```
+
