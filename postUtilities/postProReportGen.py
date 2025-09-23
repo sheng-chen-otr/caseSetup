@@ -50,7 +50,7 @@ def natural_keys(text):
     return [ atoi(c) for c in re.split(r'(\d+)', text) ]
 
 
-objectTypes = ['geom','cP','isoCtp','isoQ','Wss','UMeanNear']
+objectTypes = ['Geom','CpMean','CptMean','isoQ','Wss','UMeanNear']
 objectLists = ['Geom','Cp','IsoCtp','IsoQ','Wss','UMeanNear']
 objectArray = np.empty((10,6),dtype=object)
 objectArray2 = np.empty((10,6),dtype=object)

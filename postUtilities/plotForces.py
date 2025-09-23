@@ -13,50 +13,7 @@ params = {'mathtext.default': 'regular' }
 plt.rcParams.update(params)
 
 
-'''
-	Plots the integral forces and allows for saving it or comparing against other cases
-
-'''
-
-#getting case information
-casePath = os.getcwd() #path of directory this script is being run in
-caseName = casePath.split('/')[-1] #directory name
-
-
-parser = argparse.ArgumentParser(
-                    prog='Force Plotter V1.0',
-                    description='Plots the integral force development in your case',
-                    epilog='Read the documentation for more information on how to use this')
-parser.add_argument('-p','--plotData',default=['Cd','Cl','CoP'],choices = ['Cd','Cl','CoP','Cl(f)','Cl(r)','Cs(f)','Cs(r)'])
-parser.add_argument('-t','--trial',default = [caseName],nargs='+',help='selects the trials to plot, if plotting current ONLY trial do not use this flag')
-parser.add_argument('-s','--savePlots',action='store_true',help='saves all plots')
-parser.add_argument('--skipStats',action='store_true',help='skips calculating statistics')
-parser.add_argument('--yscaling',default = 'default',help = 'sets the y scaling factor for the plots',
-					choices = ['default','matDefault']) 
-parser.add_argument('--saveFormat',default = 'png',help = 'sets the format for the saved plots, by default [png]',
-					choices = ['png','eps','jpeg']) 
-parser.add_argument('--avgTime',help = 'manually set averaging start time',type=float) 
-parser.add_argument('--nchunks',default = 10,help = 'manually set chunk amount start time',type=int) 
-
-
-
-args = parser.parse_args()
-
-nchunks = args.nchunks
-
-def main():
-	global caseLoc
-	
-
-	casePathDict, caseLoc = setCasePaths(args.trial)
-
-	casePathDict = getCaseData(casePathDict)
-	casePathDict = makePandasArrays(casePathDict)
-	plotData(casePathDict)
-
-
-
-def setCasePaths(inputCaseList):
+def setCasePaths(inputCaseList,casePath):
 	casePathDict = {}
 	if casePath.split('/')[-2].lower() == 'cases':
 		print('\tExecuting in trial directory...')
@@ -116,7 +73,7 @@ def getCaseData(casePathDict):
 	return casePathDict
 
 			
-def makePandasArrays(casePathDict):
+def makePandasArrays(args,casePathDict):
 
 	print('\n\tConsolidating data in each case...')
 
@@ -173,8 +130,6 @@ def makePandasArrays(casePathDict):
 					avgData[var+'LowerCI'] = ciLowerArray
 					avgData[var+'StatTime'] = statTime
 
-
-						
 				else:
 					print('In-sufficient time to calculate statistics!')
 			
@@ -183,7 +138,7 @@ def makePandasArrays(casePathDict):
 	return casePathDict
 		
 
-def plotData(casePathDict):
+def plotData(args,caseLoc,casePathDict):
 	labelDict = {'Cl':{'label':'$C_L$','title':'$C_L$'},
 				 'Cd':{'label':'$C_D$','title':'$C_D$'},
 				 'Cl(f)':{'label':'$C_{L,f}$','title':'$C_{L,f}$'},
@@ -314,8 +269,3 @@ def getRef(casePath):
 
 
 
-
-
-
-
-main()

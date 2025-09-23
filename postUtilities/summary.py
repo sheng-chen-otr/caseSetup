@@ -12,22 +12,22 @@ import configparser
 from estimateStatisticalError import *
 
 print("#### CASE SUMMARY ####")
-parser = argparse.ArgumentParser(prog='CASE SUMMARY',description='Summarizes the case into one csv file.')
+# parser = argparse.ArgumentParser(prog='CASE SUMMARY',description='Summarizes the case into one csv file.')
 
-args = parser.parse_args()
+# args = parser.parse_args()
 
-path = os.path.split(os.getcwd())[0]
-case = os.path.split(os.getcwd())[1]
-job = os.path.basename(os.path.dirname(path))
+# path = os.path.split(os.getcwd())[0]
+# case = os.path.split(os.getcwd())[1]
+# job = os.path.basename(os.path.dirname(path))
 
-if not os.getcwd().split('/')[-2].lower() == 'cases':
-    sys.exit('ERROR! Not executed in a trial directory!')
-print('Reading caseSetup file...')
-caseSetupPath="%s/%s/caseSetup" % (path,case)
-fullCaseSetupDict = configparser.ConfigParser()
-fullCaseSetupDict.optionxform = str
-fullCaseSetupDict.read_file(open(caseSetupPath))
-configSections = fullCaseSetupDict.sections()
+# if not os.getcwd().split('/')[-2].lower() == 'cases':
+#     sys.exit('ERROR! Not executed in a trial directory!')
+# print('Reading caseSetup file...')
+# caseSetupPath="%s/%s/caseSetup" % (path,case)
+# fullCaseSetupDict = configparser.ConfigParser()
+# fullCaseSetupDict.optionxform = str
+# fullCaseSetupDict.read_file(open(caseSetupPath))
+# configSections = fullCaseSetupDict.sections()
 
 def main():
     
@@ -144,7 +144,7 @@ def getGeomArray(geometry):
 def magnitude(vector):
     return math.sqrt(sum(pow(element, 2) for element in vector))
     
-def bcParser(path,case):
+def bcParser(fullCaseSetupDict,path,case):
     print("Getting boundary conditions...")
     with open('%s/%s/system/controlDict' % (path,case)) as controlDict:
         lines = controlDict.readlines()
@@ -185,10 +185,10 @@ def bcParser(path,case):
     
     return inletMag,lastTime,yaw,movingGround,wheelRotation,simType,turbModel
 
-def getCoeffPaths():
+def getCoeffPaths(path,case):
     print("Getting force coefficients...")
     #check if postProcessing dir exists
-    postProPath = "%s/%s/postProcessing" % (path,case)
+    postProPath = "%s/postProcessing" % (path)
     coeffFiles = {}
     excludeParts = ['allExports','binForceCoeffs','yPlusMean','wallShearStress','images','.DS_Store']
     if os.path.isdir(postProPath):
@@ -214,7 +214,7 @@ def getCoeffPaths():
                     continue 
 
     return coeffFiles
-def averageCoeffs(case,part,coeffFiles):
+def averageCoeffs(fullCaseSetupDict,case,part,coeffFiles):
     print("\tAveraging force coefficients for %s..." % (part))
     simType = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0]
     avgStart = float(fullCaseSetupDict['GLOBAL_CONTROL']['AVGSTART'][0])
@@ -228,12 +228,7 @@ def averageCoeffs(case,part,coeffFiles):
         coeffs = pd.concat([coeffs,timeCoeffs],ignore_index=True,axis=0)
     endTime = coeffs['time'].iloc[-1]
     avgStartRows = coeffs[coeffs['time'] >= avgStart]
-    # avgRow = avgStartRows.mean(axis=0)
-    # confInt = avgStartRows.apply(lambda x: st.t.interval(0.95, len(x)-1, loc=np.mean(x), scale=st.sem(x)), axis=0)
-    # confInt = confInt.diff().iloc[1,:]
     dt = coeffs['time'].iloc[-1] - coeffs['time'].iloc[-2]
-
-    #averagedData = pd.DataFrame(columns=['endTime','cd','cl','clf','clr','csf','csr','cd_ci','cl_ci','cop','cl_cd'])
     averagedData = {}
     for var in variables:
         data = avgStartRows[var]
@@ -246,52 +241,22 @@ def averageCoeffs(case,part,coeffFiles):
         averagedData[var+'_ci'] = round(np.abs(results['mean_95_confidence_interval'][1] - results['mean_95_confidence_interval'][0])/2,4)
 
     
-    # if 'half' in case or fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
-    #     cd = round(avgRow['cd'] * 2,4)
-    #     cd_ci = round(confInt['cd'] * 2,4)
-    #     cl = round(avgRow['cl'] * 2,4)
-    #     cl_ci = round(confInt['cl'] * 2,4)
-    #     clf = round(avgRow['clf'] * 2,4)
-    #     clr = round(avgRow['clr'] * 2,4)
-    #     csf = round(avgRow['csf'] * 2,4)
-    #     csr = round(avgRow['csr'] * 2,4)
+
     cop = round(((averagedData['clf'])/(averagedData['cl'])) * 100,2)
-    # else:
-    #     cd = round(avgRow['cd'],4)
-    #     cd_ci = round(confInt['cd'],4)
-    #     cl = round(avgRow['cl'],4)
-    #     cl_ci = round(confInt['cl'],4)
-    #     clf = round(avgRow['clf'],4)
-    #     clr = round(avgRow['clr'],4)
-    #     csf = round(avgRow['csf'],4)
-    #     csr = round(avgRow['csr'],4)
-        # cop = round(((averagedData['clf'])/(averagedData['cl'])) * 100,2)
     clcd = round(averagedData['cl']/averagedData['cd'],3)
-    
-        
-    #averagedData = pd.DataFrame(columns=['endTime','cd','cl','clf','clr','csf','csr','cd_ci','cl_ci','cop','cl/cd'])
     averagedData['endTime'] = endTime
-    
-    # averagedData['cd'] = [cd]
-    # averagedData['cl'] = [cl]
-    # averagedData['clf'] = [clf]
-    # averagedData['clr'] = [clr]
     averagedData['cop'] = cop
     averagedData['cl/cd'] = clcd
-    # averagedData['cd_ci'] = [cd_ci]
-    # averagedData['cl_ci'] = [cl_ci]
-    # averagedData['csf'] = [csf]
-    # averagedData['csr'] = [csr]
     avgs = [averagedData['cd'],averagedData['cl'],averagedData['clf'],averagedData['clr'],averagedData['csf'],averagedData['csr'],averagedData['cd_ci'],averagedData['cl_ci']]
     np.savetxt("trial%s_AVG_%s_coeff.csv" % (case, part), avgs, delimiter=",",header="Time,CD,CL,CLF,CLR,CSF,CSR,CI-CD,CI-CL")
     return averagedData
         
 
-def cellCount():
+def cellCount(fullCaseSetupDict,path,case):
     print("Getting cell counts...")
-    checkmesh = "%s/%s/log.checkMesh" % (path,case)
-    logfidelity = "%s/%s/log.fidelityMesh" % (path,case)
-    logsnappy = "%s/%s/log.snappyHexMesh" % (path,case)
+    checkmesh = "%s/log.checkMesh" % (path)
+    logfidelity = "%s/log.fidelityMesh" % (path)
+    logsnappy = "%s/log.snappyHexMesh" % (path)
     if os.path.isfile(logfidelity):
         mesher = "Fidelity Hexpress"
     elif os.path.isfile(logsnappy):
@@ -312,10 +277,10 @@ def cellCount():
     else:
         numCells = "N/A"
     return numCells, mesher, sym
-def getOfVersion():
+def getOfVersion(path):
     print("Getting OF version...")
-    logsimplefoam = "%s/%s/log.simpleFoam" % (path,case)
-    logpisofoam = "%s/%s/log.pisoFoam" % (path,case)
+    logsimplefoam = "%s/log.simpleFoam" % (path)
+    logpisofoam = "%s/log.pisoFoam" % (path)
     if os.path.isfile(logpisofoam):
         logpath = logpisofoam
         solver = "pisoFoam"
@@ -385,4 +350,4 @@ def getPorousData():
 
 
 
-main()
+# main()
