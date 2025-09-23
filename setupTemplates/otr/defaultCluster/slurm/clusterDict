@@ -58,7 +58,7 @@
 
 
 
- "post":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=8\n#SBATCH --nodelist=cfd08\n#SBATCH --partition=solve2\n#SBATCH --output=04_%x_postPro_%j.out\n#SBATCH --job-name=TS_PP035_half",
+ "post":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=4\n#SBATCH --nodelist=headNode\n#SBATCH --partition=solve2\n#SBATCH --output=04_%x_postPro_%j.out\n#SBATCH --job-name=TS_PP035_half",
          
          "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/_internal/postUtilities/pvPost.py >> log.pvpost",
 
