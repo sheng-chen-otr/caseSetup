@@ -339,12 +339,12 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
         normalsList = sliceDict['NORMALS'].split()
 
     if sliceDict['NSLICES'].lower() =='default':
-        nSliceList = [50,20,20]
+        nSliceList = [50,20,20,20,20]
 
         if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
-            nSliceList = [50,20,20]
+            nSliceList = [50,20,20,20,20]
         else:
-            nSliceList = [50,40,20]
+            nSliceList = [50,40,40,40,20]
     else:
         nSliceList = sliceDict['NSLICES'].split()
 
@@ -354,9 +354,9 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
         frontAxleYLoc = float(FREF[1])
         frontAxleZLoc = float(FREF[2])
         if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
-            sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
+            sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),''[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
         else:
-            sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
+            sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
     else:
         sliceRangeList = sliceDict['SLICE_RANGE'].split()
 
