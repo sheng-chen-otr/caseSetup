@@ -262,9 +262,10 @@ def plotData(args,caseLoc,casePathDict):
             print('')
         else:
             try:
-                float(args.yscaling)
-                ax.set_ylim(min(caseMeans)-(np.mean(caseMeans)*args.yscaling),max(caseMeans)+(np.mean(caseMeans)*args.yscaling))
-            except:
+                yscaling = float(args.yscaling)
+                ax.set_ylim(min(caseMeans)-(np.mean(caseMeans)*yscaling),max(caseMeans)+(np.mean(caseMeans)*yscaling))
+            except Exception as error:
+                print(error)
                 print('WARNING! Y-axis scaling factor incorrect, maybe not a float or int? using default scaling!')
                 ax.set_ylim(min(caseMeans)-(np.mean(caseMeans)*0.1),max(caseMeans)+(np.mean(caseMeans)*0.1))
         

@@ -49,7 +49,6 @@ def main():
     parser.add_argument('--skipStats', action='store_true',
                        help='Skip calculating statistics')
     parser.add_argument('--yscaling', default='default',
-                       type=float,
                        help='Y-axis scaling for plots')
     parser.add_argument('--saveFormat', default='png',
                        choices=['png', 'eps', 'jpeg'],
