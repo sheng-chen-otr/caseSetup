@@ -1,0 +1,22 @@
+[WAKE_0]
+TYPE = box
+MIN = -3 -1.5 -4
+MAX = 16 1.5 2.8
+REF_LEVEL = 6
+
+[WAKE_1]
+TYPE = box
+MIN = -7 -2 -4
+MAX = 27 2 2.8
+REF_LEVEL = 5
+
+[WAKE_2]
+TYPE = box
+MIN = -17 -4 -4
+MAX = 200 4 4
+REF_LEVEL = 4
+
+
+
+
+

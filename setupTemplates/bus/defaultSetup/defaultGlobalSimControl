@@ -1,0 +1,12 @@
+[GLOBAL_SIM_CONTROL]
+SIM_TYPE = steady
+SIM_INIT = potential
+SIM_SYM = half
+TURB_MODEL = kosst
+INIT_P = default
+INIT_K = default
+INIT_OMEGA = default
+INIT_NUT = default
+INIT_NUTILDA = default
+
+

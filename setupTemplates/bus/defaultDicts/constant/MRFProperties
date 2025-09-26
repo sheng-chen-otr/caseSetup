@@ -1,0 +1,64 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2112                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      MRFProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+/*toint-rrf-fr-lhs
+{
+	cellZone    fluid-rrf-fr-lhs;
+	active      yes;
+	
+	origin    (0 -0.619125 0.22987);
+	axis      (0 1 0);
+	omega     constant 65.25;
+	nonRotatingPatches ();
+}*/
+
+
+/*toint-rrf-fr-rhs
+{
+	cellZone    fluid-rrf-fr-rhs;
+	active      yes;
+	
+	origin    (0 0.619125 0.22987);
+	axis      (0 1 0);
+	omega     constant 65.25;
+	nonRotatingPatches ();
+}*/
+
+/*toint-rrf-rr-lhs
+{
+	cellZone    fluid-rrf-rr-lhs;
+	active      yes;
+	
+	origin    (1.651 -0.619125 0.22987);
+	axis      (0 1 0);
+	omega     constant 65.25;
+	nonRotatingPatches ();
+}*/
+
+/*toint-rrf-rr-rhs
+{
+	cellZone    fluid-rrf-rr-rhs;
+	active      yes;
+	
+	origin    (1.651 0.619125 0.22987);
+	axis      (0 1 0);
+	omega     constant 65.25;
+	nonRotatingPatches ();
+}*/
+
+
+// ************************************************************************* //

@@ -1,0 +1,49 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  8
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+application     pisoFoam;
+startFrom       latestTime;
+startTime       0;
+stopAt          writeNow;
+endTime         1000;
+deltaT          1;
+writeControl    runTime;
+writeInterval   1;
+purgeWrite      0;
+writeFormat     binary;
+writePrecision  6;
+writeCompression off;
+timeFormat      general;
+timePrecision   6;
+runTimeModifiable yes;
+
+functions
+{
+	#include "averageFieldsDict" //must be ordered before any functions that use it!
+	#include "forceCoeffsExport"
+	//#include "cpMeanDict"
+	#include "cptMeanDict"
+	#include "nearWallFieldsDict"
+	#include "wallShearStressDict"
+	#include "vorticityDict"
+	#include "QCriterionDict"
+	#include "yPlusDict"
+	#include "surfaceFieldAverage"
+	#include "surfaces"
+}   
+
+
+// ************************************************************************* //
