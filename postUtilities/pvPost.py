@@ -354,7 +354,7 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
         frontAxleYLoc = float(FREF[1])
         frontAxleZLoc = float(FREF[2])
         if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
-            sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),''[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
+            sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
         else:
             sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
     else:
@@ -581,12 +581,22 @@ def generateIsoSurfaces(surfaceSource,renderView,views,varDict,viewsDict):
         try:
             Delete(colorBar)
         except:
-            print('')
+            print('WARNING! Unable to delete <colorBar>!')
         
         try:
             Delete(calculator)
         except:
-            print('')
+            print('WARNING! Unable to delete <calculator>!')
+
+        try:
+            Delete(isoSourceDisplay)
+        except:
+            print('WARNING! Unable to delete <isoSourceDisplay>!')
+
+        try:
+            Delete(isoSource)
+        except:
+            print('WARNING! Unable to delete <isoSource>!')
     Hide(surfaceSourceDisplay,renderView)
     Delete(surfaceSourceDisplay)
 
