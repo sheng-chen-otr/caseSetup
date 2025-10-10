@@ -1,5 +1,6 @@
 [PV_POST_MAIN]
 CASE_NAME = default
+LOGO_PATH = default
 CAMERA_VIEWS = default
 VARIABLE_DICT = default
 WHEEL_BASE = default
