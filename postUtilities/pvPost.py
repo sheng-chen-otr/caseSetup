@@ -26,6 +26,7 @@ caseName = casePath.split('/')[-1] #directory name
 #templateLoc = '/home/openfoam/openFoam/scripts/caseSetup/caseSetup/postUtilities'
 templateLoc = (os.path.dirname(os.path.realpath(__file__)))
 
+
 ASPECT_RATIO = 16/9
 YRES = 3000
 XRES = ASPECT_RATIO * YRES
@@ -38,7 +39,7 @@ PRE_DEF_VAR_LIST = ['UnwMean','pMean']
 #main function
 def main():
     #global renderView, caseName, availableCellArrays
-    global UREF,LREF,CREF,FREF,WREF,fullCaseSetupDict,renderView
+    global UREF,LREF,CREF,FREF,WREF,fullCaseSetupDict,renderView,pvPostSetupDict,RESOLUTION
     
 
     print('''\n\t####\t\tEZ-CFD PARAVIEW POST-PROCESSING V1.0\t\t ####\n\n''')
@@ -153,12 +154,15 @@ def main():
     else:
         internalVolume = internalVol
 
-    #internalVolume.UpdatePipeline()
+    internalVolume.UpdatePipeline()
     if pvPostSetupDict['PV_POST_MAIN']['SURFACE_IMG'].lower() == 'true':
         generateSurfaceContours(geomSurface,renderView,pvPostSetupDict['SURFACE']['VARIABLES'],pvPostSetupDict['SURFACE']['VIEWS'],varDict,viewsDict)
 
     if pvPostSetupDict['PV_POST_MAIN']['SLICE_IMG'].lower() == 'true':
         generateSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],varDict,viewsDict)
+    
+    if pvPostSetupDict['PV_POST_MAIN']['SLICE_LIC_IMG'].lower() == 'true':
+        generateLICSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],varDict,viewsDict)
     
     if pvPostSetupDict['PV_POST_MAIN']['ISO_SURFACE_IMG'].lower() == 'true':
         generateIsoSurfaces(geomSurface,renderView,pvPostSetupDict['ISO_SURFACE']['VIEWS'],varDict,viewsDict)
@@ -215,6 +219,8 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
         Generates surface contour plots, the variables are given in a csv file.
 
     '''
+    renderView.ViewSize                  = RESOLUTION # default
+
     beginSurface = time.time()
     print('\tGenerating surface contour plots...')
     if surfaceVars == 'default':
@@ -318,7 +324,7 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
     print('\tSurface Contour Generation Time (s): ' + str(round(time.time()-beginSurface,3)) + '\n\n')
 
 def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
-    
+    renderView.ViewSize                  = RESOLUTION # default
 
     print('\tGenerating slices...')
 
@@ -327,6 +333,11 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
         sliceVars = ['CpMean','CptMean','UMean','CpPrime2Mean','UMeanX','UMeanY','UMeanZ','vorticityMean','vorticityMeanX','vorticityMeanY','vorticityMeanZ']
     else:
         sliceVars = sliceDict['VARIABLES'].split()
+
+    if sliceDict['LIC_VARIABLES'].lower() == 'default':
+        sliceLICVars = ['CptMean','UMean','UMeanX','UMeanY','UMeanZ']
+    else:
+        sliceLICVars = sliceDict['LIC_VARIABLES'].split()
 
     if sliceDict['VIEWS'].lower() == 'default':
         sliceViews = ['Front','Left','LeftForward','LeftBack','Top']
@@ -354,7 +365,7 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
         frontAxleYLoc = float(FREF[1])
         frontAxleZLoc = float(FREF[2])
         if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
-            sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
+            sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
         else:
             sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
     else:
@@ -472,6 +483,174 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
 
             n = n + 1
 
+def generateLICSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
+    #renderView.ViewSize = list(np.round(np.array(RESOLUTION)/2,0)) # default
+    LIC_RESOLUTION = np.round(np.array(RESOLUTION)/2,0)
+   
+    renderView.ViewSize                  = [int(LIC_RESOLUTION[0]),int(LIC_RESOLUTION[1])] # default
+
+
+    print('\tGenerating LIC slices...')
+
+    #set defaults
+    if sliceDict['VARIABLES'].lower() == 'default':
+        sliceVars = ['CpMean','CptMean','UMean','CpPrime2Mean','UMeanX','UMeanY','UMeanZ','vorticityMean','vorticityMeanX','vorticityMeanY','vorticityMeanZ']
+    else:
+        sliceVars = sliceDict['VARIABLES'].split()
+
+    if sliceDict['LIC_VARIABLES'].lower() == 'default':
+        sliceLICVars = ['CptMean','UMean']
+    else:
+        sliceLICVars = sliceDict['LIC_VARIABLES'].split()
+
+    if sliceDict['VIEWS'].lower() == 'default':
+        sliceViews = ['Front','Left','LeftForward','LeftBack','Top']
+    else:
+        sliceViews = sliceDict['VIEWS'].split()
+
+    if sliceDict['NORMALS'].lower() =='default':
+        normalsList = ['X','Y','Y','Y','Z']
+    else:
+        normalsList = sliceDict['NORMALS'].split()
+
+    if sliceDict['NSLICES'].lower() =='default':
+        nSliceList = [50,20,20,20,20]
+
+        if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
+            nSliceList = [50,20,20,20,20]
+        else:
+            nSliceList = [50,40,40,40,20]
+    else:
+        nSliceList = sliceDict['NSLICES'].split()
+
+
+    if sliceDict['SLICE_RANGE'].lower() =='default':
+        frontAxleXLoc = float(FREF[0])
+        frontAxleYLoc = float(FREF[1])
+        frontAxleZLoc = float(FREF[2])
+        if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
+            sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc),'[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
+        else:
+            sliceRangeList = ['[%1.4f,%1.4f]' % (frontAxleXLoc + (-LREF*0.5),frontAxleXLoc+LREF*2),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleYLoc+(-WREF*0.75),frontAxleYLoc+(WREF*0.75)),'[%1.4f,%1.4f]' % (frontAxleZLoc,frontAxleZLoc + WREF*1)]
+    else:
+        sliceRangeList = sliceDict['SLICE_RANGE'].split()
+
+
+    print('\t\tRequested surface variables: %s' % (sliceVars))
+    availableVars = list(varDict['sliceVariables'].keys())
+
+    #check if inputs are of the same length
+    if not len(normalsList) == len(nSliceList) == len(sliceRangeList) == len(sliceViews):
+        sys.exit('ERROR! The inputs in pvPostSetup is not correct for [SLICE] -> number of inputs are not equal!')
+
+    #start slice loop
+    begin_slice = time.time()
+    for normal, nslices, sliceRange,sliceView in zip(normalsList,nSliceList,sliceRangeList,sliceViews):
+        sliceRange = np.array(sliceRange.replace('[','').replace(']','').split(',')).astype('float')
+        sliceArray = np.round(np.linspace(sliceRange[0],sliceRange[1],int(nslices)),3)
+
+        n = 0 # start counter
+        for coord in sliceArray:
+            slice1           = Slice(Input=volumeSource, SliceType="Plane" )
+            slice1.SliceOffsetValues = 0
+            if normal == 'X':
+                slice1.SliceType.Normal  = [1,0,0]
+                slice1.SliceType.Origin  = [coord,0,0]
+            elif normal == 'Y':
+                slice1.SliceType.Normal  = [0,1,0]
+                slice1.SliceType.Origin  = [0,coord,0]
+            elif normal == 'Z':
+                slice1.SliceType.Normal  = [0,0,1]
+                slice1.SliceType.Origin  = [0,0,coord]
+            
+            slice1.SliceType         = "Plane"
+            slice1.Triangulatetheslice = 0
+            #start looping through variables
+            for variable in sliceLICVars:
+                #if vorticity in internal volume do not mirror vectors
+
+                #check if variables are available
+                if not variable in availableVars:
+                    print('\n\t\t%s not available, skipping...\n' % (variable))
+                    continue
+
+                #calculating variable using variable equation
+                calculator = Calculator(registrationName='calculator', Input=slice1)
+                calculator.Function = str(varDict['sliceVariables'][variable]['equation'])
+                calculator.ResultArrayName = variable
+                
+                sliceSourceDisplay = Show(calculator,renderView,'UnstructuredGridRepresentation')
+                sliceSourceDisplay.Representation = 'Surface LIC'
+                sliceSourceDisplay.SelectInputVectors = ['POINTS', 'UMean']
+                sliceSourceDisplay.ColorMode = 'Multiply'
+                sliceSourceDisplay.EnhanceContrast = 'LIC and Color'
+                
+                
+                
+                ColorBy(sliceSourceDisplay,('POINTS',variable))
+                LUT = GetColorTransferFunction(variable)
+                PWF  = GetOpacityTransferFunction(variable)
+                title = varDict['sliceVariables'][variable]['label']
+                varRange = np.array(varDict['sliceVariables'][variable]['range'])
+                tableValues = 15
+                color = varDict['sliceVariables'][variable]['color']
+
+                LUT.NumberOfTableValues = tableValues #default
+                LUT.RescaleTransferFunction(varRange[0],varRange[1])
+                PWF.RescaleTransferFunction(varRange[0],varRange[1])
+                LUT.ApplyPreset(color,True)
+                PWF.ApplyPreset(color,True)
+                renderView.Update()
+
+
+                colorBar = GetScalarBar(LUT,renderView)
+                colorBar.Title = title
+                colorBar.TitleFontFamily = 'Times'
+                colorBar.LabelFontFamily = 'Times'
+                colorBar.ComponentTitle = ''
+                colorBar.Orientation = 'Horizontal'
+                colorBar.WindowLocation = 'Lower Center'
+                if  'Cf' in variable:
+                    colorBar.LabelFormat = '%-1.3g'
+                    colorBar.RangeLabelFormat = '%-1.3g'
+                    colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],3)         
+                else:
+                    colorBar.LabelFormat = '%-1.1f'
+                    colorBar.RangeLabelFormat = '%-1.1f'
+                    colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)         
+                colorBar.ScalarBarLength = 0.3
+                colorBar.ScalarBarThickness = 80
+                colorBar.TitleFontSize = 80
+                colorBar.LabelFontSize = 80
+                colorBar.TitleColor = [0,0,0]
+                colorBar.LabelColor = [0,0,0]
+                colorBar.AddRangeLabels = 1
+                colorBar.AutomaticLabelFormat = 0
+                colorBar.DrawAnnotations = 0
+                colorBar.DrawTickLabels = 1
+                colorBar.UseCustomLabels = 1
+                colorBar.BackgroundColor = [1,1,1,1]
+                colorBar.BackgroundPadding = 10  
+                       
+                            
+
+                HideUnusedScalarBars()  
+                
+                renderView = setView(renderView,viewsDict[sliceView])
+                saveImages(renderView,caseName,variable,'sliceLIC',sliceView,normal=normal,position=coord,counter=n)
+              
+                
+                try:
+                    Delete(colorBar)
+                except:
+                    print('')
+                Hide(sliceSourceDisplay,renderView)
+                Delete(sliceSourceDisplay)
+                Delete(calculator)
+
+            n = n + 1
+    #renderView.ViewSize = RESOLUTION # default
+
 
     
 def generateIsoSurfaces(surfaceSource,renderView,views,varDict,viewsDict):
@@ -479,6 +658,8 @@ def generateIsoSurfaces(surfaceSource,renderView,views,varDict,viewsDict):
         Generates surface contour plots, the variables are given in a csv file.
 
     '''
+    renderView.ViewSize                  = RESOLUTION # default
+
     beginSurface = time.time()
     print('\tGenerating iso surfaces...')
     availableVars = list(varDict['surfaceVariables'].keys())
@@ -513,6 +694,11 @@ def generateIsoSurfaces(surfaceSource,renderView,views,varDict,viewsDict):
             isoVarName = 'Cpt'
         print('\t\t\tProcessing iso-surface file: %s' % (isoFileName))
         isoSource = XMLPolyDataReader(FileName=isoFile)
+        if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
+            print('\t\t\tFound case as half, reflecting iso-surfaces...')
+            isoSource = Reflect(Input = isoSource)
+            isoSource.Plane = 'Y'
+            isoSource.Center = CREF[1]
         isoSource.UpdatePipeline()
 
         if isoFileName == 'isoQ.vtp':
@@ -522,52 +708,110 @@ def generateIsoSurfaces(surfaceSource,renderView,views,varDict,viewsDict):
             #isoSourceDisplay.ColorArrayName = ['POINTS',colorby]
             ColorBy(isoSourceDisplay,('POINTS',colorby))
             isoSourceDisplay.DiffuseColor = [1,1,0]
-        elif isoFileName == 'isoCtp.vtp':
-            variable = 'UMean'
-            #calculating variable using variable equation
-            calculator = Calculator(registrationName='calculator', Input=isoSource)
-            calculator.Function = str(varDict['isoVariables'][variable]['equation'])
-            calculator.ResultArrayName = variable
-            isoSourceDisplay = Show(calculator,renderView,'UnstructuredGridRepresentation')
-            isoSourceDisplay.Representation = 'Surface'
-            isoSourceDisplay.ColorArrayName = ['POINTS',variable]
-            renderView.Update()
-            LUT = GetColorTransferFunction(variable)
-            PWF  = GetOpacityTransferFunction(variable)
-            title = varDict['surfaceVariables'][variable]['label']
-            varRange = np.array(varDict['surfaceVariables'][variable]['range'])
-            tableValues = 15
-            color = varDict['surfaceVariables'][variable]['color']
-            LUT.NumberOfTableValues = tableValues
-            LUT.RescaleTransferFunction(varRange[0],varRange[1])
-            PWF.RescaleTransferFunction(varRange[0],varRange[1])
-            LUT.ApplyPreset(color,True)
-            PWF.ApplyPreset(color,True)
+
+            # variable = 'vorticityMean'
+            # #calculating variable using variable equation
+            # calculator = Calculator(registrationName='calculator', Input=isoSource)
+            # calculator.Function = str(varDict['sliceVariables'][variable]['equation'])
+            # calculator.ResultArrayName = variable
+            # isoSourceDisplay = Show(calculator,renderView,'UnstructuredGridRepresentation')
+            # isoSourceDisplay.Representation = 'Surface'
+            # isoSourceDisplay.ColorArrayName = ['POINTS',variable]
+            # renderView.Update()
+            # LUT = GetColorTransferFunction(variable)
+            # PWF  = GetOpacityTransferFunction(variable)
+            # title = varDict['sliceVariables'][variable]['label']
+            # varRange = np.array(varDict['sliceVariables'][variable]['range'])
+            # tableValues = 15
+            # color = varDict['sliceVariables'][variable]['color']
+            # LUT.NumberOfTableValues = tableValues
+            # LUT.RescaleTransferFunction(varRange[0],varRange[1])
+            # PWF.RescaleTransferFunction(varRange[0],varRange[1])
+            # LUT.ApplyPreset(color,True)
+            # PWF.ApplyPreset(color,True)
             
-            ColorBy(isoSourceDisplay,('POINTS',variable))
-            colorBar = GetScalarBar(LUT,renderView)
-            colorBar.Title = title
-            colorBar.TitleFontFamily = 'Times'
-            colorBar.LabelFontFamily = 'Times'
-            colorBar.ComponentTitle = ''
-            colorBar.Orientation = 'Horizontal'
-            colorBar.WindowLocation = 'Lower Center'
-            colorBar.LabelFormat = '%-1.1f'
-            colorBar.RangeLabelFormat = '%-1.1f'
-            colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)
-            colorBar.ScalarBarLength = 0.3
-            colorBar.ScalarBarThickness = 160
-            colorBar.TitleFontSize = 160
-            colorBar.LabelFontSize = 160
-            colorBar.TitleColor = [0,0,0]
-            colorBar.LabelColor = [0,0,0]
-            colorBar.AddRangeLabels = 1
-            colorBar.AutomaticLabelFormat = 0
-            colorBar.DrawAnnotations = 0
-            colorBar.DrawTickLabels = 1
-            colorBar.UseCustomLabels = 1
-            colorBar.BackgroundColor = [1,1,1,1]
-            colorBar.BackgroundPadding = 10
+            # ColorBy(isoSourceDisplay,('POINTS',variable))
+            # colorBar = GetScalarBar(LUT,renderView)
+            # colorBar.Title = title
+            # colorBar.TitleFontFamily = 'Times'
+            # colorBar.LabelFontFamily = 'Times'
+            # colorBar.ComponentTitle = ''
+            # colorBar.Orientation = 'Horizontal'
+            # colorBar.WindowLocation = 'Lower Center'
+            # colorBar.LabelFormat = '%-1.1f'
+            # colorBar.RangeLabelFormat = '%-1.1f'
+            # colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)
+            # colorBar.ScalarBarLength = 0.3
+            # colorBar.ScalarBarThickness = 160
+            # colorBar.TitleFontSize = 160
+            # colorBar.LabelFontSize = 160
+            # colorBar.TitleColor = [0,0,0]
+            # colorBar.LabelColor = [0,0,0]
+            # colorBar.AddRangeLabels = 1
+            # colorBar.AutomaticLabelFormat = 0
+            # colorBar.DrawAnnotations = 0
+            # colorBar.DrawTickLabels = 1
+            # colorBar.UseCustomLabels = 1
+            # colorBar.BackgroundColor = [1,1,1,1]
+            # colorBar.BackgroundPadding = 10
+
+        
+        
+        
+        elif isoFileName == 'isoCtp.vtp':
+            colorby = 'Solid Color'
+            isoSourceDisplay = Show(isoSource,renderView,'UnstructuredGridRepresentation')
+            isoSourceDisplay.Representation = 'Surface'
+            #isoSourceDisplay.ColorArrayName = ['POINTS',colorby]
+            ColorBy(isoSourceDisplay,('POINTS',colorby))
+            isoSourceDisplay.DiffuseColor = [1,0,0]
+            
+            
+            # variable = 'UMean'
+            # #calculating variable using variable equation
+            # calculator = Calculator(registrationName='calculator', Input=isoSource)
+            # calculator.Function = str(varDict['sliceVariables'][variable]['equation'])
+            # calculator.ResultArrayName = variable
+            # isoSourceDisplay = Show(calculator,renderView,'UnstructuredGridRepresentation')
+            # isoSourceDisplay.Representation = 'Surface'
+            # isoSourceDisplay.ColorArrayName = ['POINTS',variable]
+            # renderView.Update()
+            # LUT = GetColorTransferFunction(variable)
+            # PWF  = GetOpacityTransferFunction(variable)
+            # title = varDict['surfaceVariables'][variable]['label']
+            # varRange = np.array(varDict['surfaceVariables'][variable]['range'])
+            # tableValues = 15
+            # color = varDict['surfaceVariables'][variable]['color']
+            # LUT.NumberOfTableValues = tableValues
+            # LUT.RescaleTransferFunction(varRange[0],varRange[1])
+            # PWF.RescaleTransferFunction(varRange[0],varRange[1])
+            # LUT.ApplyPreset(color,True)
+            # PWF.ApplyPreset(color,True)
+            
+            # ColorBy(isoSourceDisplay,('POINTS',variable))
+            # colorBar = GetScalarBar(LUT,renderView)
+            # colorBar.Title = title
+            # colorBar.TitleFontFamily = 'Times'
+            # colorBar.LabelFontFamily = 'Times'
+            # colorBar.ComponentTitle = ''
+            # colorBar.Orientation = 'Horizontal'
+            # colorBar.WindowLocation = 'Lower Center'
+            # colorBar.LabelFormat = '%-1.1f'
+            # colorBar.RangeLabelFormat = '%-1.1f'
+            # colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)
+            # colorBar.ScalarBarLength = 0.3
+            # colorBar.ScalarBarThickness = 160
+            # colorBar.TitleFontSize = 160
+            # colorBar.LabelFontSize = 160
+            # colorBar.TitleColor = [0,0,0]
+            # colorBar.LabelColor = [0,0,0]
+            # colorBar.AddRangeLabels = 1
+            # colorBar.AutomaticLabelFormat = 0
+            # colorBar.DrawAnnotations = 0
+            # colorBar.DrawTickLabels = 1
+            # colorBar.UseCustomLabels = 1
+            # colorBar.BackgroundColor = [1,1,1,1]
+            # colorBar.BackgroundPadding = 10
             
         
 
@@ -614,8 +858,15 @@ def setView(renderView,view):
     return renderView
 
 def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=None,counter=None):
+
+    if 'LIC' in imageType:
+        LIC_RESOLUTION = np.round(np.array(RESOLUTION)/2,0)
+        renderView.ViewSize                  = [int(LIC_RESOLUTION[0]),int(LIC_RESOLUTION[1])] # default
+    else:
+        renderView.ViewSize                  = RESOLUTION # default
+
     #checking for image type, if not slice then omit last two variables in name
-    if imageType.lower() != 'slice':
+    if not 'slice' in imageType.lower():
         fileName = '%s_%s_%s_%s.png' % (caseName,variable,imageType,view)
         dirName = '%s_%s' % (variable,imageType)
     else:
@@ -642,8 +893,92 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
         print('\t\tDirectory for %s not found, creating...' % (dirName))
         os.system('mkdir postProcessing/images/%s' % (dirName))
 
+    titleText = Text(registrationName="TitleText")
+    if 'slice' in imageType.lower():
+        titleText.Text = '%s - %s - %s - %s = %1.4f' % (caseName,variable,imageType,view,position)
+    else:
+        titleText.Text = '%s - %s - %s - %s' % (caseName,variable,imageType,view)
+    titleTextDisplay = Show(titleText, renderView)
+    if 'LIC' in imageType:
+        titleTextDisplay.FontSize = 100
+    else:
+        titleTextDisplay.FontSize = 200
+    titleTextDisplay.Color = [0,0,0]
+    titleTextDisplay.Position = [0.01,0.95]
+    titleTextDisplay.Bold = 1
+
+    # if imageType.lower() == 'slice':
+    #     sliceText = Text(registrationName="SliceText")
+    #     if normal == 'X':
+    #         sliceText.Text = '%s - %s - %s - %s - X = %1.3f' % (caseName,variable,imageType,view,position)
+    #     elif normal == 'Y':
+    #         sliceText.Text = '%s - %s - %s - %s - Y = %1.3f' % (caseName,variable,imageType,view,position)
+    #     elif normal == 'Z':
+    #         sliceText.Text = '%s - %s - %s - %s - Z = %1.3f' % (caseName,variable,imageType,view,position)
+    #     sliceTextDisplay = Show(sliceText, renderView)
+    #     sliceTextDisplay.FontSize = 100
+    #     sliceTextDisplay.Color = [0,0,0]
+    #     sliceTextDisplay.Position = [0.01,0.05]
+    #     sliceTextDisplay.Bold = 0
+
+    # if pvPostSetupDict['PV_POST_MAIN']['LOGO_PATH'].lower() == 'default':
+    #     print('\t\tUsing default logo path...')
+    #     logoPath = os.path.dirname(os.path.realpath(__file__)) + '/default/otrLogo_greayOnWhite.png'
+    # else:    
+    #     print('\t\tUsing custom logo path...')
+    #     logoPath = pvPostSetupDict['PV_POST_MAIN']['LOGO_PATH']
+    # if os.path.isfile(logoPath):
+    #     '\t\tAdding logo to image from: %s' % (logoPath)
+    #     logo = Logo( registrationName="Logo" )
+    #     logoTexture = CreateTexture( logoPath )
+    #     logo.Texture = logoTexture
+    #     logoDisplay = Show( logo, renderView )
+    #     logoDisplay.Position = [0.85,0.05]
+   
+    
+
+
     print('\t\t\tSaving screenshot: %s' % (fileName))
+    # if 'LIC' in imageType:
+    #     SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,OverrideColorPalette = 'WhiteBackground',resolution=np.round(np.array(RESOLUTION),0))
+    # else:
+    #     SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,OverrideColorPalette = 'WhiteBackground',resolution=np.round(np.array(RESOLUTION),0))
     SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,OverrideColorPalette = 'WhiteBackground')
+
+    Hide(titleText,renderView)
+    if imageType.lower() == 'slice':
+        Hide(sliceText,renderView)
+    # if os.path.isfile(logoPath):
+    #     Hide(logo,renderView)
+    
+     #cleaning up
+     #delete title and slice text
+     #delete logo
+     #try except to avoid errors if not found
+     #mostly for logo if path is wrong
+    try:
+        delete(titleTextDisplay)
+    except:
+        print('')
+    try:
+        delete(sliceTextDisplay)
+    except:
+        print('')
+    
+    try:
+        delete(logo)
+    except:
+        print('')
+    try:
+        delete(titleText)
+    except:
+        print('')
+    try:
+        delete(sliceText)
+    except:
+        print('')  
+    
+    
         
 
 def generateDefaultViews(LREF,CREF,FREF,WREF):
