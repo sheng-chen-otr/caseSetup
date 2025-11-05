@@ -54,7 +54,7 @@ This is an example of the geometry. Each geometry makes up one line. The order i
 'WALL MODEL [OPTIONS: high, low]' refers to high or low Reynolds number model. High Reynolds number would mean the flow velocity is very high and a wall model is used, low Reynolds would not use any wall modell and resolve the boundary layer directly. 
 
 
-'''bash
+```bash
 [GEOMETRY]
 GEOM = FRONT_WING.obj.gz,1,8,5,1.1,high
         REAR_WING.obj.gz,1,8,5,1.1,high
@@ -66,4 +66,4 @@ GEOM = FRONT_WING.obj.gz,1,8,5,1.1,high
 
 
 
-'''
+```
