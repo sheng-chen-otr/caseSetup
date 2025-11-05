@@ -38,3 +38,7 @@ Some template modificaitons are to be done for your own particular run case. The
                   |--- caseSetup
 ```
 
+
+
+# Quick Start
+After compiling to an executable, the templates are located inside '_internal'. The template location
