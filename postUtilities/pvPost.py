@@ -154,18 +154,26 @@ def main():
     else:
         internalVolume = internalVol
 
+    exportTimes = {}
+
     internalVolume.UpdatePipeline()
     if pvPostSetupDict['PV_POST_MAIN']['SURFACE_IMG'].lower() == 'true':
-        generateSurfaceContours(geomSurface,renderView,pvPostSetupDict['SURFACE']['VARIABLES'],pvPostSetupDict['SURFACE']['VIEWS'],varDict,viewsDict)
-
-    if pvPostSetupDict['PV_POST_MAIN']['SLICE_IMG'].lower() == 'true':
-        generateSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],varDict,viewsDict)
-    
-    if pvPostSetupDict['PV_POST_MAIN']['SLICE_LIC_IMG'].lower() == 'true':
-        generateLICSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],varDict,viewsDict)
+        exportTimes['surface'] = generateSurfaceContours(geomSurface,renderView,pvPostSetupDict['SURFACE']['VARIABLES'],pvPostSetupDict['SURFACE']['VIEWS'],varDict,viewsDict)
     
     if pvPostSetupDict['PV_POST_MAIN']['ISO_SURFACE_IMG'].lower() == 'true':
-        generateIsoSurfaces(geomSurface,renderView,pvPostSetupDict['ISO_SURFACE']['VIEWS'],varDict,viewsDict)
+        exportTimes['isoSurface'] = generateIsoSurfaces(geomSurface,renderView,pvPostSetupDict['ISO_SURFACE']['VIEWS'],varDict,viewsDict)
+        
+    if pvPostSetupDict['PV_POST_MAIN']['SLICE_IMG'].lower() == 'true':
+        exportTimes['slice'] = generateSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],varDict,viewsDict)
+    
+    if pvPostSetupDict['PV_POST_MAIN']['SLICE_LIC_IMG'].lower() == 'true':
+        exportTimes['LICSlice'] = generateLICSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],varDict,viewsDict)
+
+    print('\tTotal Export Times (s):')
+    for key in exportTimes.keys():
+        print('\t\t%s: %s' % (key,str(round(exportTimes[key],3))))
+
+    print('\tTotal PV Post-Processing Time (s): ' + str(round(time.time()-begin,3)) + '\n\n')
         
 def getVariableDicts(variablePaths, viewsPath):
     
@@ -235,6 +243,7 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
 
 
     for variable in surfaceVars:
+        beginVarTime = time.time()
         if 'geom' in variable.lower():
             surfaceSourceDisplay = Show(surfaceSource,renderView,'UnstructuredGridRepresentation')
             surfaceSourceDisplay.Representation = 'Surface'
@@ -302,6 +311,8 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
             colorBar.DrawAnnotations = 0
             colorBar.DrawTickLabels = 1
             colorBar.UseCustomLabels = 1
+            endVarTime = time.time()
+            print('\t\t%s contour generated in %s seconds' % (variable,str(round(endVarTime-beginVarTime,3))))
                
                     
 
@@ -321,7 +332,10 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
         except:
             print('')
 
+    surfaceTime = time.time()-beginSurface
+
     print('\tSurface Contour Generation Time (s): ' + str(round(time.time()-beginSurface,3)) + '\n\n')
+    return surfaceTime
 
 def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
     renderView.ViewSize                  = RESOLUTION # default
@@ -482,8 +496,10 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
                 Delete(calculator)
 
             n = n + 1
+    return time.time()-begin_slice
 
 def generateLICSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
+    LIC_START_TIME = time.time()
     #renderView.ViewSize = list(np.round(np.array(RESOLUTION)/2,0)) # default
     LIC_RESOLUTION = np.round(np.array(RESOLUTION)/2,0)
    
@@ -499,7 +515,7 @@ def generateLICSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
         sliceVars = sliceDict['VARIABLES'].split()
 
     if sliceDict['LIC_VARIABLES'].lower() == 'default':
-        sliceLICVars = ['CptMean','UMean']
+        sliceLICVars = ['CptMean']
     else:
         sliceLICVars = sliceDict['LIC_VARIABLES'].split()
 
@@ -650,6 +666,8 @@ def generateLICSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
 
             n = n + 1
     #renderView.ViewSize = RESOLUTION # default
+    print('\tLIC Slice Generation Time (s): ' + str(round(time.time()-LIC_START_TIME,3)) + '\n\n')
+    return time.time()-begin_slice
 
 
     
@@ -845,6 +863,7 @@ def generateIsoSurfaces(surfaceSource,renderView,views,varDict,viewsDict):
     Delete(surfaceSourceDisplay)
 
     print('\tSurface Contour Generation Time (s): ' + str(round(time.time()-beginSurface,3)) + '\n\n')
+    return time.time()-beginSurface
 
 
 
@@ -858,6 +877,7 @@ def setView(renderView,view):
     return renderView
 
 def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=None,counter=None):
+    IMAGE_SAVE_START = time.time()
 
     if 'LIC' in imageType:
         LIC_RESOLUTION = np.round(np.array(RESOLUTION)/2,0)
@@ -896,6 +916,8 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
     titleText = Text(registrationName="TitleText")
     if 'slice' in imageType.lower():
         titleText.Text = '%s - %s - %s - %s = %1.4f' % (caseName,variable,imageType,view,position)
+    elif 'geom' in imageType.lower():
+        titleText.Text = ''
     else:
         titleText.Text = '%s - %s - %s - %s' % (caseName,variable,imageType,view)
     titleTextDisplay = Show(titleText, renderView)
@@ -907,55 +929,11 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
     titleTextDisplay.Position = [0.01,0.95]
     titleTextDisplay.Bold = 1
 
-    # if imageType.lower() == 'slice':
-    #     sliceText = Text(registrationName="SliceText")
-    #     if normal == 'X':
-    #         sliceText.Text = '%s - %s - %s - %s - X = %1.3f' % (caseName,variable,imageType,view,position)
-    #     elif normal == 'Y':
-    #         sliceText.Text = '%s - %s - %s - %s - Y = %1.3f' % (caseName,variable,imageType,view,position)
-    #     elif normal == 'Z':
-    #         sliceText.Text = '%s - %s - %s - %s - Z = %1.3f' % (caseName,variable,imageType,view,position)
-    #     sliceTextDisplay = Show(sliceText, renderView)
-    #     sliceTextDisplay.FontSize = 100
-    #     sliceTextDisplay.Color = [0,0,0]
-    #     sliceTextDisplay.Position = [0.01,0.05]
-    #     sliceTextDisplay.Bold = 0
-
-    # if pvPostSetupDict['PV_POST_MAIN']['LOGO_PATH'].lower() == 'default':
-    #     print('\t\tUsing default logo path...')
-    #     logoPath = os.path.dirname(os.path.realpath(__file__)) + '/default/otrLogo_greayOnWhite.png'
-    # else:    
-    #     print('\t\tUsing custom logo path...')
-    #     logoPath = pvPostSetupDict['PV_POST_MAIN']['LOGO_PATH']
-    # if os.path.isfile(logoPath):
-    #     '\t\tAdding logo to image from: %s' % (logoPath)
-    #     logo = Logo( registrationName="Logo" )
-    #     logoTexture = CreateTexture( logoPath )
-    #     logo.Texture = logoTexture
-    #     logoDisplay = Show( logo, renderView )
-    #     logoDisplay.Position = [0.85,0.05]
-   
-    
-
-
     print('\t\t\tSaving screenshot: %s' % (fileName))
-    # if 'LIC' in imageType:
-    #     SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,OverrideColorPalette = 'WhiteBackground',resolution=np.round(np.array(RESOLUTION),0))
-    # else:
-    #     SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,OverrideColorPalette = 'WhiteBackground',resolution=np.round(np.array(RESOLUTION),0))
     SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,OverrideColorPalette = 'WhiteBackground')
 
     Hide(titleText,renderView)
-    if imageType.lower() == 'slice':
-        Hide(sliceText,renderView)
-    # if os.path.isfile(logoPath):
-    #     Hide(logo,renderView)
-    
-     #cleaning up
-     #delete title and slice text
-     #delete logo
-     #try except to avoid errors if not found
-     #mostly for logo if path is wrong
+
     try:
         delete(titleTextDisplay)
     except:
@@ -977,6 +955,8 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
         delete(sliceText)
     except:
         print('')  
+    
+    print('\t\tImage Save Time (s): ' + str(round(time.time()-IMAGE_SAVE_START,3)) + '\n\n')
     
     
         
@@ -1131,7 +1111,6 @@ def includeBoundaries(boundaries,include_patches):
     for meshRegion in meshRegions:
         print('\t\t' + meshRegion)
 
-
     print('\n')
     return meshRegions
 
@@ -1162,8 +1141,6 @@ def getGeometry(fullCaseSetupDict):
         for col in geomDict[geom].keys():
             val = geomDict[geom][col]
             print('\t\t\t%s: %s' % (col,val))
-    
-
     return geomDict
 
 def get_latest_time_directory(base_path='postProcessing/surfaces'):

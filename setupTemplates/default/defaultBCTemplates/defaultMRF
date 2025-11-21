@@ -1,0 +1,6 @@
+[MRF_SETUP]
+MRF_RAD = default
+MRF_CENTER = default
+MRF_AXIS = default
+MRF_INSIDE_POINT = 0 0 0
+USE_MRF = True

@@ -10,6 +10,7 @@ import pandas as pd
 import scipy.stats as st
 import configparser
 from estimateStatisticalError import *
+from forceConvergencePlot import *
 
 print("#### CASE SUMMARY ####")
 # parser = argparse.ArgumentParser(prog='CASE SUMMARY',description='Summarizes the case into one csv file.')
@@ -235,10 +236,21 @@ def averageCoeffs(fullCaseSetupDict,case,part,coeffFiles):
         results = estimate_statistical_error(data,dt)
         
         if 'half' in case or fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
-            averagedData[var] = round(results['total_mean']*2,3)
+           
+            if var == 'CoP':
+                factor = 1
+            else:
+                #print('\t\tCase is half, doubling mean for %s' % (var))
+                factor = 2
+            averagedData[var] = round(results['total_mean']*factor,3)
+            #print(round(results['total_mean']*factor,3))
+
         else:
             averagedData[var] = round(results['total_mean'],3)
-        averagedData[var+'_ci'] = round(np.abs(results['mean_95_confidence_interval'][1] - results['mean_95_confidence_interval'][0])/2,4)
+
+        ci = calc_confidence_interval(data,i_samp = calc_indept_samples(data))
+        #averagedData[var+'_ci'] = round(np.abs(results['mean_95_confidence_interval'][1] - results['mean_95_confidence_interval'][0])/2,4)
+        averagedData[var+'_ci'] = round(ci,4)
 
     
 
@@ -248,7 +260,11 @@ def averageCoeffs(fullCaseSetupDict,case,part,coeffFiles):
     averagedData['cop'] = cop
     averagedData['cl/cd'] = clcd
     avgs = [averagedData['cd'],averagedData['cl'],averagedData['clf'],averagedData['clr'],averagedData['csf'],averagedData['csr'],averagedData['cd_ci'],averagedData['cl_ci']]
-    np.savetxt("trial%s_AVG_%s_coeff.csv" % (case, part), avgs, delimiter=",",header="Time,CD,CL,CLF,CLR,CSF,CSR,CI-CD,CI-CL")
+    
+    averagedArray = pd.DataFrame(avgs).transpose()
+    averagedArray.columns = "CD,CL,CLF,CLR,CSF,CSR,CI-CD,CI-CL".split(',')
+    averagedArray.to_csv("trial%s_AVG_%s_coeff.csv" % (case, part),sep=',',float_format='%.4f',index=False)
+
     return averagedData
         
 

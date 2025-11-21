@@ -16,7 +16,6 @@ from pathlib import Path
 
 #### WARNING ####
 # not currently working
-
 path = os.path.split(os.getcwd())[0]
 case = os.path.split(os.getcwd())[1]
 job = os.path.basename(os.path.dirname(path))

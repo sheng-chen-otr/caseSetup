@@ -82,10 +82,6 @@ def titleText(path,job,case,logoPath):
 		texFile.write('\n'.join(texTitle))
 
 
-
-
-
-
 def getImage(path,case,objectType):
 	List = []
 	postProImages = [".".join(f.split(".")[:-1]) for f in os.listdir("%s/%s/postProcessing/images/" % (path,case))]
@@ -97,12 +93,7 @@ def getImage(path,case,objectType):
 	listSorted = sorted(List)
 	listSorted = np.array(listSorted)
 
-
-
-
 	return listSorted
-
-#titleText(path,job,case,logoPath)
 
 n = 0
 for obj in objectTypes:
@@ -115,7 +106,6 @@ for obj in objectTypes:
 		objectArray2[:,n] = imList2
 
 	n = n + 1
-
 
 objectItemLen = len(objectArray[0,:])
 
