@@ -15,6 +15,9 @@ FoamFile
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
+
+<MRF-OPTIONS>
+
 /*toint-rrf-fr-lhs
 {
 	cellZone    fluid-rrf-fr-lhs;
