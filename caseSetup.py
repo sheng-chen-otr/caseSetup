@@ -59,7 +59,7 @@ addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM']
 
 #getting default values from template
 def main():
-    titleText = '''\t##############################\n\t######\tcaseSetup-v4.0\t######\n\t##############################'''
+    titleText = '''\t##############################\n\t######\tcaseSetup-v4.1\t######\n\t##############################'''
     print(titleText)
     getTemplateType(SETUP)
     
@@ -96,6 +96,8 @@ def main():
         writeTurbulenceProperties(templateLoc, fullCaseSetupDict)
         copyScripts(templateLoc, fullCaseSetupDict,case)
         writeToCaseSetup(fullCaseSetupDict,'fullCaseSetupDict')
+        #copy over the pvPostSetup
+        
         #getClusterType(templateLoc,fullCaseSetupDict)
         print('\nCase setup completed successfully!')
   
@@ -1050,6 +1052,7 @@ def geomToDict(geomDict,geometryList,geomColumnNames):
            
         
 main()   
+
 
 
 
