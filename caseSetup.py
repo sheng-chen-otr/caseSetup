@@ -31,9 +31,10 @@ templateBaseLoc = "%s/setupTemplates" % (os.path.dirname(os.path.realpath(__file
 if not os.path.isdir(templateBaseLoc):
     sys.exit("ERROR: Template path incorrect!")
 
-parser = argparse.ArgumentParser(prog='caseSetup-v4.0',description='Set us the case based on settings written out in the caseSetup')
+parser = argparse.ArgumentParser(prog='caseSetup-v4.1',description='Set us the case based on settings written out in the caseSetup')
                     
-parser.add_argument("-s","--setup", default='default', choices=['otr','otrwt','acewt','bus'],
+parser.add_argument("-s","--setup", default='default', 
+                    #choices=['otr','otrwt','bus'],
                     help='Identifies which setup templates to use.')
 # parser.add_argument("-m","--mesh", action="store_true",
                     # help='Sets up meshing dicts and links geometry files. Will copy template case files if the trial folder is empty.')
@@ -43,7 +44,8 @@ parser.add_argument("--new", action="store_true",
                     help='Writes a new caseSetup, will overwrite what is currently there if it exists!')
 parser.add_argument("--modules", action="store_true", 
                     help='Shows all possible modules.')
-
+parser.add_argument("--postProDict", action="store_true", 
+                    help='Copies post-processing config file into case folder.')
 args = parser.parse_args()
 CONTROLDICT = args.controlDict
 NEWCS = args.new
@@ -385,17 +387,30 @@ def writeSnappy(geomDict,fullCaseSetupDict):
         snappyDict['REF_ANGLE'] = fullCaseSetupDict['GLOBAL_REFINEMENT']['REF_ANGLE']
         snappyDict['DEF_EX_RATIO'] = fullCaseSetupDict['GLOBAL_REFINEMENT']['DEF_EX_RATIO']
         
-    #check if default wake is selected, if true, get defaults
-    if fullCaseSetupDict['GLOBAL_REFINEMENT']['DEFAULT_WAKE_REF'][0].lower() == 'true':
+    #check if default wake is selected, if true, get default
+    try:
+        wakeRefType = fullCaseSetupDict['GLOBAL_REFINEMENT']['DEFAULT_WAKE_REF'][0].lower()
+    except:
+        print('ERROR! Entry in GLOBAL_REFINEMENT -> DEFAULT_WAKE_REF is not a valid string!')
+        sys.exit('Please correct entry and re-run!')
+    if wakeRefType == 'default' or wakeRefType == 'true':
+        print('\t\tUsing default wake boxes!')
+        wakeRefConfigPath = "%s/defaultRefinements/defaultWake" % (templateLoc)
+    else:
+        print('\t\tUsing %s wake boxes!' % (wakeRefType))
+        wakeRefConfigPath = "%s/defaultRefinements/%s" % (templateLoc,wakeRefType)
+    #check if wake config path exists
+    if os.path.exists(wakeRefConfigPath):
+        #sys.exit('ERROR! %s is an invalid wake refinement configuration!\n\tMake sure %s exists!' % (wakeRefType,wakeRefConfigPath))
         wakeRefConfig = configparser.ConfigParser()
         wakeRefConfig.optionxform = str
         try:
-            wakeRefConfig.read_file(open("%s/defaultRefinements/defaultWake" % (templateLoc)))
+            wakeRefConfig.read_file(open(wakeRefConfigPath))
         except:
-            print('ERROR! defaultWake is invalid!')
+            print('ERROR! wake configuration is invalid!\nPath: %s' % (wakeRefConfigPath))
             sys.exit()
         wakeRefConfigSections = wakeRefConfig.sections()
-        print('\n\t\tCreating default wake boxes: %s' % (", ".join(wakeRefConfigSections)))
+        print('\n\t\tCreating wake boxes: %s' % (", ".join(wakeRefConfigSections)))
         
         #setting up wake values
         boxTypes = {'box':'searchableBox'}
@@ -421,10 +436,8 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                         
             snappyDict['GEOMETRY'].append(geomString)
             snappyDict['REFINEMENT_REGIONS'].append(refString)
-   
-        
-    
-        
+    else:
+        sys.exit('ERROR! %s is an invalid wake refinement configuration!\n\tMake sure %s exists!' % (wakeRefType,wakeRefConfigPath))
         
     #writing to snappyHexMeshDict
     print('\t\tWriting to snappyHexMeshDict:')
@@ -1037,5 +1050,6 @@ def geomToDict(geomDict,geometryList,geomColumnNames):
            
         
 main()   
+
 
 
