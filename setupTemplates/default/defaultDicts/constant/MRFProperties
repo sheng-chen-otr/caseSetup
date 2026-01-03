@@ -15,8 +15,7 @@ FoamFile
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-
-<MRF-OPTIONS>
+<MRF_ZONES>
 
 /*toint-rrf-fr-lhs
 {
