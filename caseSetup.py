@@ -54,7 +54,7 @@ PR_MODULES = args.modules
 updateCaseSetupFlag = False
 
 #available addon keywords
-addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM']
+addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG']
 
 
 #getting default values from template
@@ -152,25 +152,30 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                        'POR':'\tGEOM_NAME {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'REF':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'REFX':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
+                       'MRFG':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        }
     refinementRegionStrings = {'GEOM':'\t"GEOM_NAME.*" {mode distance; levels (REF_LEVEL);}\n',
                                'REFX':{'inside':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n',
                                        'outside':'\tGEOM_NAME {mode outside; levels ((1E15 REF_LEVEL));}\n',
                                        'distance':'\tGEOM_NAME {mode distance; levels (REF_LEVELS);}\n'
                                        },
-                               'REF':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n'}
+                               'REF':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n',
+                               'MRFG':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n'}
     refinementSurfaceStrings = {'GEOM': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); regions{#include"snappyRefinementDict"}}\n',
                                 'GEOMX': '\tGEOM_NAME {level (GEOMX_LEVEL_MIN GEOMX_LEVEL_MAX); regions{#include"snappyRefinementDict"}}\n',
-                                'POR': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; cellZone GEOM_NAME_INTERNAL; cellZoneInside insidePoint; insidePoint (POR_POINT);}\n'
+                                'POR': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; cellZone GEOM_NAME_INTERNAL; cellZoneInside insidePoint; insidePoint (POR_POINT);}\n',
+                                'MRFG': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); faceZone toint-GEOM_NAME; cellZone fluid-GEOM_NAME; cellZoneInside insidePoint; insidePoint (MRF_POINT);}\n',
                                 
                                 }
     edgeRefinementStrings = {'GEOM': '\t{file "GEOM_NAME.eMesh"; scale GEOM_SCALE; level EDGE_LEVEL;}\n',
+                             'MRFG': '\t{file "GEOM_NAME.eMesh"; scale GEOM_SCALE; level EDGE_LEVEL;}\n',
                             'POR': '',
                             'REF':"",
                             'REFX':""
                             }
     layerStrings = {'GEOM': '''\t"GEOM_NAME.*" {nSurfaceLayers NLAYERS; expansionRatio EXP_RATIO;}\n''',
                     'POR':'''\t"GEOM_NAME.*" {nSurfaceLayers -1; expansionRatio 1;}\n''',
+                    'MRFG':'''\t"GEOM_NAME.*" {nSurfaceLayers -1; expansionRatio 1;}\n''',
                     'REF':"",
                     'REFX':""
                     }
@@ -391,11 +396,11 @@ def writeSnappy(geomDict,fullCaseSetupDict):
         
     #check if default wake is selected, if true, get default
     try:
-        wakeRefType = fullCaseSetupDict['GLOBAL_REFINEMENT']['DEFAULT_WAKE_REF'][0].lower()
+        wakeRefType = fullCaseSetupDict['GLOBAL_REFINEMENT']['DEFAULT_WAKE_REF'][0]
     except:
         print('ERROR! Entry in GLOBAL_REFINEMENT -> DEFAULT_WAKE_REF is not a valid string!')
         sys.exit('Please correct entry and re-run!')
-    if wakeRefType == 'default' or wakeRefType == 'true':
+    if wakeRefType.lower() == 'default' or wakeRefType == 'true':
         print('\t\tUsing default wake boxes!')
         wakeRefConfigPath = "%s/defaultRefinements/defaultWake" % (templateLoc)
     else:
