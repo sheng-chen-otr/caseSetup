@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 import scipy
 import scipy.stats as st
 import glob
-from estimateStatisticalError import *
 
 
 
@@ -195,10 +194,7 @@ def plotData(args,caseLoc,casePathDict):
                 }
 
     for var in args.plotData:
-
-        fig1,ax = plt.subplots(figsize=[10,6],frameon=True)
-
-        
+        fig1,ax = plt.subplots(figsize=[7,4],frameon=True)
 
         caseEndTimes = []
         caseMeans = []
@@ -213,21 +209,13 @@ def plotData(args,caseLoc,casePathDict):
             avgStart = casePathDict[case]['avgStart']
             caseEndTimes.append(max(data['#Time']))
             if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
-                if var == 'CoP':
-                    factor = 1
-                else:
-                    factor = 2
-                caseMeans.append(np.mean(data[var][data['#Time']>=avgStart])*factor) #using this to calculate the range for scaling axis
+                caseMeans.append(np.mean(data[var][data['#Time']>=avgStart])*2) #using this to calculate the range for scaling axis
                 
             else:
                 caseMeans.append(np.mean(data[var][data['#Time']>=avgStart])) #using this to calculate the range for scaling axis\
                 
             if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
-                if var == 'CoP':
-                    factor = 1
-                else:
-                    factor = 2
-                ax.plot(rawData['#Time'],rawData[var]*factor,label=case,alpha=0.5)
+                ax.plot(rawData['#Time'],rawData[var]*2,label=case,alpha=0.5)
             else:
                 ax.plot(rawData['#Time'],rawData[var],label=case,alpha=0.5)
             
@@ -237,26 +225,17 @@ def plotData(args,caseLoc,casePathDict):
                         print('\tPlotting forward averages for %s' % (var))
                         statvarlabel = 'Fwd. Avg'
                         if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
-                            if var == 'CoP':
-                                factor = 1
-                            else:
-                                factor = 2
-                                
-                            ax.plot(avgData[var + 'StatTime'], avgData[var + statvar] * factor, label=case + '(%s)' % (statvarlabel), linestyle='--')
+                            ax.plot(avgData[var + 'StatTime'], avgData[var + statvar] * 2, label=case + '(%s)' % (statvarlabel), linestyle='--')
                         else:
                             ax.plot(avgData[var + 'StatTime'], avgData[var + statvar], label=case + '(%s)' % (statvarlabel), linestyle='--')
                     elif statvar == 'CI':
                         statvarlabel = statvar
                         #ci = (avgData[var + 'UpperCI'] - avgData[var + 'LowerCI']) / 2
                         if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
-                            if var == 'CoP':
-                                factor = 1
-                            else:
-                                factor = 2
                             try:
                                 ax.errorbar(avgData[var + 'ciTime'],
-                                avgData[var + 'ciMean']*factor,
-                                yerr=avgData[var + 'ciRaw']*factor,
+                                avgData[var + 'ciMean']*2,
+                                yerr=avgData[var + 'ciRaw'],
                                 fmt='none',capsize=3,linewidth=1)
                             except Exception as error: 
                                 print('\t\tWARNING! Unable to plot fwd avg data...')
@@ -294,20 +273,9 @@ def plotData(args,caseLoc,casePathDict):
         ax.set_ylabel(labelDict[var]['label'])
         ax.set_title(labelDict[var]['title'])
         ax.set_xlabel('Time (s)')
-
-        if len(casePathDict.keys()) < 2:
-            fig1.legend(loc='upper center',fontsize=10,
-                        
-                        )
-        else: 
-            fig1.legend(loc='upper center',fontsize=10,
-                        ncols = len(casePathDict.keys()),
-                        ) #kinda wierd that it doesn't like to do 1 col ... so if less than 2 cases it will not have a ncol setting
-
+        plt.legend()
         if caseLoc.lower() == 'outtrial':
-            plt.savefig('%s/%s_forceHistory_%s.%s' % (list(casePathDict.keys())[0],'_'.join(args.trial),var,args.saveFormat),dpi = 300,
-                        bbox_inches='tight'
-                        )
+            plt.savefig('%s/%s_forceHistory_%s.%s' % (list(casePathDict.keys())[0],'_'.join(args.trial),var,args.saveFormat),dpi = 300,bbox_inches='tight')
         else:
             plt.savefig('%s_forceHistory_%s.%s' % ('_'.join(args.trial),var,args.saveFormat),dpi = 300,bbox_inches='tight')
 
@@ -330,12 +298,11 @@ def calculateStatistics(avgData,time,data,forceName,contCiResolution = 100):
         mean = data[:i].mean()
         ciMeanArray.append(mean)
         ci = calc_confidence_interval(data[:i-1],i_samp = calc_indept_samples(data[:i-1]))
-        # estCi = estimate_statistical_error(data[:i-1],dt=time[1]-time[0])['mean_95_confidence_interval']
-        # ci = abs(estCi[1]-estCi[0])/2
         ciArrayUpper.append(mean+ci)
         ciArrayLower.append(mean-ci)
         ciRawArray.append(ci)
 
+    
     
     avgData[forceName +'rawData'] = data
     avgData[forceName + 'StatTime'] = np.array(avgT)
@@ -484,3 +451,4 @@ def calc_confidence_interval(values, interval=0.95, i_samp=1):
 
 
 
+# %%
