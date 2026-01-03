@@ -82,6 +82,11 @@ def makeScripts(templateLoc,fullCaseSetupDict):
                 solveScriptArray.append(clusterDict['solve']['initialize']['initializePotential'])
             elif fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0] == 'steady':
                 solveScriptArray.append(clusterDict['solve']['initialize']['initializeSteady'])
+        elif 'solve' in line:
+            if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0].lower() == 'steady':
+                solveScriptArray.append(clusterDict['solve']['solve']['steady'])
+            elif fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0].lower() == 'transient':
+                solveScriptArray.append(clusterDict['solve']['solve']['transient'])
 
         else:
             solveScriptArray.append(clusterDict['solve'][line])
@@ -148,4 +153,5 @@ def copyScripts(templateLoc, fullCaseSetupDict,case):
     
     
     
+
     

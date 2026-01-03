@@ -41,7 +41,7 @@ def main():
     global UREF,LREF,CREF,FREF,WREF,fullCaseSetupDict,renderView
     
 
-    print('''\n\t####\t\tEZ-CFD PARAVIEW POST-PROCESSING V1.0\t\t ####\n\n''')
+    print('''\n\t####\t\tcaseSetup POST-PROCESSING V1.0\t\t ####\n\n''')
 
     # Start timing the script execution
     begin = time.time()
@@ -213,7 +213,7 @@ def getVariableDicts(variablePaths, viewsPath):
 def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,viewsDict):
     '''
         Generates surface contour plots, the variables are given in a csv file.
-
+        variable options must be specified as a list in pvPostSetup
     '''
     beginSurface = time.time()
     print('\tGenerating surface contour plots...')
@@ -890,6 +890,7 @@ def geomToDict(geomDict,geometryList,geomColumnNames):
     return geomDict
 
 main()
+
 
 
 
