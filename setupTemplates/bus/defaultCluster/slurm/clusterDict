@@ -64,7 +64,7 @@
          
          "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pvPost.py >> log.pvpost",
 
-         "forces":"echo 'plotting forces...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/plotForces.py -p Cd Cl CoP -s >> log.plotForce",
+         "forces":"echo 'plotting forces...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/plotForces.py -p Cd Cl CoP Cl(f) Cl(r) Cs(f) Cs(r) -s >> log.plotForce",
 
          "summary":"echo 'generating summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/summary.py >> log.summary"
 

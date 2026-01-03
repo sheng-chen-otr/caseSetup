@@ -52,7 +52,7 @@ PR_MODULES = args.modules
 updateCaseSetupFlag = False
 
 #available addon keywords
-addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG']
+addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM']
 
 
 #getting default values from template
@@ -146,12 +146,10 @@ def writeSnappy(geomDict,fullCaseSetupDict):
     #setting up the geometries
     geometryStrings = {'GEOM':'\tGEOM_NAME {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'POR':'\tGEOM_NAME {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
-                       'MRFG':'\tGEOM_NAME {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'REF':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'REFX':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        }
     refinementRegionStrings = {'GEOM':'\t"GEOM_NAME.*" {mode distance; levels (REF_LEVEL);}\n',
-                               'MRFG':'\t"GEOM_NAME.*" {mode inside; levels ((1E15 REF_LEVEL));}\n',
                                'REFX':{'inside':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n',
                                        'outside':'\tGEOM_NAME {mode outside; levels ((1E15 REF_LEVEL));}\n',
                                        'distance':'\tGEOM_NAME {mode distance; levels (REF_LEVELS);}\n'
@@ -159,13 +157,9 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                                'REF':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n'}
     refinementSurfaceStrings = {'GEOM': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); regions{#include"snappyRefinementDict"}}\n',
                                 'GEOMX': '\tGEOM_NAME {level (GEOMX_LEVEL_MIN GEOMX_LEVEL_MAX); regions{#include"snappyRefinementDict"}}\n',
-                                'MRFG': '\tGEOM_NAME{level (GEOM_LEVEL GEOM_LEVEL); faceZone toint-GEOM_NAME; cellZone fluid-GEOM_NAME; cellZoneInside insidePoint;insidePoint (MRF_POINT);}',
                                 'POR': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; cellZone GEOM_NAME_INTERNAL; cellZoneInside insidePoint; insidePoint (POR_POINT);}\n'
-                                }
-
                                 
-         
-
+                                }
     edgeRefinementStrings = {'GEOM': '\t{file "GEOM_NAME.eMesh"; scale GEOM_SCALE; level EDGE_LEVEL;}\n',
                             'POR': '',
                             'REF':"",
@@ -261,57 +255,6 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                                             .replace('REF_TYPE',str(refType))\
                                             .replace('REF_LEVEL',str(refLevel))   
             snappyDict['REFINEMENT_SURFACES'].append(porString)
-            continue
-
-        elif geomName.split('-')[0] == 'MRFG':
-            geomLevel = geomDict[geom]['refinement'] 
-            regMRFString = refinementRegionStrings[geomName.split('-')[0]]
-            
-            #test what refinement
-            regMRFString = regMRFString.replace('GEOM_NAME',geomName)\
-                                            .replace('REF_LEVEL',geomLevel)
-            snappyDict['REFINEMENT_REGIONS'].append(regMRFString)
-
-            
-            mrfString = refinementSurfaceStrings[geomName.split('-')[0]]
-            try:
-                mrfPoint = fullCaseSetupDict[geomName]['MRF_INSIDE_POINT'][0]
-                #checking if the points are floats and have 3 points
-                
-                if mrfPoint.lower() != 'default':
-                    mrfPoint = (fullCaseSetupDict[geomName]['MRF_INSIDE_POINT'])
-                    print('\t\t\tUsing user defined inside point for %s: %s' % (geomName,list(mrfPoint)))
-                    if len(mrfPoint) != 3:
-                        print('\nERROR! Inside point for %s is not valid, must have 3 coordinates (x,y,z) inside MRF region!' % (geomName))
-                        sys.exit()
-                elif mrfPoint.lower() == 'default':
-                    print('\t\t\tCalculating inside point for %s' % (geomName))
-                    bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBox(geom.replace('.gz',''))
-                    xcenter,ycenter,zcenter,radius = getRotaCoordinates(bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ)
-                    mrfPoint = (str(xcenter),str(ycenter),str(zcenter))
-                
-                for coord in mrfPoint:
-                    try:
-                        coord = float(coord)
-                    except:
-                        print('\nERROR! Inside point for %s is not valid!' % (geomName))
-                        return
-                        sys.exit() 
-                mrfPoint = " ".join(mrfPoint)
-                print('\t\t\tSetting inside point for %s: %s' % (geomName,mrfPoint))
-                mrfPIDs = getGeomPID("constant/triSurface/%s" % (geom.replace('.gz','')))       
-            except Exception as E:
-                print(E)
-                mrfPoint = ''
-                sys.exit('ERROR! Inside point for %s not valid!' % (geom.replace('.gz','')))
-
-            # #test if refinement geometry
-            mrfString = mrfString.replace('GEOM_NAME',geomName)\
-                                            .replace('GEOM_LEVEL',geomLevel)\
-                                            .replace('MRF_POINT',str(mrfPoint))\
-                                            .replace('REF_TYPE',str(refType))\
-                                            .replace('REF_LEVEL',str(refLevel))   
-            snappyDict['REFINEMENT_SURFACES'].append(mrfString)
             continue
         elif geomName.split('-')[0] in ['REFX','REF']:
             regRefString = refinementRegionStrings[geomName.split('-')[0]]
@@ -874,7 +817,6 @@ def getGeometry(fullCaseSetupDict,writeCaseSetupDict):
             print('\t\t\t%s: %s' % (col,val))
     writeCaseSetupDict = checkGeom(geomDict,writeCaseSetupDict)
     writeCaseSetupDict = checkPorous(geomDict,writeCaseSetupDict)
-    writeCaseSetupDict = checkMRF(geomDict,writeCaseSetupDict)
     writeCaseSetupDict = checkRotation(geomDict,writeCaseSetupDict)
     writeCaseSetupDict = checkInternalDomain(geomDict,writeCaseSetupDict)
     writeCaseSetupDict,fullCaseSetupDict = checkRefinements(geomDict,writeCaseSetupDict,fullCaseSetupDict)
@@ -922,50 +864,6 @@ def checkPorous(geomDict,writeCaseSetupDict):
                     updateCaseSetupFlag = True
                 except:
                     print('ERROR! defaultPorous section header is not [POR_SETUP]!')
-                    exit()
-            
-        
-    return writeCaseSetupDict    
-
-def checkMRF(geomDict,writeCaseSetupDict):
-    global updateCaseSetupFlag
-    #getting porous media default module
-    MRFConfigRead = configparser.ConfigParser()
-    MRFConfigRead.optionxform = str
-    try:
-        MRFConfigRead.read_file(open("%s/defaultBCTemplates/defaultMRF" % (templateLoc)))
-    except Exception as e:
-        print('ERROR! defaultMRF template is invalid!')
-        print(e)
-        exit()
-    
-    MRFSections = MRFConfigRead.sections()
-    
-    for geom in geomDict.keys():
-        if geom.startswith('MRFG'):
-            MRFName = stripExt(geom)
-            if MRFName in writeCaseSetupDict.keys():               
-                tempDict = {}
-                for defaultPorousVar in MRFConfigRead.items('MRF_SETUP'):
-                    defaultVar = defaultPorousVar[0]
-                    defaultVal = defaultPorousVar[1]
-                    try:
-                        tempDict[defaultVar] = writeCaseSetupDict[MRFName][defaultVar]
-                    except:
-                        updateCaseSetupFlag = True
-                        tempDict[defaultVar] = [str(defaultVal)]
-                
-                writeCaseSetupDict[MRFName] = tempDict
-                    
-            else:   
-                try:
-                    writeCaseSetupDict[MRFName] = {}
-                    for var in list(MRFConfigRead.items('MRF_SETUP')):
-                        var = list(var)
-                        writeCaseSetupDict[MRFName][var[0]] = [var[1]]
-                    updateCaseSetupFlag = True
-                except:
-                    print('ERROR! defaultPorous section header is not [MRF_SETUP]!')
                     exit()
             
         
