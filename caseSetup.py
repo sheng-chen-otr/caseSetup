@@ -31,7 +31,7 @@ templateBaseLoc = "%s/setupTemplates" % (os.path.dirname(os.path.realpath(__file
 if not os.path.isdir(templateBaseLoc):
     sys.exit("ERROR: Template path incorrect!")
 
-parser = argparse.ArgumentParser(prog='caseSetup-v4.1',description='Set us the case based on settings written out in the caseSetup')
+parser = argparse.ArgumentParser(prog='caseSetup-v4.1.1',description='Set us the case based on settings written out in the caseSetup')
                     
 parser.add_argument("-s","--setup", default='default', 
                     #choices=['otr','otrwt','bus'],
@@ -59,7 +59,7 @@ addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG']
 
 #getting default values from template
 def main():
-    titleText = '''\t##############################\n\t######\tcaseSetup-v4.1\t######\n\t##############################'''
+    titleText = '''\t##############################\n\t######\tcaseSetup-v4.1.1\t######\n\t##############################'''
     print(titleText)
     getTemplateType(SETUP)
     
@@ -91,6 +91,7 @@ def main():
         
         writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict)
         writeOptions(templateLoc,geomDict,fullCaseSetupDict)
+        writeMRFG(templateLoc,geomDict,fullCaseSetupDict)
         writeSurfaces(templateLoc, geomDict,fullCaseSetupDict)
         writeTransportProperties(templateLoc, fullCaseSetupDict)
         writeTurbulenceProperties(templateLoc, fullCaseSetupDict)
@@ -155,12 +156,13 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                        'MRFG':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        }
     refinementRegionStrings = {'GEOM':'\t"GEOM_NAME.*" {mode distance; levels (REF_LEVEL);}\n',
+                               'MRFG':'\t"GEOM_NAME.*" {mode distance; levels (REF_LEVEL);}\n',
                                'REFX':{'inside':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n',
                                        'outside':'\tGEOM_NAME {mode outside; levels ((1E15 REF_LEVEL));}\n',
                                        'distance':'\tGEOM_NAME {mode distance; levels (REF_LEVELS);}\n'
                                        },
                                'REF':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n',
-                               'MRFG':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n'}
+                               }
     refinementSurfaceStrings = {'GEOM': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); regions{#include"snappyRefinementDict"}}\n',
                                 'GEOMX': '\tGEOM_NAME {level (GEOMX_LEVEL_MIN GEOMX_LEVEL_MAX); regions{#include"snappyRefinementDict"}}\n',
                                 'POR': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; cellZone GEOM_NAME_INTERNAL; cellZoneInside insidePoint; insidePoint (POR_POINT);}\n',
@@ -281,7 +283,6 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                         coord = float(coord)
                     except:
                         print('\nERROR! Inside point for %s is not valid!' % (geomName))
-                        return
                         sys.exit() 
                 mrfPoint = " ".join(mrfPoint)
                 print('\t\t\tSetting inside point for %s: %s' % (geomName,mrfPoint))
@@ -291,14 +292,31 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                 mrfPoint = ''
                 sys.exit('ERROR! Inside point for %s not valid!' % (geom.replace('.gz','')))
 
-            # #test if refinement geometry
+           
             mrfString = mrfString.replace('GEOM_NAME',geomName)\
                                             .replace('GEOM_LEVEL',geomLevel)\
                                             .replace('MRF_POINT',str(mrfPoint))\
                                             .replace('REF_TYPE',str(refType))\
-                                            .replace('REF_LEVEL',str(refLevel))   
+                                            .replace('REF_LEVEL',str(refLevel))
+            
+            
+            distanceStringArray = []
+            if fullCaseSetupDict[geomName]['MRF_REF_LEVELS'][0].lower() == 'default' or fullCaseSetupDict[geomName]['MRF_REF_DIST'][0].lower() == 'default':
+                mrfLevels = fullCaseSetupDict['GLOBAL_REFINEMENT']['GEOM_REF_LEVELS']
+                mrfDists = fullCaseSetupDict['GLOBAL_REFINEMENT']['GEOM_REF_DIST']
+            else:
+                mrfLevels = fullCaseSetupDict[geomName]['GEOM_REF_LEVELS']
+                mrfDists = fullCaseSetupDict[geomName]['GEOM_REF_DIST']
+            for dist,level in zip(mrfDists,mrfLevels):
+                distanceString = '(%s %s)' % (dist, level)
+                distanceStringArray.append(distanceString)
+            MRFRefLevels = ' '.join(distanceStringArray)
+            mrfRefString = refinementRegionStrings['MRFG']
+            mrfRefString = refinementRegionStrings['MRFG'].replace('GEOM_NAME',geomName)\
+                                                            .replace('REF_LEVEL',MRFRefLevels)
+            snappyDict['REFINEMENT_REGIONS'].append(mrfRefString)
             snappyDict['REFINEMENT_SURFACES'].append(mrfString)
-            continue
+            
         elif geomName.split('-')[0] in ['REFX','REF']:
             regRefString = refinementRegionStrings[geomName.split('-')[0]]
             
@@ -372,6 +390,7 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                 regRefString = refinementRegionStrings['GEOM']
                 regRefString = refinementRegionStrings['GEOM'].replace('GEOM_NAME',geomName)\
                                                               .replace('REF_LEVEL',refLevels)
+            
             else:
                 geomRefString = refinementSurfaceStrings['GEOM']
                 geomRefString = geomRefString.replace('GEOM_NAME',geomName)\
@@ -877,9 +896,6 @@ def getGeometry(fullCaseSetupDict,writeCaseSetupDict):
     writeCaseSetupDict,fullCaseSetupDict = checkRefinements(geomDict,writeCaseSetupDict,fullCaseSetupDict)
 
     return writeCaseSetupDict,geomDict,fullCaseSetupDict
-
-
-
 
 def checkPorous(geomDict,writeCaseSetupDict):
     global updateCaseSetupFlag

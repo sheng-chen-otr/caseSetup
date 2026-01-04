@@ -5,3 +5,5 @@ MRF_AXIS = default
 ROT_MRF = True
 POINT = default
 SAMPLE_MRF = True
+MRF_REF_LEVELS = default
+MRF_REF_DIST = default
