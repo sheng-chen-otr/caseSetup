@@ -15,6 +15,7 @@ from writeSystem import *
 from utilities import *
 from writeConstant import *
 from writeScripts import *
+import shutil
 import gzip
 import re
 import multiprocessing
@@ -98,6 +99,9 @@ def main():
         copyScripts(templateLoc, fullCaseSetupDict,case)
         writeToCaseSetup(fullCaseSetupDict,'fullCaseSetupDict')
         #copy over the pvPostSetup
+
+        if args.postProDict:
+            copyPvPostSetup()
         
         #getClusterType(templateLoc,fullCaseSetupDict)
         print('\nCase setup completed successfully!')
@@ -1146,7 +1150,15 @@ def geomToDict(geomDict,geometryList,geomColumnNames):
     
     return geomDict
 
-
+def copyPvPostSetup():
+    print('\tCopying pvPostSetup into case directory...')
+    caseSetupProgramPath = os.path.dirname(os.path.realpath(__file__))
+    pvSetupPath = os.path.join(caseSetupProgramPath,'postUtilities','default','pvPostSetup')
+    destPath = os.path.join(path,case,'pvPostSetup')
+    print('\t\t%s -> %s.' % (pvSetupPath,destPath))
+    shutil.copyfile(pvSetupPath,destPath) 
+    
+    
   
            
         
