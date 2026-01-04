@@ -27,7 +27,7 @@ dictDict = {'solverType':{'steady':steadyTurb,'transient':transientTurb},
 
 foList = ['averageFieldsDict','cptMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
 coeffList = ['forceCoeffs','forceCoeffsExport','forceCoeffSetup']
-prefixToIgnore = ['IDOM','SMP','REFX','REF'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
+prefixToIgnore = ['IDOM','SMP','REFX','REF','MRFG','POR'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
 
 forceVecDict = {'drag':{'default':'1 0 0'},
                 'lift':{'default':'0 0 1'},
@@ -611,19 +611,16 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                 print('\t\t\t\tCalculated Radial Velocity: %1.4f rad/s' % (rotaVel))
                 whVel = str(rotaVel)
             
-            geomString = geomString.replace('WALL_MODEL',geomWallModel).replace('WH_ORIG',whOrig).replace('WH_AXIS',whAxis).replace('WH_VEL',whVel).replace('GEOM_NAME',geom.split('.')[0])
-            caseSetupStringArray.append(geomString)
-        else:
-        #if geom is not a rotating geometry then use the default no-slip patch
-            geomString = bcStrings['GEOM']
-            geomString = geomString.replace('WALL_MODEL',geomWallModel).replace('WH_ORIG',whOrig).replace('WH_AXIS',whAxis).replace('WH_VEL',whVel).replace('GEOM_NAME',geom.split('.')[0])
-            
-            caseSetupStringArray.append(geomString)
+                geomString = geomString.replace('WALL_MODEL',geomWallModel).replace('WH_ORIG',whOrig).replace('WH_AXIS',whAxis).replace('WH_VEL',whVel).replace('GEOM_NAME',geom.split('.')[0])
+                caseSetupStringArray.append(geomString)
+
+            else:
+            #if geom is not a rotating geometry then use the default no-slip patch
+                geomString = bcStrings['GEOM']
+                geomString = geomString.replace('WALL_MODEL',geomWallModel).replace('WH_ORIG',whOrig).replace('WH_AXIS',whAxis).replace('WH_VEL',whVel).replace('GEOM_NAME',geom.split('.')[0])
                 
+                caseSetupStringArray.append(geomString)
                 
-            
-            
-    
     caseSetupStrings = '\n'.join(caseSetupStringArray)
     
     templateLoc = '%s/defaultDicts/system/caseProperties' % (templateLoc)
