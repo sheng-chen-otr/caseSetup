@@ -57,29 +57,19 @@
 
             "exportEnsight":"if [ $? != 0 ]; then exit 1; fi; echo \"Running foamToEnsight...\"; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec foamToEnsight -parallel -latestTime -noZero >> log.EnSight;",
 
-            "postProcessing":"if [ -d postProcessing/surfaces ]; then sbatch postScript echo \"Export successful!\" fi;"
+            "postProcessing":"if [ -d postProcessing/surfaces ]; then sbatch postScript; echo \"Export successful!\" fi;"
 
             },
 
 
 
- "post":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=4\n#SBATCH --nodelist=headNode\n#SBATCH --partition=solve2\n#SBATCH --output=04_%x_postPro_%j.out\n#SBATCH --job-name=TS_PP035_half",
-         
-         "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/_internal/postUtilities/pvPost.py >> log.pvpost",
+"post":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=4\n#SBATCH --nodelist=headNode\n#SBATCH --partition=solve2\n#SBATCH --output=04_%x_postPro_%j.out\n#SBATCH --job-name=TS_PP035_half",
 
-         "forces":"echo 'plotting forces...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi /home/openfoam/openFoam/scripts/plotForces_v3_0.py -n -s >> log.plotForce",
-		 
-		 "binForces":"echo 'plotting bin forces...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi /home/openfoam/openFoam/scripts/binPlotForces_v2_0.py -n -s >> log.binForce",
-		 
-		 "confPlot":"echo 'plotting confidence intervals...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi /home/openfoam/openFoam/scripts/confidencePlot.py >> log.confForce",
-		 
-		 "stat":"echo 'writing out status...';/home/openfoam/openFoam/scripts/dist/status-v1.0/status-v1.0 >> log.status",
-		 
-		 "avgForces":"echo 'plotting confidence intervals...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi /home/openfoam/openFoam/scripts/averageScript-v2.0.py >> log.averageForce",
-		 
-		 "summary":"echo 'generating summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi /home/openfoam/openFoam/scripts/caseSetup/caseSetup/postUtilities/summary.py >> log.summary",
+         "forces":"echo 'doing post run forces and summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup-4.1/_internal/postUtilities/postRun.py --forces -s --summary >> log.postRun",
+
+         "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/_internal/postUtilities/pvPost.py >> log.pvpost",
 		
-		"makePpt":"echo 'plotting confidence intervals...';python3.8 /home/openfoam/openFoam/scripts/pptGeneration.py >> log.pptGen"
+        "makePpt":"echo 'generating ppt...';python3.8  ~/openFoam/scripts/caseSetup/caseSetup/_internal/postUtilities/pptGeneration/pptGeneration.py >> log.pptGen"
 		
         }
     
