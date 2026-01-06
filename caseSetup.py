@@ -25,8 +25,17 @@ path = os.path.split(os.getcwd())[0] #path of the case
 case = os.path.split(os.getcwd())[1] #case name
 jobPath = os.path.abspath(os.path.join(path,os.pardir)) #path of the job i.e. 100001
 
+# Get the directory where the executable is running from
+if getattr(sys, 'frozen', False):
+    # If running as a PyInstaller bundle (i.e., an executable)
+    execDir = os.path.dirname(sys.executable)
+else:
+    # If running as a script
+    execDir = os.path.dirname(os.path.realpath(__file__))
+
 #location of the template file, should be in the same directory as _internal when compiled
-templateBaseLoc = "%s/setupTemplates" % (os.path.dirname(os.path.realpath(__file__))) 
+templateBaseLoc = "%s/setupTemplates" % (execDir) 
+print('EXECUTING FROM: ' + execDir)
 
 #checks the location of the templates to make sure they are good
 if not os.path.isdir(templateBaseLoc):
@@ -60,7 +69,7 @@ addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG']
 
 #getting default values from template
 def main():
-    titleText = '''\t##############################\n\t######\tcaseSetup-v4.1.1\t######\n\t##############################'''
+    titleText = '''\t##############################\n\t\tcaseSetup-v4.1.1\t\n\t##############################'''
     print(titleText)
     getTemplateType(SETUP)
     
@@ -371,9 +380,6 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                                             .replace('GEOM_LEVEL',geomLevel)\
                                             .replace('REF_TYPE',str(refType))\
                                             .replace('REF_LEVEL',str(refLevel))                     
-         
-        
-        
         else:
 
             if geomName.startswith('GEOMX'):
@@ -465,7 +471,6 @@ def writeSnappy(geomDict,fullCaseSetupDict):
         wakeRefConfigPath = "%s/defaultRefinements/%s" % (templateLoc,wakeRefType)
     #check if wake config path exists
     if os.path.exists(wakeRefConfigPath):
-        #sys.exit('ERROR! %s is an invalid wake refinement configuration!\n\tMake sure %s exists!' % (wakeRefType,wakeRefConfigPath))
         wakeRefConfig = configparser.ConfigParser()
         wakeRefConfig.optionxform = str
         try:
@@ -668,7 +673,7 @@ def getCaseSetup(defaultDict):
     except Exception as e:
         print('\n\n\nERROR! caseSetup invalid!')
         print(e)
-        exit()
+        sys.exit()
     caseSetupDict = {}
     caseSetupConfigSections = caseSetupConfig.sections()
     #getting the modules that are already there
@@ -1152,8 +1157,7 @@ def geomToDict(geomDict,geometryList,geomColumnNames):
 
 def copyPvPostSetup():
     print('\tCopying pvPostSetup into case directory...')
-    caseSetupProgramPath = os.path.dirname(os.path.realpath(__file__))
-    pvSetupPath = os.path.join(caseSetupProgramPath,'postUtilities','default','pvPostSetup')
+    pvSetupPath = os.path.join(execDir,'postUtilities','default','pvPostSetup')
     destPath = os.path.join(path,case,'pvPostSetup')
     print('\t\t%s -> %s.' % (pvSetupPath,destPath))
     shutil.copyfile(pvSetupPath,destPath) 
