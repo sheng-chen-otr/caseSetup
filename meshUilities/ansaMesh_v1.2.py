@@ -50,16 +50,16 @@ def main():
         for var in geomDict[geom].keys():
             print('\t\t\t%s: %s' % (var,geomDict[geom][var]))
 
-    if os.path.exists(case + '.ansa.gz'):
-        print('Found existing ansa file, using instead!')
-        base.Open(case + '.ansa.gz')
-        layerCoverage()
+    # if os.path.exists(case + '.ansa.gz'):
+    #     print('Found existing ansa file, using instead!')
+    #     base.Open(case + '.ansa.gz')
+    #     layerCoverage(geomDict,fullCaseSetupDict)
 
 
 
 
-        #exportAnsaMesh()
-        return
+    #     #exportAnsaMesh()
+    #     return
     
     importGeometry(geomDict)
     importDomain()
@@ -71,7 +71,7 @@ def main():
     
     # getAllParts(geomDict)
 
-def layerCoverage(geomDict):
+def layerCoverage(geomDict,fullCaseSetupDict):
         #calculate layer coverage on each PID
 
         print("\n\t\tCalculating layer coverage per PID...")
@@ -93,18 +93,63 @@ def layerCoverage(geomDict):
         for area in octreeAreas:
             parts = mesh.GetPartsFromOctreeArea(area = area)
             layersBin = {}
-
-            
             for part in parts:
                 partName = part._name.split('_')[0]
-                requestedLayers = int(geomDict[partName]['layers'])
+                pidName = part._name
+                base.Or(part)
+                #getting requested layers from part dict
+                if 'GEOMX-' in partName:
+                    requestedLayers = int(fullCaseSetupDict[partName]['GEOMX_NLAYERS'])
+                else:
+                    for geomPart in geomDict.keys():
+                        if partName in geomPart:
+                            requestedLayers = int(geomDict[geomPart]['layers'])
+                            break
+
+                
+                #requestedLayers = int(geomDict[partName]['layers'])
+
                 if requestedLayers == 0:
                     print('\t\t\tRequested layers is 0, skipping!')
                 if requestedLayers != 0:
-                    print("t\t\tRequested prism layers for %s region: %s" % (partName, str(requestedLayers)))
+                    print("\t\t\tRequested prism layers for %s region: %s" % (pidName, str(requestedLayers)))
                     #create bins for reporting layer growth
-                    for i in range(0, targetLayers+1):
+                    for i in range(0, requestedLayers+1):
                         layersBin.update({i: 0})
+                    #gather all visible shells
+                    partShells = ansa.base.CollectEntities(constants.OPENFOAM, None, ['POLYGON', 'SHELL'], filter_visible=True)
+
+                    #count of surface elements
+                    faceElements = len(partShells)
+
+                    #pull total number of layer results for each surface shell
+                    partShellsResults = ansa.base.ShellResult(partShells)
+
+                    layerCellsGrown = 0
+                    #assume requested layers is equal to number of surface elements times requested number of layers
+                    layerCellsRequested = requestedLayers*faceElements
+
+                    for shellResult in partShellsResults:
+                        #for each element, update bin for number of layer cells grown
+                        layersBin.update({int(shellResult[1]): (layersBin[shellResult[1]]+1)})
+                        #update total number of layer cells grown for the PID
+                        layerCellsGrown+=shellResult[1]
+
+                    #update total number of prism layer cells grown and requested
+                    totalLayerCellsGrown+=layerCellsGrown
+                    totalLayerCellsRequested+=layerCellsRequested
+
+                    print("\n\t\t\t%s" % pidName)
+                    print("\t\t\t\tLayer cells requested: %s" % str(layerCellsRequested))
+                    print("\t\t\t\tLayer cells delivered: %s" % str(int(layerCellsGrown)))
+                    if layerCellsRequested == 0:
+                        print("\t\t\t\tZero prism layer cells grown.")
+                    if layerCellsRequested != 0:
+                        print("\t\t\t\tDelivery rate: %0.2f%%" % (100*layerCellsGrown/layerCellsRequested))
+                        for line in layersBin:
+                            print("\t\t\t\tFaces with %0.0f layer(s) grown: %0.0f       %0.2f%% of faces in PID" % (line, layersBin[line], 100*layersBin[line]/faceElements))
+                
+
 
                 
         return
