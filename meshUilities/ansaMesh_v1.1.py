@@ -302,7 +302,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
     geomMparfile['pid_bounds'] = 'true'
     geomMparfile['feature_bounds'] = 'true'
     geomMparfile['proximity'] = 'true'
-    geomMparfile['proximity_minimum_length'] = calculateCellSize(minGeomLevel+1,baseSize)
+    #geomMparfile['proximity_minimum_length'] = calculateCellSize(minGeomLevel+1,baseSize)
+    geomMparfile['proximity_minimum_length'] = 1
     if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0].lower() == 'half':
         print('\t\t\tSymmetry mode selected as half!')
         geomMparfile['hextreme_connect_to_symmetry'] = 'true'
@@ -353,7 +354,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
                                      'hextreme_layers_first_layer_height':float(firstLayerHeight),
                                      'hextreme_layers_size_mode':layerType.title(),
                                      'distortion_angle':refAngle,
-                                     'proximity_minimum_length':calculateCellSize(int(maxLevel)+int(edgeIncrement),baseSize),
+                                     #'proximity_minimum_length':calculateCellSize(int(maxLevel)+int(edgeIncrement),baseSize),
+                                     'proximity_minimum_length':1,
                                      'sharp_edges_length':calculateCellSize(int(maxLevel)+int(edgeIncrement),baseSize),
                                      'free_edges_length':calculateCellSize(int(maxLevel)+int(edgeIncrement),baseSize),
 
@@ -372,7 +374,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
                 partMparfile.update({'octree_parameters_name':geom.split('.')[0],
                                      'curvature_minimum_length':calculateCellSize(int(refLevel)+1,baseSize),
                                      'sharp_edges_length':calculateCellSize(int(refLevel)+1,baseSize),
-                                     'proximity_minimum_length':calculateCellSize(int(refLevel)+1,baseSize),
+                                     #'proximity_minimum_length':calculateCellSize(int(refLevel)+1,baseSize),
+                                     'proximity_minimum_length':1,
                                      'maximum_surface_length':calculateCellSize(int(refLevel),baseSize),
                                      'maximum_length':calculateCellSize(int(refLevel),baseSize),
                                      'hextreme_number_of_layers_value':int(nlayers),

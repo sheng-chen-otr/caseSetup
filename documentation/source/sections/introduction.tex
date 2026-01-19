@@ -1,0 +1,49 @@
+\section{Introduction}
+\codeword{caseSetup} was built over a couple years for the Ontario Tech Racing team. This process is a mix of experiences gained from FSAE related activities and professional activities. The first iteration of \codeword{caseSetup} was born in the fall of 2022. The drive behind \codeword{caseSetup} was to improve the consistency of runs from user to user while reducing the chances of mistakes. The main idea behind it was to use pre-defined templates which mildly restricts the user from making un-intended modifications to the setup. This allows for consistent meshing, solving, and post processing regardless of user. 
+
+This document here is the technical user guide, while some Computational Fluid Dynamics (CFD) theories may be included, it is not meant to be an exhaustive explination or discussion of the physics. Please refer to specialized CFD books and resources if more information is required.
+
+
+
+\section{Directory Structure}
+This process requires a specific directory structure for your cases to work. It looks like the following:
+\begin{itemize}
+    \item \codeword{JOB-DIRECTORY}
+    \begin{itemize}
+        \item 01\_incoming(YYYY-MM-DD)
+        \begin{itemize}
+            \item 2025-09-11\_New\_Geometry
+        \end{itemize}
+        \item 02\_references
+        \begin{itemize}
+            \item ANSA
+            \begin{itemize}
+                \item trial009.ansa.gz
+            \end{itemize}
+            \item MSH
+            \begin{itemize}
+                \item trial009.obj.gz
+                \item fw-v1-1.obj.gz
+            \end{itemize}
+        \end{itemize}
+        \item 03\_reports
+        \begin{itemize}
+            \item 051\_064\_063\_report\_2025-11-16.pptx
+        \end{itemize}
+        \item CASES
+        \begin{itemize}
+            \item 001
+            \item 002
+            \item 003
+            \item \dots
+            \item 009
+            \item \begin{itemize}
+                \item \textbf{caseSetup}
+                \item constant
+                \item system
+            \end{itemize}
+        \end{itemize}
+    \end{itemize}
+\end{itemize}
+
+The definitions for each folder is described here:

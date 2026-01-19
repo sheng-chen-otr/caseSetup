@@ -426,16 +426,16 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
     initStringArray = '\n'.join(initStringArray)
     print('\t\tSetting up boundary conditions for geometry...')
     #set up the domain boundaries first
-    domainWallDictFull = {'inlet':'inlet{category inlet; type subSonic; patches (x-min y-min); options {flowSpecification fixedVelocity;} values {$:initialConditions;}}',
-                          'ground':'ground{category wall; type noSlip; patches (z-min); options {wallFunction highReynolds; motion GROUND_MOV;} values {$:initialConditions;}}',
-                          'outlet':'outlet{category outlet; type subSonic; patches (x-max y-max); options {returnFlow default;} values {$:initialConditions;}}',
-                          'walls':'walls{category wall; type slip; patches (z-max); values {$:initialConditions;}}'
+    domainWallDictFull = {'inlet':'inlet{category inlet; type subSonic; patches (".*x-min.*" ".*y-min.*"); options {flowSpecification fixedVelocity;} values {$:initialConditions;}}',
+                          'ground':'ground{category wall; type noSlip; patches (".*z-min.*"); options {wallFunction highReynolds; motion GROUND_MOV;} values {$:initialConditions;}}',
+                          'outlet':'outlet{category outlet; type subSonic; patches (".*x-max.*" ".*y-max.*"); options {returnFlow default;} values {$:initialConditions;}}',
+                          'walls':'walls{category wall; type slip; patches (".*z-max.*"); values {$:initialConditions;}}'
                           }
-    domainWallDictHalf = {'inlet':'inlet{category inlet; type subSonic; patches (x-min); options {flowSpecification fixedVelocity;} values {$:initialConditions;}}',
-                          'ground':'ground{category wall; type noSlip; patches (z-min); options {wallFunction highReynolds; motion GROUND_MOV;} values {$:initialConditions;}}',
-                          'outlet':'outlet{category outlet; type subSonic; patches (x-max); options {returnFlow default;} values {$:initialConditions;}}',
-                          'walls':'walls{category wall; type slip; patches (z-max y-min); values {$:initialConditions;}}',
-                          'symmetry':'symmetry{category symmetry; type symmetry; patches (y-max);}'
+    domainWallDictHalf = {'inlet':'inlet{category inlet; type subSonic; patches (".*x-min.*"); options {flowSpecification fixedVelocity;} values {$:initialConditions;}}',
+                          'ground':'ground{category wall; type noSlip; patches (".*z-min.*"); options {wallFunction highReynolds; motion GROUND_MOV;} values {$:initialConditions;}}',
+                          'outlet':'outlet{category outlet; type subSonic; patches (".*x-max.*"); options {returnFlow default;} values {$:initialConditions;}}',
+                          'walls':'walls{category wall; type slip; patches (".*z-max.*" ".*y-min.*"); values {$:initialConditions;}}',
+                          'symmetry':'symmetry{category symmetry; type symmetry; patches (".*y-max.*");}'
                           }
     internalDomainDict = {'inlet':'NAME{category inlet; type subSonic; patches (PATCHNAME); options {flowSpecification fixedVelocity;} values {INITIAL_CONDITIONS}}',
                           'movingwall':'NAME{category wall; type noSlip; patches PATCHNAME); options {wallFunction highReynolds; motion moving;} values {INITIAL_CONDITIONS}}',
@@ -614,12 +614,12 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                 geomString = geomString.replace('WALL_MODEL',geomWallModel).replace('WH_ORIG',whOrig).replace('WH_AXIS',whAxis).replace('WH_VEL',whVel).replace('GEOM_NAME',geom.split('.')[0])
                 caseSetupStringArray.append(geomString)
 
-            else:
-            #if geom is not a rotating geometry then use the default no-slip patch
-                geomString = bcStrings['GEOM']
-                geomString = geomString.replace('WALL_MODEL',geomWallModel).replace('WH_ORIG',whOrig).replace('WH_AXIS',whAxis).replace('WH_VEL',whVel).replace('GEOM_NAME',geom.split('.')[0])
-                
-                caseSetupStringArray.append(geomString)
+        else:
+        #if geom is not a rotating geometry then use the default no-slip patch
+            geomString = bcStrings['GEOM']
+            geomString = geomString.replace('WALL_MODEL',geomWallModel).replace('WH_ORIG',whOrig).replace('WH_AXIS',whAxis).replace('WH_VEL',whVel).replace('GEOM_NAME',geom.split('.')[0])
+            
+            caseSetupStringArray.append(geomString)
                 
     caseSetupStrings = '\n'.join(caseSetupStringArray)
     

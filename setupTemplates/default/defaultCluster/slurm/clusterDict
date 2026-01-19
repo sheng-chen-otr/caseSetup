@@ -57,7 +57,7 @@
 
             "exportEnsight":"if [ $? != 0 ]; then exit 1; fi; echo \"Running foamToEnsight...\"; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec foamToEnsight -parallel -latestTime -noZero >> log.EnSight;",
 
-            "postProcessing":"if [ -d postProcessing/surfaces ]; then sbatch postScript; echo \"Export successful!\" fi;"
+            "postProcessing":"if [ -d postProcessing/surfaces ]; then sbatch postScript; echo \"Export successful!\"; fi;"
 
             },
 
