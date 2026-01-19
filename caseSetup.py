@@ -133,6 +133,7 @@ def getTemplateType(SETUP):
 def writeSnappy(geomDict,fullCaseSetupDict):
     print('\n\tPreparing geometry for writing to snappyHexMeshDict...')
     snappyTemplate = fullCaseSetupDict['GLOBAL_REFINEMENT']['TEMPLATE_TYPE'][0]
+    
     snappyTemplatePath = '%s/defaultDicts/system/%s' % (templateLoc,snappyTemplate)
     snappyRefinementPath = '%s/defaultDicts/system/snappyRefinementDict' % (templateLoc)
     snappyQualityPath = '%s/defaultDicts/system/meshQualityDict' % (templateLoc)
@@ -141,19 +142,30 @@ def writeSnappy(geomDict,fullCaseSetupDict):
         print('\t\tsystem directory not found, creating!')
         os.system('mkdir %s/%s/system' % (path,case))
         print('\t\tUsing snappyHexMesh template: %s' % (snappyTemplate))
-        print('\t\tCopying snappyHexMesh template from: %s' % (snappyTemplatePath))
-        os.system('cp %s %s/%s/system/snappyHexMeshDict' % (snappyTemplatePath,path,case))
+        if not 'ansa' in snappyTemplate.lower():
+            print('\t\tCopying snappyHexMesh template from: %s' % (snappyTemplatePath))
+            os.system('cp %s %s/%s/system/snappyHexMeshDict' % (snappyTemplatePath,path,case))
+        else:
+            print('\t\tUsing ansaMesh!')
     else:
         print('\t\tUsing snappyHexMesh template: %s' % (snappyTemplate))
-        print('\t\tCopying snappyHexMesh template from: %s' % (snappyTemplatePath))
-        os.system('cp %s %s/%s/system/snappyHexMeshDict' % (snappyTemplatePath,path,case))
+        if not 'ansa' in snappyTemplate.lower():
+            print('\t\tCopying snappyHexMesh template from: %s' % (snappyTemplatePath))
+            os.system('cp %s %s/%s/system/snappyHexMeshDict' % (snappyTemplatePath,path,case))
+        else:
+            print('\t\tUsing ansaMesh!')
+
     
     os.system('cp %s %s/%s/system/snappyRefinementDict' % (snappyRefinementPath,path,case))
     os.system('cp %s %s/%s/system/meshQualityDict' % (snappyQualityPath,path,case))
+    ############
+    #if using ansa, doesn't write out snappy things!
+    ############
+    if 'ansa' in snappyTemplate.lower():
+        return geomDict,fullCaseSetupDict
     if not os.path.exists(snappyTemplatePath):
         print('ERROR! TEMPLATE_TYPE in path %s is invalid!' % (snappyTemplatePath))
-        exit()
-    
+        exit()   
     snappyDictSections = ['GEOMETRY','FEATURE_EDGE','REFINEMENT_SURFACES','REFINEMENT_REGIONS','LOC_IN_MESH','LAYERS','LOC_IN_MESH','REF_ANGLE','DEF_EX_RATIO']
     snappyDict = {}
     

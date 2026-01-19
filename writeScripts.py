@@ -72,8 +72,12 @@ def makeScripts(templateLoc,fullCaseSetupDict):
     exportScriptArray = []
     postScriptArray = []
     
-    for line in clusterDict['meshing'].keys():
-        meshingScriptArray.append(clusterDict['meshing'][line])
+    if 'ansa' in fullCaseSetupDict['GLOBAL_REFINEMENT']['TEMPLATE_TYPE'][0].lower():
+        for line in clusterDict['ansaMesh'].keys():
+            meshingScriptArray.append(clusterDict['ansaMesh'][line])
+    else:
+        for line in clusterDict['snappyHexMesh'].keys():
+            meshingScriptArray.append(clusterDict['snappyHexMesh'][line])
     meshingScript = '\n'.join(meshingScriptArray)
 
     for line in clusterDict['solve'].keys():

@@ -28,11 +28,7 @@ addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG']
 
 
 def main():
-    # if os.path.exists(case + '.ansa.gz'):
-    #     print('Found existing ansa file, using instead!')
-    #     base.Open(case + '.ansa.gz')
-    #     exportAnsaMesh()
-    #     return
+    
     getTemplateType()
     defaultDict = getGlobalDefaults()
    
@@ -53,6 +49,17 @@ def main():
         print('\t\t' + geom)
         for var in geomDict[geom].keys():
             print('\t\t\t%s: %s' % (var,geomDict[geom][var]))
+
+    if os.path.exists(case + '.ansa.gz'):
+        print('Found existing ansa file, using instead!')
+        base.Open(case + '.ansa.gz')
+        layerCoverage()
+
+
+
+
+        #exportAnsaMesh()
+        return
     
     importGeometry(geomDict)
     importDomain()
@@ -63,6 +70,125 @@ def main():
     
     
     # getAllParts(geomDict)
+
+def layerCoverage(geomDict):
+        #calculate layer coverage on each PID
+
+        print("\n\t\tCalculating layer coverage per PID...")
+
+        #first set result of number of layers
+        results = base.CollectEntities(ansa.constants.OPENFOAM, None, 'RESULT')
+        for result in results:
+            ret = base.GetEntityCardValues(ansa.constants.OPENFOAM, result, ['__id__', 'Name', 'Status'])
+            if ret['Status'] == 'Built' and ret['Name'] == "Hextreme Octree Mesh - Number of layers":
+                base.SetCurrentEntity(result)
+
+        totalLayerCellsGrown = 0
+        totalLayerCellsRequested = 0
+
+        #collect mesh parts of Hextreme Octree
+
+        octree = base.GetEntity(ansa.constants.NASTRAN, "HEXTREME OCTREE", 1)
+        octreeAreas = mesh.GetAreasFromOctree(octree)
+        for area in octreeAreas:
+            parts = mesh.GetPartsFromOctreeArea(area = area)
+            layersBin = {}
+
+            
+            for part in parts:
+                partName = part._name.split('_')[0]
+                requestedLayers = int(geomDict[partName]['layers'])
+                if requestedLayers == 0:
+                    print('\t\t\tRequested layers is 0, skipping!')
+                if requestedLayers != 0:
+                    print("t\t\tRequested prism layers for %s region: %s" % (partName, str(requestedLayers)))
+                    #create bins for reporting layer growth
+                    for i in range(0, targetLayers+1):
+                        layersBin.update({i: 0})
+
+                
+        return
+        octreeParts = ansa.mesh.GetPartsFromOctreeArea(octree)
+        for part in octreeParts:
+            partName = ansa.base.GetEntityCardValues(ansa.constants.OPENFOAM, part, ['Name'])['Name']
+            ansa.base.Or(part)
+
+            #match partName with meshArea in SESSION to grab target number of prism layers
+            for area in self.meshAreas:
+                if partName == area.octreeFilterName:
+                    targetLayers = int(area.meshParametersDict['nLayers'][0])
+                    layersBin = {}
+
+                    if targetLayers == 0:
+                        logger.debug("\n%s" % partName)
+                        logger.debug("     Zero requested prism layers. Skipping...")
+                    if targetLayers != 0:
+                        print("Requested prism layers for %s region: %s" % (partName, str(targetLayers)))
+                        #show only the surface mesh that is part of the volume mesh
+                        ansa.base.Not(area.ansaGroupEntity)
+
+                        #create bins for reporting layer growth
+                        for i in range(0, targetLayers+1):
+                            layersBin.update({i: 0})
+
+                        #gather all visible shells
+                        partShells = ansa.base.CollectEntities(ansa.constants.OPENFOAM, None, ['POLYGON', 'SHELL'], filter_visible=True)
+
+                        #count of surface elements
+                        faceElements = len(partShells)
+
+                        #pull total number of layer results for each surface shell
+                        partShellsResults = ansa.base.ShellResult(partShells)
+
+                        layerCellsGrown = 0
+                        #assume requested layers is equal to number of surface elements times requested number of layers
+                        layerCellsRequested = targetLayers*faceElements
+
+                        for shellResult in partShellsResults:
+                            #for each element, update bin for number of layer cells grown
+                            layersBin.update({int(shellResult[1]): (layersBin[shellResult[1]]+1)})
+                            #update total number of layer cells grown for the PID
+                            layerCellsGrown+=shellResult[1]
+
+                        #update total number of prism layer cells grown and requested
+                        totalLayerCellsGrown+=layerCellsGrown
+                        totalLayerCellsRequested+=layerCellsRequested
+
+                        logger.debug("\n%s" % partName)
+                        logger.debug("     Layer cells requested: %s" % str(layerCellsRequested))
+                        logger.debug("     Layer cells delivered: %s" % str(int(layerCellsGrown)))
+                        if layerCellsRequested == 0:
+                            logger.debug("     Zero prism layer cells grown.")
+                        if layerCellsRequested != 0:
+                            logger.debug("     Delivery rate: %0.2f%%" % (100*layerCellsGrown/layerCellsRequested))
+                            for line in layersBin:
+                                logger.debug("     Faces with %0.0f layer(s) grown: %0.0f       %0.2f%% of faces in PID" % (line, layersBin[line], 100*layersBin[line]/faceElements))
+
+        logger.debug("\nTotal layer cells requested: %s" % str(totalLayerCellsRequested))
+        logger.debug("Total layer cells delivered: %s" % str(int(totalLayerCellsGrown)))
+        logger.debug("Total layer cells requested: %0.2f%%\n" % (100*totalLayerCellsGrown/totalLayerCellsRequested))
+
+
+def runQualityImprovement(method='fixQuality'):
+    #runs either fixQuality or reconstruct
+    #method = self.globalMeshDefaults['globalQualityCriteriaFix'][1]
+    #show only volume mesh entity
+    volumeEnt = ansa.base.CollectEntities(ansa.constants.OPENFOAM, None, 'VOLUME')[0]
+    ansa.base.Or(volumeEnt)
+
+    #run deck report pre quality fix and save to log directory
+    #ansa.utils.DeckInfo(os.path.join(log_dir, "deckinfo_preQual.html"), 'VISIBLE', 'HTML')
+
+    if method == 'fixQuality':
+        print("\n\t\tImproving quality criteria by appying %s" % method)    
+        ansa.mesh.FixQualSolids()
+        ansa.utils.DeckInfo("deckinfo_fixQuality.html", 'VISIBLE', 'HTML')
+
+    if method == 'reconstruct':
+        print("\n\t\tImproving quality criteria by appying %s" % method)
+        ansa.mesh.ReconstructSolids()
+        ansa.utils.DeckInfo("deckinfo_fixQuality.html", 'VISIBLE', 'HTML')
+
 
 def saveAnsa(caseName):
     print('\t\tSaving ANSA file...')
@@ -302,7 +428,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
     geomMparfile['pid_bounds'] = 'true'
     geomMparfile['feature_bounds'] = 'true'
     geomMparfile['proximity'] = 'true'
-    geomMparfile['proximity_minimum_length'] = calculateCellSize(minGeomLevel+1,baseSize)
+    #geomMparfile['proximity_minimum_length'] = calculateCellSize(minGeomLevel+1,baseSize)
+    geomMparfile['proximity_minimum_length'] = 1
     if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0].lower() == 'half':
         print('\t\t\tSymmetry mode selected as half!')
         geomMparfile['hextreme_connect_to_symmetry'] = 'true'
@@ -353,7 +480,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
                                      'hextreme_layers_first_layer_height':float(firstLayerHeight),
                                      'hextreme_layers_size_mode':layerType.title(),
                                      'distortion_angle':refAngle,
-                                     'proximity_minimum_length':calculateCellSize(int(maxLevel)+int(edgeIncrement),baseSize),
+                                     #'proximity_minimum_length':calculateCellSize(int(maxLevel)+int(edgeIncrement),baseSize),
+                                     'proximity_minimum_length':1,
                                      'sharp_edges_length':calculateCellSize(int(maxLevel)+int(edgeIncrement),baseSize),
                                      'free_edges_length':calculateCellSize(int(maxLevel)+int(edgeIncrement),baseSize),
 
@@ -372,7 +500,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
                 partMparfile.update({'octree_parameters_name':geom.split('.')[0],
                                      'curvature_minimum_length':calculateCellSize(int(refLevel)+1,baseSize),
                                      'sharp_edges_length':calculateCellSize(int(refLevel)+1,baseSize),
-                                     'proximity_minimum_length':calculateCellSize(int(refLevel)+1,baseSize),
+                                     #'proximity_minimum_length':calculateCellSize(int(refLevel)+1,baseSize),
+                                     'proximity_minimum_length':1,
                                      'maximum_surface_length':calculateCellSize(int(refLevel),baseSize),
                                      'maximum_length':calculateCellSize(int(refLevel),baseSize),
                                      'hextreme_number_of_layers_value':int(nlayers),
@@ -397,6 +526,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
     
     saveAnsa(case)
     mesh.RunOctree(global_octree)
+    runQualityImprovement()
     saveAnsa(case)
 
 
