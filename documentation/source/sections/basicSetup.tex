@@ -1,0 +1,32 @@
+\section{Basic Setup}
+To start, you would need a case directory created in your \codeword{CASES} directory. Once created, you will not have a \codeword{caseSetup} file just yet. To get a file, execute the following line in your case directory,
+\begin{lstlisting}
+    caseSetup --new
+\end{lstlisting}
+A fresh \codeword{caseSetup} file will be generated. The inside of the file will look like this:
+\begin{lstlisting}
+    [DEFAULTS]
+    DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultBCSetup defaultGlobalDecomposition defaultGlobalMaterial defaultGlobalRefinement defaultPost
+    ADDON_MODULES =
+
+    [TITLES]
+    CASENAME = casename
+    CASEDESCRP = default description
+    JOBCODE = TS
+
+    [GEOMETRY]
+    GEOM = default.stl,1,8,5,1.1,high
+\end{lstlisting}
+The \codeword{DEFAULT_MODULES} line controls the settings that are available. If the setting is not visible, it just means that it will use the default setup. Each setting here is explained below:
+\begin{itemize}
+    \item \codeword{CASENAME} - the case name for your case, it does not do anything at this time, but in the future it could be added to the post processing images.
+    \item \codeword{CASEDESCRP} - case description, see \codeword{CASENAME}
+    \item \codeword{JOBCODE} - Two letter initial for the job you are running, just helps identify the job that's running on the cluster queue.
+    \item \codeword{GEOM} - List of geometries to use in the case. A comma separates each setting for that particular geometry, the next geometry goes on the subsequent line.
+    \begin{itemize}
+        \item What each column represents: 
+        \begin{lstlisting}
+            GEOMETRY_FILE_NAME,SCALE,MESH_LEVEL,INFLATION_LAYERS,INFLATION_LAYER_GROWTH_RATE,HIGH OR LOW REYNOLDS WALL MODEL
+        \end{lstlisting}
+    \end{itemize}
+\end{itemize}

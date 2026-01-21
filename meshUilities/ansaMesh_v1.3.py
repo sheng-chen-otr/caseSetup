@@ -226,7 +226,7 @@ def runQualityImprovement(method='fixQuality'):
 
     if method == 'fixQuality':
         print("\n\t\tImproving quality criteria by appying %s" % method)    
-        ansa.mesh.FixQualSolids()
+        ansa.mesh.FixQualSolids(0)
         ansa.utils.DeckInfo("deckinfo_fixQuality.html", 'VISIBLE', 'HTML')
 
     if method == 'reconstruct':

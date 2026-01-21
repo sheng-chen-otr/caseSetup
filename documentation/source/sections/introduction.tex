@@ -47,3 +47,18 @@ This process requires a specific directory structure for your cases to work. It 
 \end{itemize}
 
 The definitions for each folder is described here:
+\begin{itemize}
+    \item \codeword{01\_incoming(YYYY-MM-DD)} - Contains all the incoming geometry from other departments or other files which are required for the simulation. Each instance of CAD delivered to the department must be in a dated folder with a short descriptive name.
+    \item \codeword{02\_references} - Contains all the geometry files that are used in the simulation. Sub-directories are ANSA and MSH
+    \item \codeword{ANSA} - Contains all the ANSA files that are used in the simulation, ideally contains the CAD files within them and not just the tri-surfaces. Should be saved as ".gz" for smaller file size.
+    \item \codeword{MSH} - Contains all the tri-surfaces that are used in the simulation. Ideally this is where the original copies of all the STLs or OBJ files live. Each trial folder contains only a symbolic link referencing to this directory to reduce the number and size of geometry files.
+    \item \codeword{03_reports} - Contains all the reports placed by the \codeword{pptGeneration} process or placed by the user manually.
+    \item \codeword{CASES} - Contains all the simulation runs, this is where each case/trial folder lives, each trial is denoted by a 3 digit number XXX.
+    \item \codeword{caseSetup} - This is the file that controls the simulations and the outputs.
+    \item \codeword{system} - This directory contains the files required for the simulation to run.
+    \item \codeword{constant} - Like \codeword{system} this directory also contains the files required for the simulation and also in \codeword{constant/triSurfaces} is where the geometry for the simulation is stored for this case. It is ideally a symbolic link so that repeated geometries are not copied many times in many cases.
+\end{itemize} 
+
+Once all these directories are setup, we are ready to explore the rest of the features.
+
+
