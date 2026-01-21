@@ -454,7 +454,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
     layerType = fullCaseSetupDict['GLOBAL_REFINEMENT']['LAYER_TYPE'][0]
     geomMparfile = readMparFile(os.path.join(ansaTemplateLoc,'octree_geom.ansa_mpar'))
     geomMparfile['octree_parameters_name'] = 'geom_octree'
-    geomMparfile['curvature_minimum_length'] = calculateCellSize(minGeomLevel+1,baseSize)
+    geomMparfile['curvature_minimum_length'] = calculateCellSize(minGeomLevel+2,baseSize)
     geomMparfile['maximum_surface_length'] = calculateCellSize(minGeomLevel,baseSize)
     geomMparfile['maximum_length'] = calculateCellSize(minGeomLevel,baseSize)
     geomMparfile['distortion_angle'] = refAngle
@@ -464,8 +464,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
     geomMparfile['sharp_edges_check_box'] = 'true'
     geomMparfile['free_edges_check_box'] = 'true'
     geomMparfile['intersection_lines_check_box'] = 'true'
-    geomMparfile['self_proximity'] = 'true'
-    geomMparfile['hextreme_number_of_layers_value'] = 3
+    geomMparfile['self_proximity'] = 'false'
+    geomMparfile['hextreme_number_of_layers_value'] = 6
     geomMparfile['hextreme_layers_growth_rate'] = expansionRatio
     geomMparfile['hextreme_layers_first_layer_height'] = firstLayerHeight
     geomMparfile['hextreme_layers_size_mode'] = layerType.title()
@@ -543,8 +543,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
 
                 
                 partMparfile.update({'octree_parameters_name':geom.split('.')[0],
-                                     'curvature_minimum_length':calculateCellSize(int(refLevel)+1,baseSize),
-                                     'sharp_edges_length':calculateCellSize(int(refLevel)+1,baseSize),
+                                     'curvature_minimum_length':calculateCellSize(int(refLevel)+2,baseSize),
+                                     'sharp_edges_length':calculateCellSize(int(refLevel)+2,baseSize),
                                      #'proximity_minimum_length':calculateCellSize(int(refLevel)+1,baseSize),
                                      'proximity_minimum_length':1,
                                      'maximum_surface_length':calculateCellSize(int(refLevel),baseSize),

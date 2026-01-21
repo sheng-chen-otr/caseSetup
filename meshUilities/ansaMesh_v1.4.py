@@ -464,7 +464,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
     geomMparfile['sharp_edges_check_box'] = 'true'
     geomMparfile['free_edges_check_box'] = 'true'
     geomMparfile['intersection_lines_check_box'] = 'true'
-    geomMparfile['self_proximity'] = 'true'
+    geomMparfile['self_proximity'] = 'false'
     geomMparfile['hextreme_number_of_layers_value'] = 3
     geomMparfile['hextreme_layers_growth_rate'] = expansionRatio
     geomMparfile['hextreme_layers_first_layer_height'] = firstLayerHeight
