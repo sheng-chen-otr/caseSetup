@@ -8,7 +8,7 @@ import argparse
 import matplotlib.pyplot as plt
 import scipy.stats as st
 import glob
-from plotForces import *
+#from plotForces import *
 from summary import *
 #from estimateStatisticalError import *
 from forceConvergencePlot import *

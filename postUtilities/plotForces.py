@@ -105,7 +105,8 @@ def makePandasArrays(args,casePathDict):
 		
 		casePathDict[case]['data'] = forceData
 		#calculate center of pressure
-		forceData['CoP'] = forceData['Cl(f)'].div(forceData['Cl']).mul(100)
+		print('Calculating CoP')
+		forceData['CoP'] = forceData['Cl(f)'].to_numpy()/forceData['Cl'].to_numpy()*(100)
 		maxCurrentTime = max(forceData['#Time'])
 
 		if args.avgTime != None:
@@ -161,7 +162,11 @@ def plotData(args,caseLoc,casePathDict):
 			avgStart = casePathDict[case]['avgStart']
 			
 			if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
-				caseMeans.append(np.mean(data[var][data['#Time']>=avgStart])*2) #using this to calculate the range for scaling axis
+				if var == 'CoP':
+					caseMeans.append(np.mean(data[var][data['#Time']>=avgStart]))
+				else:
+					caseMeans.append(np.mean(data[var][data['#Time']>=avgStart])*2) #using this to calculate the range for scaling axis
+
 				#caseMax.append(max(data[var][data['#Time']>=avgStart])*2)
 				#caseMins.append(min(data[var][data['#Time']>=avgStart])*2)
 			else:
@@ -169,6 +174,7 @@ def plotData(args,caseLoc,casePathDict):
 				#caseMax.append(max(data[var][data['#Time']>=avgStart]))
 				#caseMins.append(min(data[var][data['#Time']>=avgStart]))
 			if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
+				
 				ax.plot(rawData['#Time'],rawData[var]*2,label=case,alpha=0.5)
 			else:
 				ax.plot(rawData['#Time'],rawData[var],label=case,alpha=0.5)
@@ -178,7 +184,10 @@ def plotData(args,caseLoc,casePathDict):
 						if statvar == 'SampleMean':
 							statvarlabel = 'Fwd. Avg'
 							if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
-								ax.plot(avgData[var+'StatTime'],avgData[var+statvar]*2,label=case + '(%s)'% (statvarlabel),linestyle = '--')
+								if var == 'CoP':
+									ax.plot(avgData[var+'StatTime'],avgData[var+statvar],label=case + '(%s)'% (statvarlabel),linestyle = '--')
+								else:
+									ax.plot(avgData[var+'StatTime'],avgData[var+statvar]*2,label=case + '(%s)'% (statvarlabel),linestyle = '--')
 							else:
 								ax.plot(avgData[var+'StatTime'],avgData[var+statvar],label=case + '(%s)'% (statvarlabel),linestyle = '--')
 						elif statvar == 'CI':
@@ -186,7 +195,12 @@ def plotData(args,caseLoc,casePathDict):
 							ci = (avgData[var+'UpperCI']-avgData[var + 'LowerCI'])/2
 							
 							if 'half' in caseSetupConfig['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower():
-								ax.fill_between(avgData[var+'StatTime'],avgData[var+'SampleMean']*2+ci,
+								if var == 'CoP':
+									print('WHATTTTT')
+									ax.fill_between(avgData[var+'StatTime'],avgData[var+'SampleMean']+ci,
+											avgData[var+'SampleMean']-ci,label=case + '(%s)'% (statvarlabel),alpha = 0.5)
+								else:
+									ax.fill_between(avgData[var+'StatTime'],avgData[var+'SampleMean']*2+ci,
 											avgData[var+'SampleMean']*2-ci,label=case + '(%s)'% (statvarlabel),alpha = 0.5)
 							else:
 								ax.fill_between(avgData[var+'StatTime'],avgData[var+'SampleMean']+ci,
