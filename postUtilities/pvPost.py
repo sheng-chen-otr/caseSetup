@@ -1002,8 +1002,7 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
     
     print('\t\tImage Save Time (s): ' + str(round(time.time()-IMAGE_SAVE_START,3)) + '\n\n')
     
-    
-        
+
 
 def generateDefaultViews(LREF,CREF,FREF,WREF):
     print('\t\tCreating default views...')
