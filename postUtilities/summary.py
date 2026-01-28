@@ -50,8 +50,9 @@ def main():
         for key in porousData.keys():
             rowNames.append(str(key))
             data.append(str(porousData[key]))
-    except:
+    except Exception as e:
         print('\tUnable to get porous media data, skipping...')
+
     summary = pd.DataFrame(columns=rowNames)
     summary.loc[-1] = data
     print("\n\n")
@@ -323,10 +324,10 @@ def getOfVersion(path):
         version = "N/A"
     return runDate, runTime,version,solver
 #get the information required for radiator flow rates   
-def getPorousData():
+def getPorousData(path,case):
     print("Getting porous data...")
     postProcessingPath = "%s/%s/postProcessing" % (path,case)
-    if os.path.isdir("postProcessing"):
+    if os.path.isdir(postProcessingPath):
         ppFileList = []
         for dir in os.listdir(postProcessingPath):
             if os.path.isdir("%s/%s" % (postProcessingPath,dir)) and dir.startswith('POR'):
@@ -337,10 +338,16 @@ def getPorousData():
             return porousData
         for file in ppFileList:
             surfaceName = file.split('/')[-3]
+            if 'inlet' in surfaceName.lower() or 'outlet' in surfaceName.lower():
+                print('')
+            else:
+                continue
             porousData[surfaceName + ' Volume Flow Rate (m^3/s)'] = []
             porousData[surfaceName + ' Velocity (m/s)'] = []
             porousData[surfaceName + ' Area (m^2)'] = []
             surfaceVals = open(file,'r').readlines()
+            if len(surfaceVals) == 0:
+                continue
             surfArea = 0
             surfVel = 0
             volFlowRate = 0
@@ -351,7 +358,7 @@ def getPorousData():
                 if 'Area' in line:
                     surfArea = float(line.split(':')[1])
                 n = n + 1
-            print(surfaceFieldAvg.columns)
+            #print(surfaceFieldAvg.columns)
             surfVel = surfaceFieldAvg['areaNormalAverage(UMean)'][0]
             volFlowRate = surfArea*surfVel
             porousData[surfaceName + ' Volume Flow Rate (m^3/s)'] = str(round(volFlowRate,3))
