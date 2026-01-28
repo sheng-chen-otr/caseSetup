@@ -91,13 +91,14 @@ def generate_summary():
     rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
     data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
     try:
-        porousData = getPorousData()
+        porousData = getPorousData(path,case)
         #adding porous data
         for key in porousData.keys():
             rowNames.append(str(key))
             data.append(str(porousData[key]))
-    except:
+    except Exception as e:
         print('\tUnable to get porous media data, skipping...')
+        print(e)
     summary = pd.DataFrame(columns=rowNames)
     summary.loc[-1] = data
     print("\n\n")
