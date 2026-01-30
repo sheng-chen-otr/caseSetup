@@ -26,7 +26,345 @@ The \codeword{DEFAULT_MODULES} line controls the settings that are available. If
     \begin{itemize}
         \item What each column represents: 
         \begin{lstlisting}
-            GEOMETRY_FILE_NAME,SCALE,MESH_LEVEL,INFLATION_LAYERS,INFLATION_LAYER_GROWTH_RATE,HIGH OR LOW REYNOLDS WALL MODEL
+            GEOMETRY_FILE_NAME,SCALE,MESH_LEVEL,INFLATION_LAYERS,INFLATION_LAYER_GROWTH_RATE,WALL_MODEL
         \end{lstlisting}
     \end{itemize}
 \end{itemize}
+Each geometry that is required in this run and is in its own file should be listed here, the settings shown above will be applied to all geometries in that file. If a different settings are required to be applied, that geometry should be broken out into it's own file. A common example is wheels. 
+
+\subsection{Rotating Geometries}
+The wheels and tires are spinning and therefore should have a rotating wall boundary condition applied, therefore it MUST be in its own part. Example,
+\begin{lstlisting}
+    [DEFAULTS]
+    DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultBCSetup defaultGlobalDecomposition defaultGlobalMaterial defaultGlobalRefinement defaultPost
+    ADDON_MODULES =
+
+    [TITLES]
+    CASENAME = casename
+    CASEDESCRP = default description
+    JOBCODE = TS
+
+    [GEOMETRY]
+    GEOM = body.obj.gz,1,8,5,1.1,high
+            ROTA-fr-wh-lhs,1,8,5,1.1,high
+            ROTA-fr-wh-rhs,1,8,5,1.1,high
+            ROTA-rr-wh-lhs,1,8,5,1.1,high
+            ROTA-rr-wh-rhs,1,8,5,1.1,high
+\end{lstlisting}
+Notice the prefix \codeword{ROTA}, it lets \codeword{caseSetup} know that this geometry will have a rotating wall boundary condition applied. Upon running \codeword{caseSetup}, if it's the first time with this set of geometry, \codeword{caseSetup} will stop and let you know that the following blocks have been added. The user should check that these are the appropriate settings for each wheel geometry.
+
+\textbf{NOTE:} If using a plinth, ensure that the plinth is a separate geometry, else the automatic wheel center calculation will include the plinth in the radius calculation resulting in an incorrect radius and angular velocity!
+
+\begin{lstlisting}
+    [ROTA-fr-wh-lhs]
+    WH_RAD = default
+    WH_CENTER = default
+    WH_AXIS = default
+    ROT_WH = True
+
+    [ROTA-fr-wh-rhs]
+    WH_RAD = default
+    WH_CENTER = default
+    WH_AXIS = default
+    ROT_WH = True
+
+    [ROTA-rr-wh-lhs]
+    WH_RAD = default
+    WH_CENTER = default
+    WH_AXIS = default
+    ROT_WH = True
+
+    [ROTA-rr-wh-rhs]
+    WH_RAD = default
+    WH_CENTER = default
+    WH_AXIS = default
+    ROT_WH = True
+
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{WH_RAD} [[\codeword{float,m}]] - wheel radius, distance from wheel center to ground (\codeword{r}, \codeword{default})
+    \item \codeword{WH_CENTER} [[\codeword{float,m}]] [[\codeword{float,m}]] [[\codeword{float,m}]] - wheel center coordinates in global coordinates system (\codeword{x} \codeword{y} \codeword{z}, \codeword{default})
+    \item \codeword{WH_AXIS} [[\codeword{float,m}]] [[\codeword{float,m}]] [[\codeword{float,m}]] - wheel axis of rotation from, using right hand rule with respect to the global coordinate system (\codeword{x} \codeword{y} \codeword{z}, \codeword{default})
+    \item \codeword{WH_AXIS} [\codeword{bool}] - activate rotating wall or use no-slip condition (\codeword{true}, \codeword{false})
+\end{itemize}
+Using \codeword{default} option will trigger the automatic calculation but manual input of values is still possible. To speed up \codeword{caseSetup} it is recommended to copy the values output by the calculation in the termial and input them into the caseSetup if coordinates and axis values are not expected to change for subsequent runs.
+
+\subsection{Controlling Run Settings}
+Deleting the module \codeword{defaultGlobalControl} will expose the following block:
+\begin{lstlisting}
+    [GLOBAL_CONTROL]
+    STARTFROM = latestTime
+    STARTTIME = 0
+    ENDTIME = 1000
+    DT = 1
+    WRITEINT = 500
+    PURGEINT = 1
+    AVGSTART = 500
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{STARTFROM} [\codeword{str}] - which time to start the simulation at, \codeword{latestTime} will start the simulation at the lastest available time if running for an existing solution, \codeword{startTime} will have the simulation start at the value specified in \codeword{STARTTIME} (\codeword{latestTime}, \codeword{startTime})
+
+    \item \codeword{STARTTIME} [\codeword{float/int,s}] - time to start the simulation at, will be used if \codeword{STARTFROM} is specified as \codeword{startTime}, must use \codeword{int} if steady run is used, or \codeword{float} if a transient run is selected
+
+    \item \codeword{ENDTIME} [\codeword{float/int,s}] - final time or time step to end the simulation at, must use \codeword{int} if steady run is used, or \codeword{float} if a transient run is selected
+
+    \item \codeword{DT} [\codeword{float/int,s}] - timestep size, must use \codeword{1} if steady run is used, or any \codeword{float} if a transient run is selected
+    
+    \item \codeword{WRITEINT} [\codeword{float/int,s}] - interval which the data is written to disk for restart or post-processing use, must use \codeword{int} if steady run is used, or any \codeword{float} if a transient run is selected (\textbf{CAUTION:} saving too frequently can cause increased solve time and increased storage usage!)
+    
+    \item \codeword{PURGEINT} [\codeword{int}] - number of written timesteps to keep, will only keep \codeword{PURGEINT} number of time steps (aside from \codeword{STARTTIME} or \codeword{0}) 
+    
+    \item \codeword{DT} [\codeword{float/int,s}] - when to start averaging flow variables, must use \codeword{int} if steady run is used, or \codeword{float} if a transient run is selected
+\end{itemize}
+
+\subsection{Controlling Simulation Settings}
+Deleting the module \codeword{defaultGlobalSimControl} will expose the following block:
+\begin{lstlisting}
+    [GLOBAL_SIM_CONTROL]
+    SIM_TYPE = steady
+    SIM_INIT = potential
+    SIM_SYM = half
+    TURB_MODEL = kosst
+    INIT_P = default
+    INIT_K = default
+    INIT_OMEGA = default
+    INIT_NUT = default
+    INIT_NUTILDA = default
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{SIM_TYPE} [\codeword{str}] - what type of simulation (\codeword{steady}, \codeword{transient})
+    
+    \item \codeword{SIM_INIT} [\codeword{str}] - what type of initialization, \codeword{steady} only available when \codeword{SIM_TYPE} = \codeword{transient} (\codeword{none}, \codeword{potential}, \codeword{steady})
+    
+    \item \codeword{SIM_SYM} [\codeword{str}] - simulation symmetry type, reccomended to run in \codeword{half} if not doing yaw and vehicle is mostly symmetrical, use \codeword{full} if running internal flow (\codeword{half}, \codeword{full})
+    
+    \item \codeword{TURB_MODEL} [\codeword{str}] - turbulence model applied, \codeword{transient} runs can only use \codeword{sa} ([\codeword{kosst},\codeword{sa}])
+    \begin{itemize}
+        \item \codeword{steady}
+        \begin{itemize}
+            \item \codeword{kosst} - \(k-\omega\) Shear Stress Transport (\(k-\omega\) SST)
+            \item \codeword{sa} - Spalart-Allmaras
+        \end{itemize}
+        \item \codeword{transient}
+        \begin{itemize}
+            \item \codeword{sa} - Spalart-Allmaras Delayed Detached Eddy Simulation (SADDES)
+        \end{itemize}
+    \end{itemize}
+
+    \item \codeword{INIT_P} [\codeword{float,Pa}] - initial conditions for pressure, reccomended to leave in default unless specific values are required (\codeword{float}, \codeword{default})
+    
+    \item \codeword{INIT_K} [\codeword{float,m2s-2}] - initial conditions for turublent kinetic energy, reccomended to leave in default unless specific values are required (\codeword{float}, \codeword{default})
+    
+    \item \codeword{INIT_OMEGA} [\codeword{float,s-1}] - initial conditions for \(\omega\) term, reccomended to leave in default unless specific values are required (\codeword{float}, \codeword{default})
+    
+    \item \codeword{INIT_NUT} [\codeword{float,m2s-1}] - initial conditions for \(\nu_t\) term, reccomended to leave in default unless specific values are required (\codeword{float}, \codeword{default})
+    
+    \item \codeword{INIT_NUTILDA} [\codeword{float,m2s-1}] - initial conditions for \(\tilde{\nu}\) term, reccomended to leave in default unless specific values are required (\codeword{float}, \codeword{default})
+\end{itemize}
+
+\subsection{Boundary Conditions}
+Deleting the module \codeword{defaultBCSetup} will expose the following block:
+\begin{lstlisting}
+    [BC_SETUP]
+    INLET_MAG = 15
+    YAW = 0
+    DRAG_VEC = default
+    LIFT_VEC = default
+    PITCH_VEC = default
+    GROUND = moving
+    REFCOR = 0.775 0 0
+    REFLEN = 1.55
+    REFWIDTH = 1
+    REFAREA = 1
+    POROSITY = yes
+    BASE_CELL_SIZE = 1.6
+    DOMAIN_SIZE = 48 16 16
+    DOMAIN_OFFSET = 0.5
+    FRT_WH_CTR = 0 0 0
+\end{lstlisting}
+
+\begin{itemize}
+    \item \codeword{INLET_MAG} [\codeword{float,ms-1}] - inlet velocity magnitude ([\codeword{float}])
+    
+    \item \codeword{YAW} [\codeword{float,deg}] - yaw angle, will only yaw in the positive direction, if \codeword{SIM_SYM} is \codeword{half}, this value not used (\codeword{float})
+    
+    \item \codeword{DRAG_VEC} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - drag force vector, following SAE J1594 convention by default (\codeword{x} \codeword{y} \codeword{z}, \codeword{default})
+    
+    \item \codeword{LIFT_VEC} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - lift force vector, following SAE J1594 convention by default (\codeword{x} \codeword{y} \codeword{z}, \codeword{default})
+    
+    \item \codeword{PITCH_VEC} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - pitch moment vector, following SAE J1594 convention by default (\codeword{x} \codeword{y} \codeword{z}, \codeword{default})
+    
+    \item \codeword{GROUND} [\codeword{str}] - ground plane boundary condition (\codeword{moving},\codeword{stationary})
+    
+    \item \codeword{REFCOR} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - point defining center of rotation, typically center of wheel projected to the ground (\codeword{x} \codeword{y} \codeword{z})
+    
+    \item \codeword{REFLEN} [[\codeword{float,m}]] - reference length, typically wheelbase length (\codeword{float})
+    
+    \item \codeword{REFWIDTH} [[\codeword{float,m}]] - reference width, typically trackwidth length (\codeword{float})
+    
+    \item \codeword{REFAREA} [[\codeword{float,m}]] - reference area, typically frontal area or \codeword{1} to have calculations done in \(C_{D}A\) (\codeword{float})
+    
+    \item \codeword{POROSITY} [\codeword{str}] - to calculate forces including forces due to porous media, recommend to leave at \codeword{yes} (\codeword{yes}, \codeword{no})
+    
+    \item \codeword{BASE_CELL_SIZE} [[\codeword{float,m}]] - base cell size of blockMesh, resulting mesh levels are calculated based off this number, recommend to leave at \codeword{1.6} (\codeword{float})
+    
+    \item \codeword{DOMAIN_SIZE} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - dimensions for blockMesh domain (\codeword{x} \codeword{y} \codeword{z})
+    
+    \item \codeword{DOMAIN_OFFSET} [[\codeword{float,m}]] - distance of \codeword{FRT_WH_CTR} to the inlet boundary as a ratio of domain \codeword{x} length, i.e. \codeword{0.5} means the \codeword{FRT_WH_CTR} is located at the center of the domain (\codeword{float})
+    
+    \item \codeword{FRT_WH_CTR} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - coordinate for the center point projected to the ground of the front wheel axle (\codeword{x} \codeword{y} \codeword{z})
+    
+
+\end{itemize}
+
+
+\subsection{Decomposition and Cluster Control}
+Deleting the module \codeword{defaultGlobalDecomposition} will expose the following block:
+\begin{lstlisting}
+    [GLOBAL_COMPUTE_SETUP]
+    QUEUE_TYPE = slurm
+    SCRIPT_VERSION = 1
+    NUM_NODES = 1
+    TASK_PER_NODE = 72
+    DECOMP = 18 2 2
+\end{lstlisting}
+
+\begin{itemize}
+    \item \codeword{QUEUE_TYPE} [\codeword{str}] - NOT ACTIVE, FOR FUTURE USE (\codeword{str})
+    
+    \item \codeword{SCRIPT_VERSION} [\codeword{int}] - NOT ACTIVE, FOR FUTURE USE (\codeword{int})
+    
+    \item \codeword{NUM_NODES} [\codeword{int}] - NOT ACTIVE, FOR FUTURE USE (\codeword{int})
+    
+    \item \codeword{TASK_PER_NODE} [\codeword{int}] - number of cores to use (\codeword{int})
+    
+    \item \codeword{DECOMP} [\codeword{int} \codeword{int} \codeword{int}] - decomposition pattern, dictates the number of divisions in each direction during decomposition, freestream direction should be the largest, the product of the 3 values must match \codeword{TASK_PER_NODE} (\codeword{x} \codeword{y} \codeword{z})
+\end{itemize}
+
+
+\subsection{Fluid Properties}
+Deleting the module \codeword{defaultMaterial} will expose the following block:
+\begin{lstlisting}
+    [GLOBAL_MATERIAL]
+    NPHASE = 1
+    MATERIAL_TYPES = air
+    VISCOSITY = 1.46e-5
+\end{lstlisting}
+
+\begin{itemize}
+    \item \codeword{NPHASE} [\codeword{int}] - NOT ACTIVE, FOR FUTURE USE (\codeword{int})
+    
+    \item \codeword{MATERIAL_TYPES} [\codeword{str}] - NOT ACTIVE, FOR FUTURE USE (\codeword{str})
+    
+    \item \codeword{VISCOSITY} [\codeword{float, m2s-1}] - fluid kinematic viscosity (\codeword{float})
+\end{itemize}
+
+
+\subsection{Meshing Control}
+Deleting the module \codeword{defaultGlobalRefinement} will expose the following block:
+\begin{lstlisting}
+    [GLOBAL_REFINEMENT]
+    TEMPLATE_TYPE = snappyTemplate1
+    MIN_GEOM_LEVEL = 8
+    REF_FEAT_ANGLE = 25
+    GEOM_REF_DIST = 0.01 0.05 0.1
+    GEOM_REF_LEVELS = 9 8 7
+    DEFAULT_WAKE_REF = defaultWake
+    LOC_IN_MESH = -1 -1 4
+    LAYER_TYPE = absolute
+    DEF_EX_RATIO = 1.2
+    REF_ANGLE = 25
+    FEAT_EDGE_ANGLE = 140
+    FEAT_EDGE_LEVEL_INC = 1
+    FIRST_LAYER_HEIGHT = 0.0001
+    FINAL_LAYER_HEIGHT = 0.001
+    FINAL_LAYER_RATIO = 0.3
+\end{lstlisting}
+
+\begin{itemize}
+    \item \codeword{TEMPLATE_TYPE} [\codeword{str}] - meshing template to use (\codeword{str})
+    \begin{itemize}
+        \item \codeword{snappyHexMesh} - template file must exist in \\ 
+        \codeword{setupTemplates/<caseSetup_template>/defaultDicts/}
+        \item \codeword{ansaMesh} - \codeword{TEMPLATE_TYPE} string must include \codeword{caseSetup} template name as well as \codeword{ansa} separated by underscores i.e. \codeword{otr_ansa_default}. The \codeword{ansa} is used to trigger the use of \codeword{ansaMesh}. The template must be located in \\
+        \codeword{setupTemplates/<caseSetup_template>/defaultANSA/}.\\
+        The last value entry in \codeword{TEMPLATE_TYPE} is the name of the template within that path and can be of any length. Just NO SPACES!
+    \end{itemize}
+
+    \item \codeword{MIN_GEOM_LEVEL} [\codeword{int}] - coarses mesh level to be used for all geometries in the case (\codeword{int})
+    
+    \item \codeword{REF_FEAT_ANGLE} [\codeword{float,deg}] - angle where curvatures with angles larger than it would trigger mesh refinement in that area, operates only for \codeword{ansaMesh} (\codeword{float})
+    
+    \item \codeword{GEOM_REF_DIST} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}] ...] - distance from the surface which the mesh level from \codeword{GEOM_REF_LEVELS} shall be applied, unlimited entries, but must match length in \codeword{GEOM_REF_LEVELS} (\codeword{float} \codeword{float} ... )
+    
+    \item \codeword{GEOM_REF_LEVELS} [\codeword{int} \codeword{int} ...] - refinement levels for each corresponding distance in \codeword{GEOM_REF_DIST} unlimited entries, but must match length in \codeword{GEOM_REF_DIST} (\codeword{int} \codeword{int} ... )
+    
+    \item \codeword{DEFAULT_WAKE_REF} [\codeword{str}] - wake refinement generated by default or use specific template (\codeword{true}, \codeword{false}, \codeword{str})
+    \begin{itemize}
+        \item if using specific template, it should exist in \\
+        \codeword{setupTemplates/<caseSetup_template>/defaultRefinements/}
+    \end{itemize}
+
+    \item \codeword{LOC_IN_MESH} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - point which defines the "inside" location of the domain, only works for \codeword{snappyHexMesh} (\codeword{float} \codeword{float})
+    
+    \item \codeword{LAYER_TYPE} [\codeword{str}] - how the layer growth occurs globally, only works for \codeword{ansaMesh}, defined in \codeword{snappyHexMesh} by template (\codeword{absolute}, \codeword{aspect})
+    \begin{itemize}
+    \item \codeword{absolute} - first layer height is defined absolutely based on \codeword{FIRST_LAYER_HEIGHT}, rest of inflation layer sizing determined by aspect ratio set for the geometry
+    
+    \item \codeword{aspect} - first layer height is defined as a ratio to cell size outside of the inflation layers, global settings currently hardcoded as \codeword{0.5}, rest of inflation layer sizing determined by aspect ratio set for the geometry
+    \end{itemize}
+
+    \item \codeword{DEF_EX_RATIO} [\codeword{float}] - global layer expansion ratio (\codeword{float})
+
+    \item \codeword{REF_ANGLE} [\codeword{float,deg}] - angle where curvatures with angles larger than it would trigger mesh refinement in that area, operates only for \codeword{snappyHexMesh} (\codeword{float})
+
+    \item \codeword{FEAT_EDGE_ANGLE} [\codeword{float,deg}] - angle under which triggers edge refinement, only works for \codeword{snappyHexMesh} (\codeword{float})
+    
+    \item \codeword{FEAT_EDGE_LEVEL_INC} [\codeword{int}] - refinement level increment for edges defined by \codeword{FEAT_EDGE_ANGLE}, only works for \codeword{snappyHexMesh} (\codeword{int})
+    
+    \item \codeword{FIRST_LAYER_HEIGHT} [[\codeword{float,m}]] - first layer height, only works for \codeword{ansaMesh} (\codeword{float})
+    
+    \item \codeword{FINAL_LAYER_HEIGHT} [[\codeword{float,m}]] - total height of inflation layers, not currently operational, for future use (\codeword{float})
+    
+    \item \codeword{FINAL_LAYER_RATIO} [[\codeword{float,m}]] - ratio of last layer and the surrounding element size, not currently operational, for future use (\codeword{float})
+
+
+
+\end{itemize}
+
+
+\subsection{Post Processing Control}
+Deleting the module \codeword{defaultPost} will expose the following block:
+\begin{lstlisting}
+    [GLOBAL_POST_PRO]
+    ISOQ = 2000
+    ISOCPT = 0
+    SLICES = True
+    XSLICE = default
+    YSLICE = default
+    ZSLICE = default
+\end{lstlisting}
+
+\begin{itemize}
+    \item \codeword{ISOQ} [\codeword{float,s-2}] - Q criterion value of which to generate VTK iso surfaces of (\codeword{float})
+    
+    \item \codeword{ISOCPT} [\codeword{float}] - \(C_{p,total}\) value of which to generate VTK iso surfaces of (\codeword{float})
+    
+    \item \codeword{SLICES} [\codeword{str}] - to generate VTK slices (\codeword{true}, \codeword{false})
+    
+    \item \codeword{XSLICE} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - start, end and spacing of the \(x\) normal slices (\codeword{float}, \codeword{float}, \codeword{float})
+    
+    \item \codeword{YSLICE} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - start, end and spacing of the \(y\) normal slices (\codeword{float}, \codeword{float}, \codeword{float})
+    
+    \item \codeword{ZSLICE} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - start, end and spacing of the \(z\) normal slices (\codeword{float}, \codeword{float}, \codeword{float})
+\end{itemize}
+
+\subsection{Ride Height Control}
+Deleting the module \codeword{defaultRideHeight} will expose the following block that is under development currently. The goal is to create a process which can do ride height mapping.
+\begin{lstlisting}
+    [RIDE_HEIGHT_SETUP]
+    RUN_RIDE_HEIGHT = false
+    RIDE_HEIGHT_FILE =
+    USE_DEPEND = True
+\end{lstlisting}
+

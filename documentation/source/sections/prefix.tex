@@ -1,0 +1,103 @@
+\section{Prefix Controls}
+There are 3 or 4 letter prefixs that allow special control of your geometry and simulation. These help with assigning porous media regions, Multiple Reference Frame (MRF) regions, or even more control over meshing for certain geometries.
+
+\subsection{Rotating Geometries}
+The \codeword{ROTA} prefix allows the assignment of rotating wall to geometries such as wheels. A usage example is shown below.
+\begin{lstlisting}
+    [DEFAULTS]
+    DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultBCSetup defaultGlobalDecomposition defaultGlobalMaterial defaultGlobalRefinement defaultPost
+    ADDON_MODULES =
+
+    [TITLES]
+    CASENAME = casename
+    CASEDESCRP = default description
+    JOBCODE = TS
+
+    [GEOMETRY]
+    GEOM = body.obj.gz,1,8,5,1.1,high
+            ROTA-fr-wh-lhs,1,8,5,1.1,high
+            ROTA-fr-wh-rhs,1,8,5,1.1,high
+            ROTA-rr-wh-lhs,1,8,5,1.1,high
+            ROTA-rr-wh-rhs,1,8,5,1.1,high
+\end{lstlisting}
+Notice the prefix \codeword{ROTA}, it lets \codeword{caseSetup} know that this geometry will have a rotating wall boundary condition applied. Upon running \codeword{caseSetup}, if it's the first time with this set of geometry, \codeword{caseSetup} will stop and let you know that the following blocks have been added. The user should check that these are the appropriate settings for each wheel geometry.
+
+\textbf{NOTE:} If using a plinth, ensure that the plinth is a separate geometry, else the automatic wheel center calculation will include the plinth in the radius calculation resulting in an incorrect radius and angular velocity!
+
+\begin{lstlisting}
+    [ROTA-fr-wh-lhs]
+    WH_RAD = default
+    WH_CENTER = default
+    WH_AXIS = default
+    ROT_WH = True
+
+    [ROTA-fr-wh-rhs]
+    WH_RAD = default
+    WH_CENTER = default
+    WH_AXIS = default
+    ROT_WH = True
+
+    [ROTA-rr-wh-lhs]
+    WH_RAD = default
+    WH_CENTER = default
+    WH_AXIS = default
+    ROT_WH = True
+
+    [ROTA-rr-wh-rhs]
+    WH_RAD = default
+    WH_CENTER = default
+    WH_AXIS = default
+    ROT_WH = True
+
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{WH_RAD} [[\codeword{float,m}]] - wheel radius, distance from wheel center to ground (\codeword{r}, \codeword{default})
+    \item \codeword{WH_CENTER} [[\codeword{float,m}]] [[\codeword{float,m}]] [[\codeword{float,m}]] - wheel center coordinates in global coordinates system (\codeword{x} \codeword{y} \codeword{z}, \codeword{default})
+    \item \codeword{WH_AXIS} [[\codeword{float,m}]] [[\codeword{float,m}]] [[\codeword{float,m}]] - wheel axis of rotation from, using right hand rule with respect to the global coordinate system (\codeword{x} \codeword{y} \codeword{z}, \codeword{default})
+    \item \codeword{WH_AXIS} [\codeword{bool}] - activate rotating wall or use no-slip condition (\codeword{true}, \codeword{false})
+\end{itemize}
+Using \codeword{default} option will trigger the automatic calculation but manual input of values is still possible. To speed up \codeword{caseSetup} it is recommended to copy the values output by the calculation in the termial and input them into the caseSetup if coordinates and axis values are not expected to change for subsequent runs.
+
+
+\subsection{Porous Media}
+When radiators are used in a simulation, it would be very computationally expensive to model each radiator fin. So instead we use the Darcy-Forcheimer porous media calculation to model the pressure drop across a radiator which allows us to estimate the mass flow across the radiator and resulting forces.
+
+The prefix \codeword{POR} is used to define the porous media geometry. \textbf{CAUTION:} The porous media geometry must only contain the "box" or region that represents the radiator fin region, do not include the frame or any other part of the radiator. The box which represents the fin region should be a simple prism. The inlet and outlets should have their own PID with the keyword \codeword{-inlet} or \codeword{-outlet}. There should only be 1 of each PID!
+
+The mass flow calculations are performed on each pid in the porous media, therefore including the walls or any other surfaces where flow isn't moving \textit{across} would make the calculations erronous.
+
+Including the prefix \codeword{POR} on a geometry would expose the following block:
+\begin{lstlisting}
+    GEOM = trial005-rad.obj.gz,1,8,6,1.4,high
+            fw-H05A00.obj.gz,1,8,6,1.4,high
+            rw-R11I01.obj.gz,1,8,6,1.4,high
+            POR-rad-001.obj.gz,1,10,6,1.4,high
+            ROTA-fr-wh-lhs-v3-3.obj.gz,1,8,6,1.4,high
+            ROTA-fr-wh-rhs-v3-3.obj.gz,1,8,6,1.4,high
+            ROTA-rr-wh-lhs-v3-3.obj.gz,1,8,6,1.4,high
+            ROTA-rr-wh-rhs-v3-3.obj.gz,1,8,6,1.4,high
+
+    [POR-rad-001]
+    DCOEFFS = 1000
+    FCOEFFS = 1000
+    VEC1 = 0.7071 0 -0.7071
+    VEC2 = 0 1 0
+    POINT = 1.7875 -0.000583 0.342739
+    SAMPLE_POR = True
+\end{lstlisting}
+the name of the block will be the name of the geometry just without the extension to identify it.
+\begin{itemize}
+    \item \codeword{DCOEFFS} [\codeword{float}] - Darcy coefficient attained from experimental testing of pressure drop vs flow rate of the radiator (\codeword{float})
+    
+    \item \codeword{FCOEFFS} [\codeword{float}] - Forcheimer coefficient attained from experimental testing of pressure drop vs flow rate of the radiator (\codeword{float})
+    
+    \item \codeword{VEC1} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - vector defining the normal of the radiator exit (\codeword{float} \codeword{float} \codeword{float})
+    
+    \item \codeword{VEC2} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - vector in plane with the radiator exit  (\codeword{float} \codeword{float} \codeword{float})
+    
+    \item \codeword{POINT} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - point defining the "inside" of the radiator (\codeword{float} \codeword{float} \codeword{float})
+    
+    \item \codeword{SAMPLE_POR} [\codeword{str,m}] - to sample the mass flow through the radiator (\codeword{true}, \codeword{false})
+    
+
+\end{itemize} 

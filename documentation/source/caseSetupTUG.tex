@@ -16,7 +16,21 @@
 
 \usepackage{listings}
 % \lstset{tabsize=4,basicstyle=\ttfamily,columns=flexible,emptylines=10000,backgroundcolor = \color{lightgray},breaklines=true}
-\lstset{breaklines=true,basicstyle=\ttfamily}
+\lstdefinestyle{bashStyle}{
+  language=Bash,
+  numbers=none,
+  stepnumber=1,
+  numbersep=10pt,
+  tabsize=4,
+  showspaces=false,
+  showstringspaces=false
+}
+\lstset{breaklines=true,
+        basicstyle=\tiny\ttfamily,
+        style=bashStyle,
+        backgroundcolor = \color{lightgray},}
+
+
 % \lstset{literate={'}{\pdfactualsquote}1
 %                  {`}{\pdfactualbtick}1
 %                  {\ \ }{\pdfactualdspace}2
@@ -39,7 +53,7 @@
 \lstset{language=bash,keywordstyle={\bfseries \color{blue}}}
 \usemintedstyle{vs}
 
-\title{caseSetup Technical User Guide}
+\title{caseSetup-v4.1.1 Technical User Guide}
 \author{S. Chen}
 \date{Jan 2026}
 
@@ -77,7 +91,7 @@
 \newpage
 \include{sections/introduction}
 \include{sections/basicSetup}
-
+\include{sections/prefix}
 
 %% References %%
 
