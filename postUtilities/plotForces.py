@@ -215,9 +215,6 @@ def plotData(args,caseLoc,casePathDict):
 			ax.set_ylim(min(caseMeans)-(np.mean(caseMeans)*0.1),max(caseMeans)+(np.mean(caseMeans)*0.1))
 		elif args.yscaling == 'matDefault':
 			print('')
-		# elif args.yscaling == 'bounds':
-		# 	ax.set_ylim(min(caseMins)-(min(caseMins)*0.1),max(caseMax)+(max(caseMax)*0.5))
-		
 		
 		ax.set_ylabel(labelDict[var]['label'])
 		ax.set_title(labelDict[var]['title'])
@@ -254,10 +251,6 @@ def getRef(casePath):
     CREF = np.array(caseSetupConfig['BC_SETUP']['REFCOR'].split(' ')).astype('float')
     FREF = np.array(caseSetupConfig['BC_SETUP']['FRT_WH_CTR'].split(' ')).astype('float')
     AVGT = float(caseSetupConfig['GLOBAL_CONTROL']['AVGSTART'])
-
-    #print('\t\tReference Values:')
-    #print('\t\t\tUREF: %1.3g, LREF: %1.3g, WREF: %1.3g, CREF: [%1.3g %1.3g %1.3g] , FREF: [%1.3g %1.3g %1.3g]' % (UREF,LREF,WREF,CREF[0],CREF[1],CREF[2],FREF[0],FREF[1],FREF[2]))
-    
     return UREF,LREF,WREF,CREF,FREF,AVGT,caseSetupConfig
 
 

@@ -219,7 +219,7 @@ def getCoeffPaths(path,case):
 def averageCoeffs(fullCaseSetupDict,case,part,coeffFiles):
     print("\tAveraging force coefficients for %s..." % (part))
     simType = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0]
-    avgStart = float(fullCaseSetupDict['GLOBAL_CONTROL']['AVGSTART'][0])
+    avgStart = float(fullCaseSetupDict['GLOBAL_CONTROL']['AVGSTART'])
     dataHeader = 'time,cd,cdf,cdr,cl,clf,clr,cmpitch,cmroll,cmyaw,cs,csf,csr'
     variables = ['cd','cdf','cdr','cl','clf','clr','cmpitch','cmroll','cmyaw','cs','csf','csr']
     dataHeader = dataHeader.split(",")
@@ -230,8 +230,12 @@ def averageCoeffs(fullCaseSetupDict,case,part,coeffFiles):
         coeffs = pd.concat([coeffs,timeCoeffs],ignore_index=True,axis=0)
     endTime = coeffs['time'].iloc[-1]
     avgStartRows = coeffs[coeffs['time'] >= avgStart]
+    
     dt = coeffs['time'].iloc[-1] - coeffs['time'].iloc[-2]
     averagedData = {}
+
+
+    
     for var in variables:
         data = avgStartRows[var]
         results = estimate_statistical_error(data,dt)
@@ -250,6 +254,7 @@ def averageCoeffs(fullCaseSetupDict,case,part,coeffFiles):
             averagedData[var] = round(results['total_mean'],3)
 
         ci = calc_confidence_interval(data,i_samp = calc_indept_samples(data))
+
         #averagedData[var+'_ci'] = round(np.abs(results['mean_95_confidence_interval'][1] - results['mean_95_confidence_interval'][0])/2,4)
         averagedData[var+'_ci'] = round(ci,4)
 
