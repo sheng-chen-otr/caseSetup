@@ -165,6 +165,25 @@ def calculateAcrossTime(time, data,dt):
     statTime = np.linspace(statStartTime,time[-1],len(ciUpperArray))
     return statTime, avgDataArray,ciUpperArray,ciLowerArray
 
+def calculateFinalStatistic(time, data,dt):
+    ciUpperArray = []
+    ciLowerArray = []
+    avgDataArray = []
+    
+    try:
+        results = estimate_statistical_error(data,dt=dt)
+    except Exception as e:
+        print('ERROR! Statistics calculation failed!')
+        print(e)
+    ci = results['mean_95_confidence_interval']
+    avg_data = results['total_mean']
+    ciUpperArray = (ci[1])
+    ciLowerArray = (ci[0])
+    avgDataArray = (avg_data)
+    #statStartTime = time[-1]-(len(ciUpperArray)*dt)
+    # statTime = np.linspace(statStartTime,time[-1],len(ciUpperArray))
+    return avgDataArray,ciUpperArray,ciLowerArray
+
 
 # if __name__ == '__main__':
 #     # --- Create a sample signal for demonstration ---

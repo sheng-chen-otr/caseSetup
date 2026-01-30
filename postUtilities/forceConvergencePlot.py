@@ -330,6 +330,7 @@ def calculateStatistics(avgData,time,data,forceName,contCiResolution = 100):
         mean = data[:i].mean()
         ciMeanArray.append(mean)
         ci = calc_confidence_interval(data[:i-1],i_samp = calc_indept_samples(data[:i-1]))
+        
         # estCi = estimate_statistical_error(data[:i-1],dt=time[1]-time[0])['mean_95_confidence_interval']
         # ci = abs(estCi[1]-estCi[0])/2
         ciArrayUpper.append(mean+ci)
@@ -345,8 +346,6 @@ def calculateStatistics(avgData,time,data,forceName,contCiResolution = 100):
     avgData[forceName + 'LowerCI'] = np.array(ciArrayLower)
     avgData[forceName +'ciRaw'] = np.array(ciRawArray)
     avgData[forceName +'ciMean'] = np.array(ciMeanArray)
-
-    
 
     print('\t\t\tFinal CI: ' + str(ci))
     

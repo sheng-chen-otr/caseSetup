@@ -1,12 +1,3 @@
-'''
-version 1.6
-
-Edit log:
-- added pid refinement based on key words
-- changed self proximity refinement
-- turned on orientation proximity, so it shouldn't refine if two faces facing opposite ways are too close
-'''
-
 import sys
 import fileinput
 import os
@@ -17,7 +8,6 @@ import argparse as argparse
 import configparser
 import numpy as np
 import math
-import ast
 from pathlib import Path
 
 
@@ -38,7 +28,11 @@ addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG']
 
 
 def main():
-    
+    # if os.path.exists(case + '.ansa.gz'):
+    #     print('Found existing ansa file, using instead!')
+    #     base.Open(case + '.ansa.gz')
+    #     exportAnsaMesh()
+    #     return
     getTemplateType()
     defaultDict = getGlobalDefaults()
    
@@ -59,17 +53,6 @@ def main():
         print('\t\t' + geom)
         for var in geomDict[geom].keys():
             print('\t\t\t%s: %s' % (var,geomDict[geom][var]))
-
-    # if os.path.exists(case + '.ansa.gz'):
-    #     print('Found existing ansa file, using instead!')
-    #     base.Open(case + '.ansa.gz')
-    #     layerCoverage(geomDict,fullCaseSetupDict)
-
-
-
-
-    #     #exportAnsaMesh()
-    #     return
     
     importGeometry(geomDict)
     importDomain()
@@ -80,170 +63,6 @@ def main():
     
     
     # getAllParts(geomDict)
-
-def layerCoverage(geomDict,fullCaseSetupDict):
-        #calculate layer coverage on each PID
-
-        print("\n\t\tCalculating layer coverage per PID...")
-
-        #first set result of number of layers
-        results = base.CollectEntities(ansa.constants.OPENFOAM, None, 'RESULT')
-        for result in results:
-            ret = base.GetEntityCardValues(ansa.constants.OPENFOAM, result, ['__id__', 'Name', 'Status'])
-            if ret['Status'] == 'Built' and ret['Name'] == "Hextreme Octree Mesh - Number of layers":
-                base.SetCurrentEntity(result)
-
-        totalLayerCellsGrown = 0
-        totalLayerCellsRequested = 0
-
-        #collect mesh parts of Hextreme Octree
-
-        octree = base.GetEntity(ansa.constants.NASTRAN, "HEXTREME OCTREE", 1)
-        octreeAreas = mesh.GetAreasFromOctree(octree)
-        for area in octreeAreas:
-            parts = mesh.GetPartsFromOctreeArea(area = area)
-            layersBin = {}
-            for part in parts:
-                partName = part._name.split('_')[0]
-                pidName = part._name
-                base.Or(part)
-                #getting requested layers from part dict
-                if 'GEOMX-' in partName:
-                    requestedLayers = int(fullCaseSetupDict[partName]['GEOMX_NLAYERS'])
-                else:
-                    for geomPart in geomDict.keys():
-                        if partName in geomPart:
-                            requestedLayers = int(geomDict[geomPart]['layers'])
-                            break
-
-                
-                #requestedLayers = int(geomDict[partName]['layers'])
-
-                if requestedLayers == 0:
-                    print('\t\t\tRequested layers is 0, skipping!')
-                if requestedLayers != 0:
-                    print("\t\t\tRequested prism layers for %s region: %s" % (pidName, str(requestedLayers)))
-                    #create bins for reporting layer growth
-                    for i in range(0, requestedLayers+1):
-                        layersBin.update({i: 0})
-                    #gather all visible shells
-                    partShells = ansa.base.CollectEntities(constants.OPENFOAM, None, ['POLYGON', 'SHELL'], filter_visible=True)
-
-                    #count of surface elements
-                    faceElements = len(partShells)
-
-                    #pull total number of layer results for each surface shell
-                    partShellsResults = ansa.base.ShellResult(partShells)
-
-                    layerCellsGrown = 0
-                    #assume requested layers is equal to number of surface elements times requested number of layers
-                    layerCellsRequested = requestedLayers*faceElements
-
-                    for shellResult in partShellsResults:
-                        #for each element, update bin for number of layer cells grown
-                        layersBin.update({int(shellResult[1]): (layersBin[shellResult[1]]+1)})
-                        #update total number of layer cells grown for the PID
-                        layerCellsGrown+=shellResult[1]
-
-                    #update total number of prism layer cells grown and requested
-                    totalLayerCellsGrown+=layerCellsGrown
-                    totalLayerCellsRequested+=layerCellsRequested
-
-                    print("\n\t\t\t%s" % pidName)
-                    print("\t\t\t\tLayer cells requested: %s" % str(layerCellsRequested))
-                    print("\t\t\t\tLayer cells delivered: %s" % str(int(layerCellsGrown)))
-                    if layerCellsRequested == 0:
-                        print("\t\t\t\tZero prism layer cells grown.")
-                    if layerCellsRequested != 0:
-                        print("\t\t\t\tDelivery rate: %0.2f%%" % (100*layerCellsGrown/layerCellsRequested))
-                        for line in layersBin:
-                            print("\t\t\t\tFaces with %0.0f layer(s) grown: %0.0f       %0.2f%% of faces in PID" % (line, layersBin[line], 100*layersBin[line]/faceElements))
-                
-
-
-                
-        return
-        octreeParts = ansa.mesh.GetPartsFromOctreeArea(octree)
-        for part in octreeParts:
-            partName = ansa.base.GetEntityCardValues(ansa.constants.OPENFOAM, part, ['Name'])['Name']
-            ansa.base.Or(part)
-
-            #match partName with meshArea in SESSION to grab target number of prism layers
-            for area in self.meshAreas:
-                if partName == area.octreeFilterName:
-                    targetLayers = int(area.meshParametersDict['nLayers'][0])
-                    layersBin = {}
-
-                    if targetLayers == 0:
-                        logger.debug("\n%s" % partName)
-                        logger.debug("     Zero requested prism layers. Skipping...")
-                    if targetLayers != 0:
-                        print("Requested prism layers for %s region: %s" % (partName, str(targetLayers)))
-                        #show only the surface mesh that is part of the volume mesh
-                        ansa.base.Not(area.ansaGroupEntity)
-
-                        #create bins for reporting layer growth
-                        for i in range(0, targetLayers+1):
-                            layersBin.update({i: 0})
-
-                        #gather all visible shells
-                        partShells = ansa.base.CollectEntities(ansa.constants.OPENFOAM, None, ['POLYGON', 'SHELL'], filter_visible=True)
-
-                        #count of surface elements
-                        faceElements = len(partShells)
-
-                        #pull total number of layer results for each surface shell
-                        partShellsResults = ansa.base.ShellResult(partShells)
-
-                        layerCellsGrown = 0
-                        #assume requested layers is equal to number of surface elements times requested number of layers
-                        layerCellsRequested = targetLayers*faceElements
-
-                        for shellResult in partShellsResults:
-                            #for each element, update bin for number of layer cells grown
-                            layersBin.update({int(shellResult[1]): (layersBin[shellResult[1]]+1)})
-                            #update total number of layer cells grown for the PID
-                            layerCellsGrown+=shellResult[1]
-
-                        #update total number of prism layer cells grown and requested
-                        totalLayerCellsGrown+=layerCellsGrown
-                        totalLayerCellsRequested+=layerCellsRequested
-
-                        logger.debug("\n%s" % partName)
-                        logger.debug("     Layer cells requested: %s" % str(layerCellsRequested))
-                        logger.debug("     Layer cells delivered: %s" % str(int(layerCellsGrown)))
-                        if layerCellsRequested == 0:
-                            logger.debug("     Zero prism layer cells grown.")
-                        if layerCellsRequested != 0:
-                            logger.debug("     Delivery rate: %0.2f%%" % (100*layerCellsGrown/layerCellsRequested))
-                            for line in layersBin:
-                                logger.debug("     Faces with %0.0f layer(s) grown: %0.0f       %0.2f%% of faces in PID" % (line, layersBin[line], 100*layersBin[line]/faceElements))
-
-        logger.debug("\nTotal layer cells requested: %s" % str(totalLayerCellsRequested))
-        logger.debug("Total layer cells delivered: %s" % str(int(totalLayerCellsGrown)))
-        logger.debug("Total layer cells requested: %0.2f%%\n" % (100*totalLayerCellsGrown/totalLayerCellsRequested))
-
-
-def runQualityImprovement(method='fixQuality'):
-    #runs either fixQuality or reconstruct
-    #method = self.globalMeshDefaults['globalQualityCriteriaFix'][1]
-    #show only volume mesh entity
-    volumeEnt = ansa.base.CollectEntities(ansa.constants.OPENFOAM, None, 'VOLUME')[0]
-    ansa.base.Or(volumeEnt)
-
-    #run deck report pre quality fix and save to log directory
-    #ansa.utils.DeckInfo(os.path.join(log_dir, "deckinfo_preQual.html"), 'VISIBLE', 'HTML')
-
-    if method == 'fixQuality':
-        print("\n\t\tImproving quality criteria by appying %s" % method)    
-        ansa.mesh.FixQualSolids()
-        ansa.utils.DeckInfo("deckinfo_fixQuality.html", 'VISIBLE', 'HTML')
-
-    if method == 'reconstruct':
-        print("\n\t\tImproving quality criteria by appying %s" % method)
-        ansa.mesh.ReconstructSolids()
-        ansa.utils.DeckInfo("deckinfo_fixQuality.html", 'VISIBLE', 'HTML')
-
 
 def saveAnsa(caseName):
     print('\t\tSaving ANSA file...')
@@ -361,8 +180,10 @@ def createOctree(fullCaseSetupDict):
         ansa.mesh.SaveOctreeAreaParams( areaDict[area], case + '_' + area + '.ansa_mpar' )
         for part in mesh.GetPartsFromOctreeArea( area = areaDict[area] ):
             print('\t\t\t\t',part._name)
+
+
         
-    saveAnsa(case)
+    #saveAnsa(case)
 
 def createOctree2(fullCaseSetupDict,geomDict):
     
@@ -450,7 +271,6 @@ def createOctree2(fullCaseSetupDict,geomDict):
         if 'z-min' in pid._name:
             zminpids.append(pid)
     mesh.AddPartsToOctreeArea(zminpids,zmin_area) #add zmin pids to octree
-    base.SetEntityCardValues(constants.NASTRAN,zmin_area,{'Name':'domain_zmin'})
 
 
 
@@ -474,8 +294,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
     geomMparfile['free_edges_check_box'] = 'true'
     geomMparfile['intersection_lines_check_box'] = 'true'
     geomMparfile['self_proximity'] = 'true'
-    geomMparfile['oriented_proximity'] = 'true'
-    geomMparfile['hextreme_number_of_layers_value'] = 6
+    geomMparfile['hextreme_number_of_layers_value'] = 3
     geomMparfile['hextreme_layers_growth_rate'] = expansionRatio
     geomMparfile['hextreme_layers_first_layer_height'] = firstLayerHeight
     geomMparfile['hextreme_layers_size_mode'] = layerType.title()
@@ -483,8 +302,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
     geomMparfile['pid_bounds'] = 'true'
     geomMparfile['feature_bounds'] = 'true'
     geomMparfile['proximity'] = 'true'
-    #geomMparfile['proximity_minimum_length'] = calculateCellSize(minGeomLevel+1,baseSize)
-    geomMparfile['proximity_minimum_length'] = calculateCellSize(minGeomLevel,baseSize)
+    geomMparfile['proximity_minimum_length'] = calculateCellSize(minGeomLevel+1,baseSize)
     if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0].lower() == 'half':
         print('\t\t\tSymmetry mode selected as half!')
         geomMparfile['hextreme_connect_to_symmetry'] = 'true'
@@ -504,16 +322,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
     writeMparfile(geomMparfile,'geom_octree.ansa_mpar')
     mesh.ReadOctreeAreaParams( area = geom_area, mpar_file = 'geom_octree.ansa_mpar')
     mesh.AddPartsToOctreeArea(geompids,geom_area) #add geom pids to octree
-    base.SetEntityCardValues(constants.NASTRAN,geom_area,{'Name':'global_geom_level_%s' % (minGeomLevel)})
 
-    #getting pid refinement table
-    refTable = getPIDRefTable(os.path.join(ansaTemplateLoc,'ref_tables'),baseSize)
 
-    if os.path.exists('pidMpars'):
-        print('pidMpars directory exists, not making!')
-    else:
-        print('pidMpars does not exists, making!')
-        os.mkdir('pidMpars')
     #starting general geometry settings
    
     for geom in geomDict.keys():
@@ -552,8 +362,6 @@ def createOctree2(fullCaseSetupDict,geomDict):
                 mesh.ReadOctreeAreaParams( area = part_area, mpar_file = '%s_octree.ansa_mpar' % (geom.split('.')[0]))
                 geompids = getPIDsFromPart(geomDict[geom]['part_ent'])
                 mesh.AddPartsToOctreeArea(geompids,part_area) #add geom pids to octree
-                base.SetEntityCardValues(constants.NASTRAN,part_area,{'Name':geom.split('.')[0]})
-                
             else:
                 part_area = mesh.GetNewOctreeArea(global_octree,name=geom.split('.')[0])
                 refLevel = geomDict[geom]['refinement']
@@ -575,33 +383,6 @@ def createOctree2(fullCaseSetupDict,geomDict):
                 mesh.ReadOctreeAreaParams( area = part_area, mpar_file = '%s_octree.ansa_mpar' % (geom.split('.')[0]))
                 geompids = getPIDsFromPart(geomDict[geom]['part_ent'])
                 mesh.AddPartsToOctreeArea(geompids,part_area) #add geom pids to octree
-                base.SetEntityCardValues(constants.NASTRAN,part_area,{'Name':'%s_level_%s' % (geom.split('.')[0],refLevel)})
-                print('\n\t\tAdding PID refinements...')
-                n = 0
-                for geompid in geompids:
-                    refPartMparfile = partMparfile.copy()
-                    pidRefTable = None
-                    for key in refTable.keys():
-                        #going through each key word, if key word is in pid name, that ref table is assigned
-                        if key in geompid._name:
-                            #print(key)
-                            pidRefTable = refTable[key]
-                            #will keep looping until the last one is used (if exists) avoids duplicates
-                    if pidRefTable != None:
-                        print('\t\t\tAdding %s to %s refinement' % (geompid._name,pidRefTable['octree_parameters_name']))
-                        refPartMparfile.update(pidRefTable)
-                        ref_part_area = mesh.GetNewOctreeArea(global_octree,name=geompid._name)
-                        writeMparfile(refPartMparfile,'pidMpars/%s_octree.ansa_mpar' % (geompid._name))
-                        mesh.ReadOctreeAreaParams( area = ref_part_area, mpar_file = 'pidMpars/%s_octree.ansa_mpar' % (geompid._name))
-                        mesh.AddPartsToOctreeArea(geompid,ref_part_area) #add geom pids to octree
-                        base.SetEntityCardValues(constants.NASTRAN,ref_part_area,{'Name':geompid._name})
-                        n = n + 1
-                if n > 0:
-                    print('\n\t\tAdded %s PID refinements!' % (n))
-
-                    
-
-
 
     print('\t\tSetting seed point(s):')
     seedPoints = np.array(fullCaseSetupDict['GLOBAL_REFINEMENT']['LOC_IN_MESH'],dtype=float)*1000
@@ -609,38 +390,15 @@ def createOctree2(fullCaseSetupDict,geomDict):
     mesh.OctreeSeedPoints(global_octree, seedPoints[0], seedPoints[1], seedPoints[2], "global_octree_volume", baseSize*1000)
     print('\t\tOctree Summary:')
     for area in mesh.GetAreasFromOctree( octree = global_octree ):
-        print('\n\t\t\t',area._name)
+        print('\t\t\t',area._name)
         parts = mesh.GetPartsFromOctreeArea( area = area )
         for part in parts:
             print('\t\t\t\t',part._name)
     
     saveAnsa(case)
     mesh.RunOctree(global_octree)
-    runQualityImprovement()
     saveAnsa(case)
 
-def getPIDRefTable(refTablePath,baseSize):
-    #geomMparfile = readMparFile(os.path.join(ansaTemplateLoc,'octree_geom.ansa_mpar'))
-    print('\t\tImporting PID refinement tables!')
-    with open(refTablePath, "r") as data:
-        refTable = ast.literal_eval(data.read())
-    
-    for key in refTable.keys():
-        for var in refTable[key].keys():
-            if 'name' in var:
-                continue
-            try:
-                level = int(refTable[key][var])
-            except:
-                sys.exit('ERROR! Unable to convert level string to int() in ref_table, please check entry!')
-            size = calculateCellSize(level,baseSize)
-            refTable[key][var] = size
-
-    for keyWord in refTable.keys():
-        print('\t\t\t',keyWord)
-        for var in refTable[keyWord].keys():
-            print('\t\t\t\t',var,": ",refTable[keyWord][var])
-    return refTable
 
 def assignBCType(geomDict,fullCaseSetupDict):
     print('\t\tAssigning boundary conditions to PIDs')
@@ -648,7 +406,7 @@ def assignBCType(geomDict,fullCaseSetupDict):
     bcDict = {'half':{'x-min':'patch',
                       'x-max':'patch',
                       'y-min':'wall',
-                      'y-max':'symmetry',
+                      'y-max':'symmetryPlane',
                       'z-min':'wall',
                       'z-max':'wall',},
               'full':{'x-min':'patch',
