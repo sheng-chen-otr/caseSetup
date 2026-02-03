@@ -35,7 +35,7 @@
 
             "getFvDict":"if [ -f system/fvSchemesSimple ]; then cp system/fvSchemesSimple system/fvSchemes; cp system/fvSolutionSimple system/fvSolution; elif [ -f system/fvSchemesPiso ]; then cp system/fvSchemesPiso; system/fvSchemes; cp system/fvSolutionPiso system/fvSolution; else echo 'ERROR! Unable to find the right fvSchemes or fvSolution files for the appropriate simulation type!' exit 1; fi;",
 
-            "ansaMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running ansaMesh...'; ~/openFoam/CODEHOST/SOFTWARES/BETA/ANSA/BETA_CAE_Systems/ansa_2025.1.1/ansa64.sh -h 6007@headNode -b -exec '''load_script: '/home/openfoam/openFoam/scripts/caseSetup/caseSetup/meshUilities/ansaMesh.py'''' -np 72 --confirm-license-agreement 2>&1 | tee log.ansaMesh;",
+            "ansaMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running ansaMesh...'; ~/openFoam/CODEHOST/SOFTWARES/BETA/ANSA/BETA_CAE_Systems/ansa_2025.1.1/ansa64.sh -h 6007@headNode -b -exec '''load_script: '/home/openfoam/openFoam/scripts/caseSetup/caseSetup/meshUtilities/ansaMesh.py'''' -np 72 --confirm-license-agreement 2>&1 | tee log.ansaMesh;",
 
             "decomposePar":"if [ $? != 0 ]; then exit 1; fi; echo 'running decomposePar...'; ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec decomposePar -copyZero -constant>> log.decomposePar;",
 
