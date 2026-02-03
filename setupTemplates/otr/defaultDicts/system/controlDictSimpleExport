@@ -36,7 +36,7 @@ functions
 	#include "forceCoeffsExport"
 	//#include "cpMeanDict"
 	#include "cptMeanDict"
-	#include "nearWallFieldsDict"
+	//#include "nearWallFieldsDict"
 	#include "wallShearStressDict"
 	#include "vorticityDict"
 	#include "QCriterionDict"
