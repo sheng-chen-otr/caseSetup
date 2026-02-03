@@ -529,9 +529,12 @@ def createOctree2(fullCaseSetupDict,geomDict):
                 edgeIncrement = fullCaseSetupDict[geom.split('.')[0]]['GEOMX_FEAT_EDGE_LEVEL_INC'][0]
                 refAngle = fullCaseSetupDict[geom.split('.')[0]]['GEOMX_REFINEMENT_ANGLE'][0]
                 nlayers = fullCaseSetupDict[geom.split('.')[0]]['GEOMX_NLAYERS'][0]
-                firstLayerHeight = fullCaseSetupDict[geom.split('.')[0]]['FIRST_LAYER_HEIGHT'][0]
+                firstLayerHeight = fullCaseSetupDict[geom.split('.')[0]]['FIRST_LAYER_HEIGHT'][0]*1000
                 layerType = fullCaseSetupDict[geom.split('.')[0]]['LAYER_TYPE'][0]
                 growthRate = fullCaseSetupDict[geom.split('.')[0]]['GEOMX_LAYER_RATIO'][0]
+
+                print('NLAYERS: ',nlayers)
+                print('FIRST LAYER HEIGHT: ',firstLayerHeight)
 
                 
                 partMparfile.update({'octree_parameters_name':geom.split('.')[0],
