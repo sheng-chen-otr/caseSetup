@@ -533,8 +533,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
                 layerType = fullCaseSetupDict[geom.split('.')[0]]['LAYER_TYPE'][0]
                 growthRate = fullCaseSetupDict[geom.split('.')[0]]['GEOMX_LAYER_RATIO'][0]
 
-                print('NLAYERS: ',nlayers)
-                print('FIRST LAYER HEIGHT: ',firstLayerHeight)
+                print('\t\t',geom,'\sNLAYERS: ',nlayers)
+                print('\t\t',geom,'\sFIRST LAYER HEIGHT: ',firstLayerHeight)
 
                 
                 partMparfile.update({'octree_parameters_name':geom.split('.')[0],
@@ -825,7 +825,7 @@ def createSizeField(fullCaseSetupDict,geomDict):
 
 
     print('\t\t\tBuilding size field!')
-    #mesh.BuildSizeField(sf)
+    mesh.BuildSizeField(sf)
     saveAnsa(case)
 
     return sf
