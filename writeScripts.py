@@ -71,6 +71,7 @@ def makeScripts(templateLoc,fullCaseSetupDict):
     solveScriptArray = []
     exportScriptArray = []
     postScriptArray = []
+    postMeshScriptArray = []
     
     if 'ansa' in fullCaseSetupDict['GLOBAL_REFINEMENT']['TEMPLATE_TYPE'][0].lower():
         for line in clusterDict['ansaMesh'].keys():
@@ -104,6 +105,10 @@ def makeScripts(templateLoc,fullCaseSetupDict):
         postScriptArray.append(clusterDict['post'][line])
     postScript = '\n'.join(postScriptArray)
 
+    for line in clusterDict['postMesh'].keys():
+        postMeshScriptArray.append(clusterDict['postMesh'][line])
+    postMeshScript = '\n'.join(postMeshScriptArray)
+
 
 
 
@@ -118,44 +123,44 @@ def makeScripts(templateLoc,fullCaseSetupDict):
 
     with open('postScript', 'w') as m:
         m.write(postScript)
+
+    with open('postMeshScript', 'w') as m:
+        m.write(postMeshScript)
     
     
     
 def copyScripts(templateLoc, fullCaseSetupDict,case):
 
-    scriptDict = {'meshing':'MS',
-                  'solve':'SO',
-                  'export':'EX',
-                  'postPro':'PP',
-                  'postScript':'PO'}
+    scriptDict = {'meshingScript':'MS',
+                  'solveScript':'SO',
+                  'exportScript':'EX',
+                  'postScript':'PO',
+                  'postMeshScript':'PM'}
 
     print('\tWriting copyingScripts...')
-    scriptVersion = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']['SCRIPT_VERSION'][0]
-    copyScriptsPath = '%s/defaultCluster/slurm/scripts/%s/*Script' % (templateLoc,scriptVersion)
     
     makeScripts(templateLoc,fullCaseSetupDict)
-    scriptsList = glob.glob(copyScriptsPath)
-    for script in scriptsList:
-        scriptName = script.split('/')[-1]
-        #copyTemplateToCase(script,scriptName)
-        if os.path.isfile(scriptName):
-            for line in fileinput.  input(scriptName, inplace=True):
-                if line.strip().startswith('#SBATCH --job-name='):
-                    for key in scriptDict.keys():
-                        if key in scriptName:
-                            keyCode = scriptDict[key]
-                            jobCode = fullCaseSetupDict['TITLES']['JOBCODE'][0]
-                            sym = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0]
-                            line = '#SBATCH --job-name=%s_%s%s_%s\n\n' % (jobCode,keyCode,case,sym)
-                            
-                sys.stdout.write(line)
-    
+    for scriptName in scriptDict.keys():
+        keyCode = scriptDict[scriptName]
+        jobCode = fullCaseSetupDict['TITLES']['JOBCODE'][0]
+        sym = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0]
+        lineToFind = '#SBATCH --job-name='
+        newLine = '#SBATCH --job-name=%s_%s%s_%s\n\n' % (jobCode,keyCode,case,sym)
+        replace_line_in_file(scriptName,lineToFind,newLine)
+
+def replace_line_in_file(file_path,line_to_find , replacement_line):
+    # Read the file content into a list of lines
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+
+    # Modify the desired line(s)
+    for i, line in enumerate(lines):
+        if line_to_find in line: # Check if the target string is in the line
+            lines[i] = replacement_line + '\n' # Replace the line (add newline character)
+
+    # Overwrite the file with the modified content
+    with open(file_path, 'w') as file:
+        file.writelines(lines)
            
-        
-    #print(scriptsList)
-    
-    
-    
-    
 
     

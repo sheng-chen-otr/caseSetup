@@ -105,8 +105,9 @@ def main():
         writeSurfaces(templateLoc, geomDict,fullCaseSetupDict)
         writeTransportProperties(templateLoc, fullCaseSetupDict)
         writeTurbulenceProperties(templateLoc, fullCaseSetupDict)
+        makeScripts(templateLoc,fullCaseSetupDict)
         copyScripts(templateLoc, fullCaseSetupDict,case)
-        writeToCaseSetup(fullCaseSetupDict,'fullCaseSetupDict')
+        #writeToCaseSetup(fullCaseSetupDict,'fullCaseSetupDict')
         #copy over the pvPostSetup
 
         if args.postProDict:

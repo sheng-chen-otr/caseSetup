@@ -20,10 +20,10 @@
 
             "checkMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running checkMesh...'; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec checkMesh -parallel >> log.checkMesh;",
 
-            "exportMesh":"if [ $? != 0 ]; then exit 1; fi; cp system/controlDictSimple system/controlDict; echo 'Exporting mesh...'; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec postProcess -func postMeshSurfaces -parallel -constant >> log.postMeshSurfaces;",
+            "exportEnsightMesh":"if [ $? != 0 ]; then exit 1; fi; echo \"Running foamToEnsight for mesh...\"; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec foamToEnsight -parallel -latestTime -noZero -constant >> log.EnSight;",
 
-            "movePostMesh":"if [ $? != 0 ]; then exit 1; fi; if [[ -d postProcessing/postMeshSurfaces ]]; then if [[ -d postMeshPostProcessing ]]; then rm -r postMeshPostProcessing; fi; mkdir postMeshPostProcessing; mv postProcessing/postMeshSurfaces postMeshPostProcessing/.; fi;"
-
+            "postProcessingMesh":"if [ -d EnSight ]; then sbatch postMeshScript; echo \"Export successful!\"; fi;"
+            
         },
  "ansaMesh":{"header":"#!/bin/bash\n#SBATCH --nodes=2\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve2\n#SBATCH --output=01_%x_meshing_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_MS035",
 
@@ -41,8 +41,11 @@
 
             "renumberMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running renumberMesh...'; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec renumberMesh -parallel -constant -overwrite >> log.renumberMesh;",
 
-            "checkMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running checkMesh...'; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec checkMesh -parallel >> log.checkMesh;"
+            "checkMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running checkMesh...'; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec checkMesh -parallel >> log.checkMesh;",
 
+            "exportEnsightMesh":"if [ $? != 0 ]; then exit 1; fi; echo \"Running foamToEnsight for mesh...\"; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec foamToEnsight -parallel -latestTime -noZero -constant >> log.EnSight;",
+
+            "postProcessingMesh":"if [ -d EnSight ]; then sbatch postMeshScript; echo \"Export successful!\"; fi;"
         },
  
  "solve":{"header":"#!/bin/bash\n#SBATCH --nodes=2\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve2\n#SBATCH --output=02_%x_solve_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_SO035_half",
@@ -90,6 +93,12 @@
 		
         "makePpt":"echo 'generating ppt...';python3.8  ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pptGeneration/pptGeneration.py >> log.pptGen"
 		
+        },
+
+"postMesh":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=8\n#SBATCH --nodelist=cfd08\n#SBATCH --partition=solve2\n#SBATCH --output=012_%x_postProMesh_%j.out\n#SBATCH --job-name=TS_PP035_half",
+
+            "postPro":"echo 'running pvPostMesh...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pvPost.py --meshOnly >> log.pvpostMesh"
+
         }
     
 }
