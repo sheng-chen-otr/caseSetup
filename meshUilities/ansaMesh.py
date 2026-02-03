@@ -529,7 +529,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
                 edgeIncrement = fullCaseSetupDict[geom.split('.')[0]]['GEOMX_FEAT_EDGE_LEVEL_INC'][0]
                 refAngle = fullCaseSetupDict[geom.split('.')[0]]['GEOMX_REFINEMENT_ANGLE'][0]
                 nlayers = fullCaseSetupDict[geom.split('.')[0]]['GEOMX_NLAYERS'][0]
-                firstLayerHeight = fullCaseSetupDict[geom.split('.')[0]]['FIRST_LAYER_HEIGHT'][0]*1000
+                firstLayerHeight = float(fullCaseSetupDict[geom.split('.')[0]]['FIRST_LAYER_HEIGHT'][0])*1000
                 layerType = fullCaseSetupDict[geom.split('.')[0]]['LAYER_TYPE'][0]
                 growthRate = fullCaseSetupDict[geom.split('.')[0]]['GEOMX_LAYER_RATIO'][0]
 
@@ -825,7 +825,7 @@ def createSizeField(fullCaseSetupDict,geomDict):
 
 
     print('\t\t\tBuilding size field!')
-    mesh.BuildSizeField(sf)
+    #mesh.BuildSizeField(sf)
     saveAnsa(case)
 
     return sf
