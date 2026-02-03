@@ -553,6 +553,29 @@ def createOctree2(fullCaseSetupDict,geomDict):
                 geompids = getPIDsFromPart(geomDict[geom]['part_ent'])
                 mesh.AddPartsToOctreeArea(geompids,part_area) #add geom pids to octree
                 base.SetEntityCardValues(constants.NASTRAN,part_area,{'Name':geom.split('.')[0]})
+                print('\n\t\tAdding PID refinements...')
+                n = 0
+                for geompid in geompids:
+                    refPartMparfile = partMparfile.copy()
+                    pidRefTable = None
+                    for key in refTable.keys():
+                        #going through each key word, if key word is in pid name, that ref table is assigned
+                        if key in geompid._name:
+                            #print(key)
+                            pidRefTable = refTable[key]
+                            #will keep looping until the last one is used (if exists) avoids duplicates
+                    if pidRefTable != None:
+                        print('\t\t\tAdding %s to %s refinement' % (geompid._name,pidRefTable['octree_parameters_name']))
+                        refPartMparfile.update(pidRefTable)
+                        ref_part_area = mesh.GetNewOctreeArea(global_octree,name=geompid._name)
+                        writeMparfile(refPartMparfile,'pidMpars/%s_octree.ansa_mpar' % (geompid._name))
+                        mesh.ReadOctreeAreaParams( area = ref_part_area, mpar_file = 'pidMpars/%s_octree.ansa_mpar' % (geompid._name))
+                        mesh.AddPartsToOctreeArea(geompid,ref_part_area) #add geom pids to octree
+                        base.SetEntityCardValues(constants.NASTRAN,ref_part_area,{'Name':geompid._name})
+                        n = n + 1
+                if n > 0:
+                    print('\n\t\tAdded %s PID refinements!' % (n))
+
                 
             else:
                 part_area = mesh.GetNewOctreeArea(global_octree,name=geom.split('.')[0])
