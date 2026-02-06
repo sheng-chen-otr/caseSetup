@@ -101,3 +101,57 @@ the name of the block will be the name of the geometry just without the extensio
     
 
 \end{itemize} 
+
+
+\subsection{GEOMX Controls}
+Using the \codeword{GEOMX} prefix allows the user to have more control over the meshing of a specific geometry. This is useful for geometries that need to have different meshing criteria than the \codeword{GLOBAL_REFINEMENT} settings.
+
+Including the prefix \codeword{GEOMX} on a geometry would expose the following block:
+\begin{lstlisting}
+    GEOM = GEOMX-trial005-rad.obj.gz,1,8,6,1.4,high
+            fw-H05A00.obj.gz,1,8,6,1.4,high
+            rw-R11I01.obj.gz,1,8,6,1.4,high
+            POR-rad-001.obj.gz,1,10,6,1.4,high
+            ROTA-fr-wh-lhs-v3-3.obj.gz,1,8,6,1.4,high
+            ROTA-fr-wh-rhs-v3-3.obj.gz,1,8,6,1.4,high
+            ROTA-rr-wh-lhs-v3-3.obj.gz,1,8,6,1.4,high
+            ROTA-rr-wh-rhs-v3-3.obj.gz,1,8,6,1.4,high
+
+    [GEOMX-trial005-rad]
+    GEOMX_MIN_MAX_LEVEL = 9 10
+    GEOMX_REFINEMENT_ANGLE = 25
+    GEOMX_FEAT_EDGE_LEVEL_INC = 1
+    GEOMX_FEAT_EDGE_ANGLE = 140
+    GEOMX_NLAYERS = 5
+    GEOMX_LAYER_RATIO = 1.2
+    FIRST_LAYER_HEIGHT = 0.0001
+    GEOMX_REF_DIST = 0.03 0.1 0.2
+    GEOMX_REF_LEVELS = 9 8 7
+\end{lstlisting}
+
+\begin{itemize}
+
+    \item \codeword{GEOMX_MIN_MAX_LEVEL} [\codeword{int} \codeword{int}] - minimum and maximum mesh level to be used for a specific geometry (\codeword{int} \codeword{int})
+        
+    \item \codeword{GEOMX_REFINEMENT_ANGLE} [\codeword{float,deg}] - angle where curvatures with angles larger than it would trigger mesh refinement in that area, operates only for \codeword{ansaMesh} (\codeword{float})
+
+    \item \codeword{GEOMX_FEAT_EDGE_LEVEL_INC} [\codeword{int}] - number of levels to increase for mesh refinement for edges captured by \codeword{surfaceFeatureExtract} (\codeword{int})
+
+    \item \codeword{GEOMX_REF_DIST} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}] ...] - distance from the surface which the mesh level from \codeword{GEOMX_REF_LEVELS} shall be applied, unlimited entries, but must match length in \codeword{GEOMX_REF_LEVELS} (\codeword{float} \codeword{float} ... )
+
+    \item \codeword{GEOMX_REF_LEVELS} [\codeword{int} \codeword{int} ...] - refinement levels for each corresponding distance in \codeword{GEOMX_REF_DIST} unlimited entries, but must match length in \codeword{GEOMX_REF_DIST} (\codeword{int} \codeword{int} ... )
+
+    \item \codeword{DEF_EX_RATIO} [\codeword{float}] - global layer expansion ratio (\codeword{float})
+
+    \item \codeword{REF_ANGLE} [\codeword{float,deg}] - angle where curvatures with angles larger than it would trigger mesh refinement in that area, operates only for \codeword{snappyHexMesh} (\codeword{float})
+
+    \item \codeword{FEAT_EDGE_ANGLE} [\codeword{float,deg}] - angle under which triggers edge refinement, only works for \codeword{snappyHexMesh} (\codeword{float})
+
+    \item \codeword{FEAT_EDGE_LEVEL_INC} [\codeword{int}] - refinement level increment for edges defined by \codeword{FEAT_EDGE_ANGLE}, only works for \codeword{snappyHexMesh} (\codeword{int})
+
+    \item \codeword{FIRST_LAYER_HEIGHT} [[\codeword{float,m}]] - first layer height, only works for \codeword{ansaMesh} (\codeword{float})
+
+    \item \codeword{FINAL_LAYER_HEIGHT} [[\codeword{float,m}]] - total height of inflation layers, not currently operational, for future use (\codeword{float})
+
+    \item \codeword{FINAL_LAYER_RATIO} [[\codeword{float,m}]] - ratio of last layer and the surrounding element size, not currently operational, for future use (\codeword{float})
+\end{itemize}
