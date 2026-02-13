@@ -3,6 +3,7 @@ import os
 import re
 from pathlib import Path
 from summary import *
+from pathlib import Path
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -25,9 +26,31 @@ def get_credentials_path():
     )
 
 SHEET_ID = "1yQ7-aeIgvioDSCrVY6mq3w_ZqJRzT0cZpypf8M3vYhU"
-WORKSHEET_NAME = "250001 - Trials List"
 
-def get_worksheet(sheet_id, worksheet_name):
+def getSheetId(gsheetConfigPath,jobName):
+    gsheetConfig = configparser.ConfigParser()
+    gsheetConfig.optionxform = str
+    try:
+        print('Importing gsheet config...')
+        gsheetConfig.read_file(open(gsheetConfigPath))
+    except Exception as e:
+        print('ERROR! Unable to import CASES/%s.gsheet' % (jobName))
+        sys.exit(e)
+
+    return gsheetConfig[jobName]['sheetID']
+
+def getWorksheetName(path):
+    # Get the absolute path of the current script
+    current_path = os.path.abspath(path)
+    
+    # Move two levels up
+    two_up_path = os.path.abspath(os.path.join(current_path, os.pardir, os.pardir))
+    
+    # Return only the directory name (last folder in the path)
+    return os.path.basename(two_up_path)
+
+
+def get_worksheet(sheet_id, worksheet_name,jobnumber):
     if not sheet_id or sheet_id == "PASTE_YOUR_GOOGLE_SHEET_ID":
         raise ValueError("Please set SHEET_ID in the script before running.")
 
@@ -35,8 +58,11 @@ def get_worksheet(sheet_id, worksheet_name):
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_file(creds_path, scopes=scopes)
     client = gspread.authorize(creds)
-
     spreadsheet = client.open_by_key(sheet_id)
+    spreadsheetName = spreadsheet.title
+    if not jobnumber in spreadsheetName:
+        sys.exit('ERROR! Google sheets title does not match job code, please check!')
+
     return spreadsheet.worksheet(worksheet_name) if worksheet_name else spreadsheet.sheet1
 
 def get_trial_number(case_name=None, case_path=None):
@@ -103,6 +129,7 @@ def write_to_sheet_cells(
     worksheet_name,
     target_row,
     target_columns,
+    jobName
 ):
     if not sheet_id or sheet_id == "PASTE_YOUR_GOOGLE_SHEET_ID":
         raise ValueError("Please set SHEET_ID in the script before running.")
@@ -115,7 +142,7 @@ def write_to_sheet_cells(
     if not all(col and col.isalpha() for col in target_columns):
         raise ValueError("TARGET_COLUMNS must contain only column letters (e.g. A, B, AA).")
 
-    worksheet = get_worksheet(sheet_id, worksheet_name)
+    worksheet = get_worksheet(sheet_id, worksheet_name,jobName)
 
     for col, value in zip(target_columns, values):
         cell = f"{col.upper()}{target_row}"
@@ -127,9 +154,18 @@ def write_to_sheet_cells(
 
 
 def main():
+    global jobName
     case_path = os.getcwd()
     case_name = os.path.basename(os.path.normpath(case_path))
     path = os.path.split(case_path)[0]
+    #checking if run in a trial directory
+    if os.path.basename(os.path.split(case_path)[0]) != 'CASES':
+        sys.exit('ERROR! Please run in a trial directory!')
+    jobName = getWorksheetName(case_path)
+    WORKSHEET_NAME = '%s - Trials List'
+    gsheetID = getSheetId(os.path.join(path,'%s.gsheet' % (jobName)),jobName=jobName)
+    print('\tFound gsheet id: %s' % (gsheetID))
+    
 
     case_setup_path = Path(case_path) / "caseSetup"
     if not case_setup_path.exists():
@@ -197,6 +233,7 @@ def main():
         WORKSHEET_NAME,
         target_row,
         TARGET_COLUMNS,
+        jobName = jobName
     )
     print(
         f"Done. Trial {trial_number} mapped to row {target_row}. "
