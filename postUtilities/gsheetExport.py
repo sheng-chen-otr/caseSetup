@@ -25,7 +25,7 @@ def get_credentials_path():
         "credentials.json in this project folder."
     )
 
-SHEET_ID = "1yQ7-aeIgvioDSCrVY6mq3w_ZqJRzT0cZpypf8M3vYhU"
+#SHEET_ID = "1yQ7-aeIgvioDSCrVY6mq3w_ZqJRzT0cZpypf8M3vYhU"
 
 def getSheetId(gsheetConfigPath,jobName):
     gsheetConfig = configparser.ConfigParser()
