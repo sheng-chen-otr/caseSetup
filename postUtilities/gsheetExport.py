@@ -162,7 +162,7 @@ def main():
     if os.path.basename(os.path.split(case_path)[0]) != 'CASES':
         sys.exit('ERROR! Please run in a trial directory!')
     jobName = getWorksheetName(case_path)
-    WORKSHEET_NAME = '%s - Trials List'
+    WORKSHEET_NAME = '%s - Trials List' % (jobName)
     gsheetID = getSheetId(os.path.join(path,'%s.gsheet' % (jobName)),jobName=jobName)
     print('\tFound gsheet id: %s' % (gsheetID))
     
