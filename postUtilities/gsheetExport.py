@@ -225,7 +225,7 @@ def main():
     ]
 
     trial_number = get_trial_number()
-    target_row = get_or_create_trial_row(SHEET_ID, WORKSHEET_NAME, trial_number,jobName)
+    target_row = get_or_create_trial_row(gsheetID, WORKSHEET_NAME, trial_number,jobName)
 
     write_to_sheet_cells(
         gsheetID,
