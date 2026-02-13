@@ -98,7 +98,7 @@ TARGET_COLUMNS = ["B","F", "G", "H", "N", "O", "P", "Q", "R", "S", "T", "AD", "A
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CREDENTIALS_FILE = PROJECT_DIR / "credentials.json"
 
-def get_or_create_trial_row(sheet_id, worksheet_name, trial_number):
+def get_or_create_trial_row(sheet_id, worksheet_name, trial_number,jobNumber):
     """
     Find trial_number in column A and return its row.
     If missing, write it to the next available row in column A and return that row.
@@ -107,7 +107,7 @@ def get_or_create_trial_row(sheet_id, worksheet_name, trial_number):
     if trial_number == "":
         raise ValueError("trial_number is empty.")
 
-    worksheet = get_worksheet(sheet_id, worksheet_name)
+    worksheet = get_worksheet(sheet_id, worksheet_name,jobNumber)
     column_a = worksheet.col_values(1)
 
     for row_index, value in enumerate(column_a, start=1):
@@ -225,10 +225,10 @@ def main():
     ]
 
     trial_number = get_trial_number()
-    target_row = get_or_create_trial_row(SHEET_ID, WORKSHEET_NAME, trial_number)
+    target_row = get_or_create_trial_row(SHEET_ID, WORKSHEET_NAME, trial_number,jobName)
 
     write_to_sheet_cells(
-        SHEET_ID,
+        gsheetID,
         data_to_write,
         WORKSHEET_NAME,
         target_row,
