@@ -94,7 +94,7 @@ def get_trial_number(case_name=None, case_path=None):
 
     raise ValueError(f"No numeric trial number found in case name: {case_name}")
 
-TARGET_COLUMNS = ["B","F", "G", "H", "N", "O", "P", "Q", "R", "S", "T", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO"]
+TARGET_COLUMNS = ["B","F", "G", "H", "M","N", "O", "P", "Q", "R", "S", "T", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO"]
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CREDENTIALS_FILE = PROJECT_DIR / "credentials.json"
 
@@ -178,7 +178,11 @@ def main():
     coeff_files = getCoeffPaths(case_path, case_name)
     avg_data = averageCoeffs(full_case_setup_dict, case_name, "all", coeff_files)
     num_cells, mesher, _ = cellCount(full_case_setup_dict, case_path, case_name)
-    inlet_mag, _, yaw, _, _, _, _ = bcParser(full_case_setup_dict, path, case_name)
+    inlet_mag, _, yaw, _, _, symType, _ = bcParser(full_case_setup_dict, path, case_name)
+    wheelBase = full_case_setup_dict['BC_SETUP']['REFLEN']
+    refArea = full_case_setup_dict['BC_SETUP']['REFAREA']
+    isHalf = "TRUE" if symType.lower() == "half" else "FALSE"
+    density = full_case_setup_dict['GLOBAL_MATERIAL']['DENSTIY']
     run_date, run_time, _, _ = getOfVersion(case_path)
 
     fw_cd = ""
@@ -203,13 +207,14 @@ def main():
         run_time,
         num_cells,
         mesher,
+        isHalf,
         inlet_mag,
         yaw,
-        "1.225",
+        density,
         "0",
         "0",
-        "1",
-        "1.55",
+        refArea,
+        wheelBase,
         avg_data["cd"],
         avg_data["cl"],
         avg_data["clf"],

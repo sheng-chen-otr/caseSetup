@@ -280,26 +280,40 @@ def cellCount(fullCaseSetupDict,path,case):
     checkmesh = "%s/log.checkMesh" % (path)
     logfidelity = "%s/log.fidelityMesh" % (path)
     logsnappy = "%s/log.snappyHexMesh" % (path)
+    logansa = "%s/log.ansaMesh" % (path)
     if os.path.isfile(logfidelity):
         mesher = "Fidelity Hexpress"
     elif os.path.isfile(logsnappy):
         mesher = "snappyHexMesh"
+    elif os.path.isfile(logansa):
+        mesher = "ansaMesh"
     else:
         mesher = "N/A"
     if "half" in case or fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
         sym = "Half"
-    elif "corver" in case:
+    elif "corner" in case:
         sym = "Corner"
+    elif fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'full':
+        sym = "Full"
     else:
         sym = "Full"
     if os.path.isfile(checkmesh):
         checkmeshfile = open(checkmesh, "r")
+        numCells = None
         for line in checkmeshfile:
             if "cells:" in line:
                 numCells = line.split()[1]
+        if numCells == None:
+            numCells = "N/A" 
     else:
         numCells = "N/A"
     return numCells, mesher, sym
+
+def getCellCountAlt(fullCaseSetupDict,path,case):
+    pass
+    
+
+    
 def getOfVersion(path):
     print("Getting OF version...")
     logsimplefoam = "%s/log.simpleFoam" % (path)
