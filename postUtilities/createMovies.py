@@ -48,8 +48,8 @@ def generateMovies():
                     f.write(f"file '{image}'\n")
                 
 
-            # os.system("ffmpeg -y -framerate 10 -pattern_type glob -i '%s*.png' -vf scale=1920:1080 -c:v libx264 -pix_fmt yuv420p %s.mp4 >> log.createMovies" % (os.path.join(dir),
-            #                                                                                                             os.path.join(dir,prefix)))
+            os.system("ffmpeg -y -framerate 10 -pattern_type glob -i '%s' -vf scale=1920:1080 -c:v libx264 -pix_fmt yuv420p %s.mp4 >> log.createMovies" % (output_txt_file,
+                                                                                                                        os.path.join(dir,prefix)))
             
         
 
