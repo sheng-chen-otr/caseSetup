@@ -41,7 +41,7 @@ def generateMovies():
             images = sorted(images, key=extract_number)
             
             
-            output_txt_file = "%s_images.txt" % (prefix)
+            output_txt_file = "%s/%s_images.txt" % (dir,prefix)
             with open(output_txt_file, "w") as f:
                 for image in images:
                     print('\t\t%s' % (image))
