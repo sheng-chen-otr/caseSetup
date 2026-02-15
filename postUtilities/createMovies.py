@@ -1,10 +1,20 @@
 import os
 import sys
 import glob
-from natsort import natsorted
+import re
 
 def main():
     generateMovies()
+
+
+def extract_number(filename):
+    # Find all sequences of digits in the string
+    numbers = re.findall(r'\d+', filename)
+    # Take the last sequence found and convert to int
+    if numbers:
+        return int(numbers[-1])
+    return 0 # Fallback if no numbers found
+
 
 
 def generateMovies():
@@ -28,7 +38,7 @@ def generateMovies():
         for prefix in prefixes:
             print('\t%s' % (prefix))
             images = glob.glob(os.path.join(dir,'%s*.png' % (prefix)))
-            images = natsorted(images)
+            images = sorted(images, key=extract_number)
             for image in images:
                 print('\t\t%s' % (image))
 
