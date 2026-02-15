@@ -48,7 +48,7 @@ def generateMovies():
                     f.write(f"file '{image}'\n")
                 
 
-            os.system("ffmpeg -y -framerate 10 -f concat -safe 0 -i '%s' -vf scale=1920:1080 -c:v libx264 -pix_fmt yuv420p %s.mp4 >> log.createMovies" % (output_txt_file,
+            os.system("ffmpeg -y -framerate 10 -f concat -i '%s' -vf scale=1920:1080 -c:v libx264 -pix_fmt yuv420p %s.mp4 >> log.createMovies" % (output_txt_file,
             prefix))
             
         
