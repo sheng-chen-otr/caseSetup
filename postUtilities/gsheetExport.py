@@ -182,7 +182,10 @@ def main():
     wheelBase = full_case_setup_dict['BC_SETUP']['REFLEN']
     refArea = full_case_setup_dict['BC_SETUP']['REFAREA']
     isHalf = "TRUE" if symType.lower() == "half" else "FALSE"
-    density = full_case_setup_dict['GLOBAL_MATERIAL']['DENSITY']
+    try:
+        density = full_case_setup_dict['GLOBAL_MATERIAL']['DENSITY']
+    except:
+        density = 1.225
     run_date, run_time, _, _ = getOfVersion(case_path)
 
     fw_cd = ""
