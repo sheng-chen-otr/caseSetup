@@ -39,8 +39,14 @@ def generateMovies():
             print('\t%s' % (prefix))
             images = glob.glob(os.path.join(dir,'%s*.png' % (prefix)))
             images = sorted(images, key=extract_number)
-            for image in images:
-                print('\t\t%s' % (image))
+            
+            
+            output_txt_file = "%s_images.txt" % (prefix)
+            with open(output_txt_file, "w") as f:
+                for image in images:
+                    print('\t\t%s' % (image))
+                    f.write(f"file '{image}'\n")
+                
 
             # os.system("ffmpeg -y -framerate 10 -pattern_type glob -i '%s*.png' -vf scale=1920:1080 -c:v libx264 -pix_fmt yuv420p %s.mp4 >> log.createMovies" % (os.path.join(dir),
             #                                                                                                             os.path.join(dir,prefix)))
