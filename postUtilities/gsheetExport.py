@@ -178,7 +178,8 @@ def main():
     coeff_files = getCoeffPaths(case_path, case_name)
     avg_data = averageCoeffs(full_case_setup_dict, case_name, "all", coeff_files)
     num_cells, mesher, _ = cellCount(full_case_setup_dict, case_path, case_name)
-    inlet_mag, _, yaw, _, _, symType, _ = bcParser(full_case_setup_dict, path, case_name)
+    inlet_mag, _, yaw, _, _, _, _ = bcParser(full_case_setup_dict, path, case_name)
+    symType = full_case_setup_dict['GLOBAL_SIM_CONTROL']['SIM_SYM']
     print(symType)
     wheelBase = full_case_setup_dict['BC_SETUP']['REFLEN']
     refArea = full_case_setup_dict['BC_SETUP']['REFAREA']
