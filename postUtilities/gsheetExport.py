@@ -25,7 +25,6 @@ def get_credentials_path():
         "credentials.json in this project folder."
     )
 
-#SHEET_ID = "1yQ7-aeIgvioDSCrVY6mq3w_ZqJRzT0cZpypf8M3vYhU"
 
 def getSheetId(gsheetConfigPath,jobName):
     gsheetConfig = configparser.ConfigParser()
@@ -34,7 +33,7 @@ def getSheetId(gsheetConfigPath,jobName):
         print('Importing gsheet config...')
         gsheetConfig.read_file(open(gsheetConfigPath))
     except Exception as e:
-        print('ERROR! Unable to import CASES/%s.gsheet' % (jobName))
+        print('ERROR! Unable to import %s' % (gsheetConfigPath))
         sys.exit(e)
 
     return gsheetConfig[jobName]['sheetID']
@@ -162,8 +161,9 @@ def main():
     if os.path.basename(os.path.split(case_path)[0]) != 'CASES':
         sys.exit('ERROR! Please run in a trial directory!')
     jobName = getWorksheetName(case_path)
-    WORKSHEET_NAME = '%s - Trials List' % (jobName)
-    gsheetID = getSheetId(os.path.join(path,'%s.gsheet' % (jobName)),jobName=jobName)
+    WORKSHEET_NAME = 'Trial List'
+    jobRoot = os.path.abspath(os.path.join(path, os.pardir))
+    gsheetID = getSheetId(os.path.join(jobRoot, '02_reference', 'GSheet', '%s.gsheet' % jobName), jobName=jobName)
     print('\tFound gsheet id: %s' % (gsheetID))
     
 
@@ -182,7 +182,7 @@ def main():
     wheelBase = full_case_setup_dict['BC_SETUP']['REFLEN']
     refArea = full_case_setup_dict['BC_SETUP']['REFAREA']
     isHalf = "TRUE" if symType.lower() == "half" else "FALSE"
-    density = full_case_setup_dict['GLOBAL_MATERIAL']['DENSITY']
+    #density = full_case_setup_dict['GLOBAL_MATERIAL']['DENSITY']
     run_date, run_time, _, _ = getOfVersion(case_path)
 
     fw_cd = ""
