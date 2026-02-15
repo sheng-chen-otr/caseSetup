@@ -166,7 +166,6 @@ def main():
     gsheetID = getSheetId(os.path.join(jobRoot, '02_reference', 'GSheet', '%s.gsheet' % jobName), jobName=jobName)
     print('\tFound gsheet id: %s' % (gsheetID))
     
-
     case_setup_path = Path(case_path) / "caseSetup"
     if not case_setup_path.exists():
         raise FileNotFoundError(f"caseSetup file not found at: {case_setup_path}")
@@ -180,7 +179,6 @@ def main():
     num_cells, mesher, _ = cellCount(full_case_setup_dict, case_path, case_name)
     inlet_mag, _, yaw, _, _, _, _ = bcParser(full_case_setup_dict, path, case_name)
     symType = full_case_setup_dict['GLOBAL_SIM_CONTROL']['SIM_SYM']
-    print(symType)
     wheelBase = full_case_setup_dict['BC_SETUP']['REFLEN']
     refArea = full_case_setup_dict['BC_SETUP']['REFAREA']
     isHalf = "TRUE" if symType.lower() == "half" else "FALSE"
