@@ -45,7 +45,7 @@ XRES = ASPECT_RATIO * YRES
 RESOLUTION = [int(XRES),int(YRES)]
 
 #debug options
-USE_PRE_DEF_VARS = False #using only predefined variables in list PRE_DEF_VAR_LIST
+USE_PRE_DEF_VARS = True #using only predefined variables in list PRE_DEF_VAR_LIST
 PRE_DEF_VAR_LIST = ['UnwMean','pMean']
 
 
@@ -1070,10 +1070,10 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
 
     #checking for image type, if not slice then omit last two variables in name
     if not 'slice' in imageType.lower():
-        fileName = '%s_%s_%s_%s.png' % (caseName,variable,imageType,view)
+        fileName = '%s_%s_%s_%s.jpeg' % (caseName,variable,imageType,view)
         dirName = '%s_%s' % (variable,imageType)
     else:
-        fileName = '%s_%s_%s_%s_%s_%1.5g_%s.png' % (caseName,variable,imageType,view,normal,position,format(int(counter),"05"))
+        fileName = '%s_%s_%s_%s_%s_%1.5g_%s.jpeg' % (caseName,variable,imageType,view,normal,position,format(int(counter),"05"))
         dirName = '%s_%s' % (variable,imageType)
 
 
@@ -1112,42 +1112,10 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
     titleTextDisplay.Position = [0.01,0.95]
     titleTextDisplay.Bold = 1
 
-    # if imageType.lower() == 'slice':
-    #     sliceText = Text(registrationName="SliceText")
-    #     if normal == 'X':
-    #         sliceText.Text = '%s - %s - %s - %s - X = %1.3f' % (caseName,variable,imageType,view,position)
-    #     elif normal == 'Y':
-    #         sliceText.Text = '%s - %s - %s - %s - Y = %1.3f' % (caseName,variable,imageType,view,position)
-    #     elif normal == 'Z':
-    #         sliceText.Text = '%s - %s - %s - %s - Z = %1.3f' % (caseName,variable,imageType,view,position)
-    #     sliceTextDisplay = Show(sliceText, renderView)
-    #     sliceTextDisplay.FontSize = 100
-    #     sliceTextDisplay.Color = [0,0,0]
-    #     sliceTextDisplay.Position = [0.01,0.05]
-    #     sliceTextDisplay.Bold = 0
-
-    # if pvPostSetupDict['PV_POST_MAIN']['LOGO_PATH'].lower() == 'default':
-    #     print('\t\tUsing default logo path...')
-    #     logoPath = os.path.dirname(os.path.realpath(__file__)) + '/default/otrLogo_greayOnWhite.png'
-    # else:    
-    #     print('\t\tUsing custom logo path...')
-    #     logoPath = pvPostSetupDict['PV_POST_MAIN']['LOGO_PATH']
-    # if os.path.isfile(logoPath):
-    #     '\t\tAdding logo to image from: %s' % (logoPath)
-    #     logo = Logo( registrationName="Logo" )
-    #     logoTexture = CreateTexture( logoPath )
-    #     logo.Texture = logoTexture
-    #     logoDisplay = Show( logo, renderView )
-    #     logoDisplay.Position = [0.85,0.05]
-   
     
 
 
     print('\t\t\tSaving screenshot: %s' % (fileName))
-    # if 'LIC' in imageType:
-    #     SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,OverrideColorPalette = 'WhiteBackground',resolution=np.round(np.array(RESOLUTION),0))
-    # else:
-    #     SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,OverrideColorPalette = 'WhiteBackground',resolution=np.round(np.array(RESOLUTION),0))
     SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,OverrideColorPalette = 'WhiteBackground')
 
     Hide(titleText,renderView)
