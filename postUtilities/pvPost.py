@@ -262,7 +262,7 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
     availableVars = list(varDict['surfaceVariables'].keys())
 
 
-    for variable in surfaceVars:
+    for variable in surfaceVars.split():
         beginVarTime = time.time()
         if 'geom' in variable.lower():
             surfaceSourceDisplay = Show(surfaceSource,renderView,'UnstructuredGridRepresentation')
