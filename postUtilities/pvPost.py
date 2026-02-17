@@ -43,9 +43,18 @@ ASPECT_RATIO = 16/9
 YRES = 3000
 XRES = ASPECT_RATIO * YRES
 RESOLUTION = [int(XRES),int(YRES)]
+LIC_RESOLUTION = [int(XRES),int(YRES)]
+FINAL_RESOLUTION_FACTOR = 2
+FINAL_RESOLUTION  = [int(XRES/FINAL_RESOLUTION_FACTOR),int(YRES/FINAL_RESOLUTION_FACTOR)]
+SCALAR_BAR_THICK = 50
+TITLE_FONT_SIZE = 50
+LABEL_FONT_SIZE = 50
+LIC_SCALAR_BAR_THICK = 50
+LIC_TITLE_FONT_SIZE = 50
+LIC_LABEL_FONT_SIZE = 50
 
 #debug options
-USE_PRE_DEF_VARS = True #using only predefined variables in list PRE_DEF_VAR_LIST
+USE_PRE_DEF_VARS = False #using only predefined variables in list PRE_DEF_VAR_LIST
 PRE_DEF_VAR_LIST = ['UnwMean','pMean']
 
 
@@ -253,16 +262,19 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
     print('\tGenerating surface contour plots...')
     if surfaceVars == 'default':
         surfaceVars = ['Geom','CpMean','UnwMean','UnwMeanX','UnwMeanY','UnwMeanY','UnwMeanZ','CpPrime2Mean','CfMean']
+    else:
+        surfaceVars = surfaceVars.split()
     if views == 'default':
         views = ['Rear','Front','Left','Right','Top','Bottom','FrontRight','FrontLeft','RearRight','RearLeft','LeftBack','LeftForward','RightBack','RightForward']
-
+    else:
+        views = views.split()
 
     print('\t\tRequested surface variables: %s' % (surfaceVars))
 
     availableVars = list(varDict['surfaceVariables'].keys())
 
 
-    for variable in surfaceVars.split():
+    for variable in surfaceVars:
         beginVarTime = time.time()
         if 'geom' in variable.lower():
             surfaceSourceDisplay = Show(surfaceSource,renderView,'UnstructuredGridRepresentation')
@@ -321,9 +333,9 @@ def generateSurfaceContours(surfaceSource,renderView,surfaceVars,views,varDict,v
                 colorBar.RangeLabelFormat = '%-1.1f'
                 colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)         
             colorBar.ScalarBarLength = 0.3
-            colorBar.ScalarBarThickness = 160
-            colorBar.TitleFontSize = 160
-            colorBar.LabelFontSize = 160
+            colorBar.ScalarBarThickness = SCALAR_BAR_THICK
+            colorBar.TitleFontSize = TITLE_FONT_SIZE
+            colorBar.LabelFontSize = LABEL_FONT_SIZE
             colorBar.TitleColor = [0,0,0]
             colorBar.LabelColor = [0,0,0]
             colorBar.AddRangeLabels = 1
@@ -486,9 +498,9 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
                     colorBar.RangeLabelFormat = '%-1.1f'
                     colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)         
                 colorBar.ScalarBarLength = 0.3
-                colorBar.ScalarBarThickness = 160
-                colorBar.TitleFontSize = 160
-                colorBar.LabelFontSize = 160
+                colorBar.ScalarBarThickness = SCALAR_BAR_THICK
+                colorBar.TitleFontSize = TITLE_FONT_SIZE
+                colorBar.LabelFontSize = LABEL_FONT_SIZE
                 colorBar.TitleColor = [0,0,0]
                 colorBar.LabelColor = [0,0,0]
                 colorBar.AddRangeLabels = 1
@@ -597,87 +609,21 @@ def generateMeshSlices(volumeSource,renderView,sliceDict,viewsDict):
                 slice1.SliceType.Origin  = [0,0,coord]
             
             slice1.SliceType         = "Plane"
-            slice1.Triangulatetheslice = 0
-            #start looping through variables
-            # for variable in sliceVars:
-                #if vorticity in internal volume do not mirror vectors
-
-                #check if variables are available
-                # if not variable in availableVars:
-                #     print('\n\t\t%s not available, skipping...\n' % (variable))
-                #     continue
-
-                #calculating variable using variable equation
-                # calculator = Calculator(registrationName='calculator', Input=slice1)
-                # calculator.Function = str(varDict['sliceVariables'][variable]['equation'])
-                # calculator.ResultArrayName = variable
-                
+            slice1.Triangulatetheslice = 0                
             sliceSourceDisplay = Show(slice1,renderView,'UnstructuredGridRepresentation')
             sliceSourceDisplay.Representation = 'Wireframe'
             
             
             
             ColorBy(sliceSourceDisplay,('POINTS','Solid Color'))
-            # LUT = GetColorTransferFunction(variable)
-            # PWF  = GetOpacityTransferFunction(variable)
-            title = 'mesh'
-            # varRange = np.array(varDict['sliceVariables'][variable]['range'])
-            # tableValues = 15
-            # color = varDict['sliceVariables'][variable]['color']
 
-            # LUT.NumberOfTableValues = tableValues #default
-            # LUT.RescaleTransferFunction(varRange[0],varRange[1])
-            # PWF.RescaleTransferFunction(varRange[0],varRange[1])
-            # LUT.ApplyPreset(color,True)
-            # PWF.ApplyPreset(color,True)
             renderView.Update()
-
-
-            # colorBar = GetScalarBar(LUT,renderView)
-            # colorBar.Title = title
-            # colorBar.TitleFontFamily = 'Times'
-            # colorBar.LabelFontFamily = 'Times'
-            # colorBar.ComponentTitle = ''
-            # colorBar.Orientation = 'Horizontal'
-            # colorBar.WindowLocation = 'Lower Center'
-            # if  'Cf' in variable:
-            #     colorBar.LabelFormat = '%-1.3g'
-            #     colorBar.RangeLabelFormat = '%-1.3g'
-            #     colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],3)         
-            # else:
-            #     colorBar.LabelFormat = '%-1.1f'
-            #     colorBar.RangeLabelFormat = '%-1.1f'
-            #     colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)         
-            # colorBar.ScalarBarLength = 0.3
-            # colorBar.ScalarBarThickness = 160
-            # colorBar.TitleFontSize = 160
-            # colorBar.LabelFontSize = 160
-            # colorBar.TitleColor = [0,0,0]
-            # colorBar.LabelColor = [0,0,0]
-            # colorBar.AddRangeLabels = 1
-            # colorBar.AutomaticLabelFormat = 0
-            # colorBar.DrawAnnotations = 0
-            # colorBar.DrawTickLabels = 1
-            # colorBar.UseCustomLabels = 1
-            # colorBar.BackgroundColor = [1,1,1,1]
-            # colorBar.BackgroundPadding = 10  
-                    
-                        
-
             HideUnusedScalarBars()  
-            
+        
             renderView = setView(renderView,viewsDict[sliceView])
             saveImages(renderView,caseName,'mesh','slice',sliceView,normal=normal,position=coord,counter=n)
-            
-            
-            # try:
-            #     Delete(colorBar)
-            # except:
-            #     print('')
             Hide(sliceSourceDisplay,renderView)
             Delete(sliceSourceDisplay)
-            #Delete(calculator)
-
             n = n + 1
     return time.time()-begin_slice
 
@@ -818,9 +764,9 @@ def generateLICSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
                     colorBar.RangeLabelFormat = '%-1.1f'
                     colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)         
                 colorBar.ScalarBarLength = 0.3
-                colorBar.ScalarBarThickness = 80
-                colorBar.TitleFontSize = 80
-                colorBar.LabelFontSize = 80
+                colorBar.ScalarBarThickness = int(LIC_SCALAR_BAR_THICK)
+                colorBar.TitleFontSize = int(LIC_TITLE_FONT_SIZE)
+                colorBar.LabelFontSize = int(LIC_LABEL_FONT_SIZE)
                 colorBar.TitleColor = [0,0,0]
                 colorBar.LabelColor = [0,0,0]
                 colorBar.AddRangeLabels = 1
@@ -909,56 +855,7 @@ def generateIsoSurfaces(surfaceSource,renderView,views,varDict,viewsDict):
             #isoSourceDisplay.ColorArrayName = ['POINTS',colorby]
             ColorBy(isoSourceDisplay,('POINTS',colorby))
             isoSourceDisplay.DiffuseColor = [1,1,0]
-
-            # variable = 'vorticityMean'
-            # #calculating variable using variable equation
-            # calculator = Calculator(registrationName='calculator', Input=isoSource)
-            # calculator.Function = str(varDict['sliceVariables'][variable]['equation'])
-            # calculator.ResultArrayName = variable
-            # isoSourceDisplay = Show(calculator,renderView,'UnstructuredGridRepresentation')
-            # isoSourceDisplay.Representation = 'Surface'
-            # isoSourceDisplay.ColorArrayName = ['POINTS',variable]
-            # renderView.Update()
-            # LUT = GetColorTransferFunction(variable)
-            # PWF  = GetOpacityTransferFunction(variable)
-            # title = varDict['sliceVariables'][variable]['label']
-            # varRange = np.array(varDict['sliceVariables'][variable]['range'])
-            # tableValues = 15
-            # color = varDict['sliceVariables'][variable]['color']
-            # LUT.NumberOfTableValues = tableValues
-            # LUT.RescaleTransferFunction(varRange[0],varRange[1])
-            # PWF.RescaleTransferFunction(varRange[0],varRange[1])
-            # LUT.ApplyPreset(color,True)
-            # PWF.ApplyPreset(color,True)
-            
-            # ColorBy(isoSourceDisplay,('POINTS',variable))
-            # colorBar = GetScalarBar(LUT,renderView)
-            # colorBar.Title = title
-            # colorBar.TitleFontFamily = 'Times'
-            # colorBar.LabelFontFamily = 'Times'
-            # colorBar.ComponentTitle = ''
-            # colorBar.Orientation = 'Horizontal'
-            # colorBar.WindowLocation = 'Lower Center'
-            # colorBar.LabelFormat = '%-1.1f'
-            # colorBar.RangeLabelFormat = '%-1.1f'
-            # colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)
-            # colorBar.ScalarBarLength = 0.3
-            # colorBar.ScalarBarThickness = 160
-            # colorBar.TitleFontSize = 160
-            # colorBar.LabelFontSize = 160
-            # colorBar.TitleColor = [0,0,0]
-            # colorBar.LabelColor = [0,0,0]
-            # colorBar.AddRangeLabels = 1
-            # colorBar.AutomaticLabelFormat = 0
-            # colorBar.DrawAnnotations = 0
-            # colorBar.DrawTickLabels = 1
-            # colorBar.UseCustomLabels = 1
-            # colorBar.BackgroundColor = [1,1,1,1]
-            # colorBar.BackgroundPadding = 10
-
-        
-        
-        
+ 
         elif isoFileName == 'isoCtp.vtp':
             colorby = 'Solid Color'
             isoSourceDisplay = Show(isoSource,renderView,'UnstructuredGridRepresentation')
@@ -966,57 +863,6 @@ def generateIsoSurfaces(surfaceSource,renderView,views,varDict,viewsDict):
             #isoSourceDisplay.ColorArrayName = ['POINTS',colorby]
             ColorBy(isoSourceDisplay,('POINTS',colorby))
             isoSourceDisplay.DiffuseColor = [1,0,0]
-            
-            
-            # variable = 'UMean'
-            # #calculating variable using variable equation
-            # calculator = Calculator(registrationName='calculator', Input=isoSource)
-            # calculator.Function = str(varDict['sliceVariables'][variable]['equation'])
-            # calculator.ResultArrayName = variable
-            # isoSourceDisplay = Show(calculator,renderView,'UnstructuredGridRepresentation')
-            # isoSourceDisplay.Representation = 'Surface'
-            # isoSourceDisplay.ColorArrayName = ['POINTS',variable]
-            # renderView.Update()
-            # LUT = GetColorTransferFunction(variable)
-            # PWF  = GetOpacityTransferFunction(variable)
-            # title = varDict['surfaceVariables'][variable]['label']
-            # varRange = np.array(varDict['surfaceVariables'][variable]['range'])
-            # tableValues = 15
-            # color = varDict['surfaceVariables'][variable]['color']
-            # LUT.NumberOfTableValues = tableValues
-            # LUT.RescaleTransferFunction(varRange[0],varRange[1])
-            # PWF.RescaleTransferFunction(varRange[0],varRange[1])
-            # LUT.ApplyPreset(color,True)
-            # PWF.ApplyPreset(color,True)
-            
-            # ColorBy(isoSourceDisplay,('POINTS',variable))
-            # colorBar = GetScalarBar(LUT,renderView)
-            # colorBar.Title = title
-            # colorBar.TitleFontFamily = 'Times'
-            # colorBar.LabelFontFamily = 'Times'
-            # colorBar.ComponentTitle = ''
-            # colorBar.Orientation = 'Horizontal'
-            # colorBar.WindowLocation = 'Lower Center'
-            # colorBar.LabelFormat = '%-1.1f'
-            # colorBar.RangeLabelFormat = '%-1.1f'
-            # colorBar.CustomLabels = np.linspace(varRange[0],varRange[1],5)
-            # colorBar.ScalarBarLength = 0.3
-            # colorBar.ScalarBarThickness = 160
-            # colorBar.TitleFontSize = 160
-            # colorBar.LabelFontSize = 160
-            # colorBar.TitleColor = [0,0,0]
-            # colorBar.LabelColor = [0,0,0]
-            # colorBar.AddRangeLabels = 1
-            # colorBar.AutomaticLabelFormat = 0
-            # colorBar.DrawAnnotations = 0
-            # colorBar.DrawTickLabels = 1
-            # colorBar.UseCustomLabels = 1
-            # colorBar.BackgroundColor = [1,1,1,1]
-            # colorBar.BackgroundPadding = 10
-            
-        
-
-
 
         HideUnusedScalarBars()  
         for view in views:
@@ -1063,10 +909,10 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
     IMAGE_SAVE_START = time.time()
 
     if 'LIC' in imageType:
-        LIC_RESOLUTION = np.round(np.array(RESOLUTION)/2,0)
-        renderView.ViewSize                  = [int(LIC_RESOLUTION[0]),int(LIC_RESOLUTION[1])] # default
+        #LIC_RESOLUTION = np.round(np.array(RESOLUTION),0)
+        renderView.ViewSize                  = FINAL_RESOLUTION # default
     else:
-        renderView.ViewSize                  = RESOLUTION # default
+        renderView.ViewSize                  = FINAL_RESOLUTION # default
 
     #checking for image type, if not slice then omit last two variables in name
     if not 'slice' in imageType.lower():
@@ -1105,9 +951,9 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
         titleText.Text = '%s - %s - %s - %s' % (caseName,variable,imageType,view)
     titleTextDisplay = Show(titleText, renderView)
     if 'LIC' in imageType:
-        titleTextDisplay.FontSize = 100
+        titleTextDisplay.FontSize = LIC_LABEL_FONT_SIZE
     else:
-        titleTextDisplay.FontSize = 200
+        titleTextDisplay.FontSize = LABEL_FONT_SIZE
     titleTextDisplay.Color = [0,0,0]
     titleTextDisplay.Position = [0.01,0.95]
     titleTextDisplay.Bold = 1
@@ -1116,7 +962,8 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
 
 
     print('\t\t\tSaving screenshot: %s' % (fileName))
-    SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,OverrideColorPalette = 'WhiteBackground')
+    SaveScreenshot(filename='postProcessing/images/' + dirName + '/' + fileName,viewOrLayout=renderView,
+                   OverrideColorPalette = 'WhiteBackground')
 
     Hide(titleText,renderView)
     # if imageType.lower() == 'slice':
