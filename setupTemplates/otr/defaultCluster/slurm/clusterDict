@@ -89,15 +89,9 @@
 
          "forces":"echo 'doing post run forces and summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/postUtilities/postRun.py --forces -s --summary >> log.postRun",
 
-<<<<<<< HEAD
-         "uploadToGSheets":"echo 'uploading to gsheets...';/home/openfoam/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/.venvs/gsheet/bin/python --mpi ~/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/postUtilities/gsheetExport.py >> log.gsheetExport",
-
-         "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pvPost.py >> log.pvpost",
-=======
          "gsheetExport":"echo 'exporting to gsheet...';/home/openfoam/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/.venvs/gsheet/bin/python /home/openfoam/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/postUtilities/gsheetExport.py >> log.gsheetExport",
 
          "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/postUtilities/pvPost.py >> log.pvpost",
->>>>>>> 07f8f8a1020a5a0b3c80550860c9b4ca17ee8e37
 		
         "makePpt":"echo 'generating ppt...';python3.8  ~/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/postUtilities/pptGeneration/pptGeneration.py >> log.pptGen"
 		

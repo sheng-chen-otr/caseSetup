@@ -54,7 +54,7 @@ LIC_TITLE_FONT_SIZE = 50
 LIC_LABEL_FONT_SIZE = 50
 
 #debug options
-USE_PRE_DEF_VARS = False #using only predefined variables in list PRE_DEF_VAR_LIST
+USE_PRE_DEF_VARS = False #using only predefined variables in list PRE_DEF_VAR_LIST, for dev purposes
 PRE_DEF_VAR_LIST = ['UnwMean','pMean']
 
 
