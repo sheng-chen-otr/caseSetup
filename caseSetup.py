@@ -143,19 +143,22 @@ def writeSnappy(geomDict,fullCaseSetupDict):
         print('\t\tsystem directory not found, creating!')
         os.system('mkdir %s/%s/system' % (path,case))
         print('\t\tUsing snappyHexMesh template: %s' % (snappyTemplate))
-        if not 'ansa' in snappyTemplate.lower():
+        if 'ansa' in snappyTemplate.lower():
+            print('\t\tUsing ansaMesh!')
+        elif 'fidelity' in snappyTemplate.lower():
+            print('\t\tUsing fidelityMesh!')
+        else:
             print('\t\tCopying snappyHexMesh template from: %s' % (snappyTemplatePath))
             os.system('cp %s %s/%s/system/snappyHexMeshDict' % (snappyTemplatePath,path,case))
-        else:
-            print('\t\tUsing ansaMesh!')
     else:
         print('\t\tUsing snappyHexMesh template: %s' % (snappyTemplate))
-        if not 'ansa' in snappyTemplate.lower():
+        if 'ansa' in snappyTemplate.lower():
+            print('\t\tUsing ansaMesh!')
+        elif 'fidelity' in snappyTemplate.lower():
+            print('\t\tUsing fidelityMesh!')
+        else:
             print('\t\tCopying snappyHexMesh template from: %s' % (snappyTemplatePath))
             os.system('cp %s %s/%s/system/snappyHexMeshDict' % (snappyTemplatePath,path,case))
-        else:
-            print('\t\tUsing ansaMesh!')
-
     
     os.system('cp %s %s/%s/system/snappyRefinementDict' % (snappyRefinementPath,path,case))
     os.system('cp %s %s/%s/system/meshQualityDict' % (snappyQualityPath,path,case))
@@ -163,6 +166,8 @@ def writeSnappy(geomDict,fullCaseSetupDict):
     #if using ansa, doesn't write out snappy things!
     ############
     if 'ansa' in snappyTemplate.lower():
+        return geomDict,fullCaseSetupDict
+    elif 'fidelity' in snappyTemplate.lower(): 
         return geomDict,fullCaseSetupDict
     if not os.path.exists(snappyTemplatePath):
         print('ERROR! TEMPLATE_TYPE in path %s is invalid!' % (snappyTemplatePath))

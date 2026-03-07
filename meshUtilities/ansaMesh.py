@@ -8,15 +8,10 @@ Edit log:
 '''
 
 import sys
-import fileinput
 import os
-import getopt
-import re
-import glob
 import argparse as argparse
 import configparser
 import numpy as np
-import math
 import ast
 from pathlib import Path
 
@@ -60,16 +55,6 @@ def main():
         for var in geomDict[geom].keys():
             print('\t\t\t%s: %s' % (var,geomDict[geom][var]))
 
-    # if os.path.exists(case + '.ansa.gz'):
-    #     print('Found existing ansa file, using instead!')
-    #     base.Open(case + '.ansa.gz')
-    #     layerCoverage(geomDict,fullCaseSetupDict)
-
-
-
-
-    #     #exportAnsaMesh()
-    #     return
     
     importGeometry(geomDict)
     importDomain()
