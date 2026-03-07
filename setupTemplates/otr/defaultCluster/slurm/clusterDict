@@ -35,7 +35,7 @@
 
             "getFvDict":"if [ -f system/fvSchemesSimple ]; then cp system/fvSchemesSimple system/fvSchemes; cp system/fvSolutionSimple system/fvSolution; elif [ -f system/fvSchemesPiso ]; then cp system/fvSchemesPiso; system/fvSchemes; cp system/fvSolutionPiso system/fvSolution; else echo 'ERROR! Unable to find the right fvSchemes or fvSolution files for the appropriate simulation type!' exit 1; fi;",
 
-            "ansaMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running ansaMesh...'; ~/openFoam/CODEHOST/SOFTWARES/BETA/ANSA/BETA_CAE_Systems/ansa_2025.1.1/ansa64.sh -h 6007@headNode -b -exec '''load_script: '/home/openfoam/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/meshUtilities/ansaMesh.py'''' -np 72 --confirm-license-agreement 2>&1 | tee log.ansaMesh;",
+            "ansaMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running ansaMesh...'; ~/openFoam/CODEHOST/SOFTWARES/BETA/ANSA/BETA_CAE_Systems/ansa_2025.1.1/ansa64.sh -h 6007@headNode -b -exec '''load_script: '/home/openfoam/openFoam/scripts/caseSetup/caseSetup/meshUtilities/ansaMesh.py'''' -np 72 --confirm-license-agreement 2>&1 | tee log.ansaMesh;",
 
             "decomposePar":"if [ $? != 0 ]; then exit 1; fi; echo 'running decomposePar...'; ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec decomposePar -copyZero -constant>> log.decomposePar;",
 
@@ -52,7 +52,7 @@
 
           "precision":"SP=TRUE; VERSION=of2206; cd $SLURM_SUBMIT_DIR; if [ SP = 'TRUE' ]; then echo 'Running Solve Script in SP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP; else echo 'Running Solve Script in DP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; fi",
 
-          "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions; MPI='/usr/bin/mpirun'; FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'; caseTemplates='~/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/zeroTemplates'; if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; fi;",
+          "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions; MPI='/usr/bin/mpirun'; FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'; caseTemplates='~/openFoam/scripts/caseSetup/caseSetup/zeroTemplates'; if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; fi;",
 
           "createZeroDir":"if [ $? != 0 ]; then exit 1; fi; echo 'creating zero directories...'; if [[ -f 'constant/turbulencePropertiesSolve' ]]; then cp constant/turbulencePropertiesSolve constant/turbulenceProperties; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir \"$caseTemplates\" >> log.createZeroDirectory; fi;",
 
@@ -87,19 +87,19 @@
 
 "post":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=8\n#SBATCH --nodelist=cfd08\n#SBATCH --partition=solve2\n#SBATCH --output=04_%x_postPro_%j.out\n#SBATCH --job-name=TS_PP035_half",
 
-         "forces":"echo 'doing post run forces and summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/postUtilities/postRun.py --forces -s --summary >> log.postRun",
+         "forces":"echo 'doing post run forces and summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/postRun.py --forces -s --summary >> log.postRun",
 
-         "gsheetExport":"echo 'exporting to gsheet...';/home/openfoam/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/.venvs/gsheet/bin/python /home/openfoam/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/postUtilities/gsheetExport.py >> log.gsheetExport",
+         "gsheetExport":"echo 'exporting to gsheet...';/home/openfoam/openFoam/scripts/caseSetup/caseSetup/.venvs/gsheet/bin/python /home/openfoam/openFoam/scripts/caseSetup/caseSetup/postUtilities/gsheetExport.py >> log.gsheetExport",
 
-         "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/postUtilities/pvPost.py >> log.pvpost",
+         "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pvPost.py >> log.pvpost",
 		
-        "makePpt":"echo 'generating ppt...';python3.8  ~/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/postUtilities/pptGeneration/pptGeneration.py >> log.pptGen"
+        "makePpt":"echo 'generating ppt...';python3.8  ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pptGeneration/pptGeneration.py >> log.pptGen"
 		
         },
 
 "postMesh":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=8\n#SBATCH --nodelist=cfd08\n#SBATCH --partition=solve2\n#SBATCH --output=012_%x_postProMesh_%j.out\n#SBATCH --job-name=TS_PP035_half",
 
-            "postPro":"echo 'running pvPostMesh...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup-4.1.1-20260203/postUtilities/pvPost.py --meshOnly >> log.pvpostMesh"
+            "postPro":"echo 'running pvPostMesh...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pvPost.py --meshOnly >> log.pvpostMesh"
 
         }
     
