@@ -84,7 +84,8 @@ def main():
 
     #creating fluid domain by getting assembly of all geometries and domains
     print('\n\tCreating fluids domain...')
-    createFluidDomain(fullCaseSetupDict,refTable)
+    fluidDomain = createFluidDomain(fullCaseSetupDict)
+    createMeshSetup(fluidDomain,fullCaseSetupDict,geomDict,refTable)
 
 
 
@@ -103,7 +104,7 @@ def importGeometries(geomDict,r_options):
         geometry.import_geometry(os.path.join(geomLoc, geom), resource_options=r_options)
 
 
-def createFluidDomain(fullCaseSetupDict,refTable):
+def createFluidDomain(fullCaseSetupDict):
     listOfAssemblies = geometry.get_top_assemblies()
     bcDict = {'half':{'x-min':'Inlet',
                       'x-max':'Outlet',
@@ -137,21 +138,133 @@ def createFluidDomain(fullCaseSetupDict,refTable):
                     print(e)
                     print('\t\t\tNo BC type found for %s, defaulting to Wall!' % (surface.get_name()))
                     fD.set_boundary_type(surface.get_name(),'Wall')
-        #print('\t\t\t',assy.get_name())
-    # for assy in listOfAssemblies:
-    #     print('\t\t',assy.get_composite())
+    return fD
 
-        # for surf in assy.get_surfaces():
-        #     print('\t\t\t',surf.get_name())
-            
+def createMeshSetup(fluidDomain,fullcaseSetupDict,geomDict,refTable):
+    print('\n\tCreating mesh setup...')
+    mesh_setup = meshing.create_mesh_setup(fluidDomain, 'meshSetup', mesher_name='Hexpress')
+    mesh_setup.set_cells_type('Full hexa')
+    baseMeshSize = float(fullcaseSetupDict['BC_SETUP']['BASE_CELL_SIZE'][0])
+    mesh_setup.set_initial_cell_size(baseMeshSize)
+    mesh_setup.set_far_field_treatment('Auto')
+    mesh_setup.set_buffer_insertion('Cross through', 130)
+    mesh_setup.set_initial_mesh_type('Cartesian')
+    mesh_setup.set_close_viscous_layers_based_on_openfoam_skewness(True, value=4.0)
+    mesh_setup.enable_compute_OpenFOAM_quality_criteria()
+    mesh_setup.enable_compute_Fidelity_quality_criteria()
+    mesh_setup.enable_capturing_of_corners_of_degree_3_4()
+    mesh_setup.set_improve_quality_based_on(True,value='OpenFOAM')
+    #mesh_setup.set_improve_quality_based_on(True,value='PBS', allow_deviation_from_geometry=False)
+    mesh_setup.set_auto_edge_proximity_mode('Fine')
+    mesh_setup.set_auto_edge_proximity(True,min_cell_size=0.001,diffusion=2)
+
+    mesh_setup = createRefinementRegion(templateLoc, fullcaseSetupDict,mesh_setup,fluidDomain,geomDict)
+    mesh_setup = setGeometryRefinement(mesh_setup,geomDict,fluidDomain,fullcaseSetupDict,refTable)
 
 
-# fD.set_boundary_type('boundingBox|x-min','Inlet')
-# fD.set_boundary_type('boundingBox|x-max','Outlet')
-# fD.set_boundary_type('boundingBox|y-min','Inlet')
-# fD.set_boundary_type('boundingBox|y-max','Outlet')
-# fD.set_boundary_type('boundingBox|z-min','Wall')
-# fD.set_boundary_type('boundingBox|z-max','Wall')
+def setGeometryRefinement(meshSetup,geomDict,fluidDomain,fullCaseSetupDict,refTable):
+    nonGeomList = ['domain','ref','idom']
+    minRefLevel = int(fullCaseSetupDict['GLOBAL_REFINEMENT']['MIN_GEOM_LEVEL'][0])
+    featEdgeLevelInc = int(fullCaseSetupDict['GLOBAL_REFINEMENT']['FEAT_EDGE_LEVEL_INC'][0])
+    print('\n\t\tSetting global min refinement level: %s' % (minRefLevel))
+    for assy in fluidDomain.get_root_assemblies():
+        if any(x in assy.get_name().lower() for x in nonGeomList):
+            continue
+        else:
+            for geom in geomDict.keys():
+                if assy.get_name() in geom:
+                    geomRef = int(geomDict[geom]['refinement'][0])
+                    print('\t\t\tAttempting to set level %s for %s' % (geomRef,assy.get_name()))
+                    if geomRef < minRefLevel:
+                        print('\t\t\t\tGeometry assigned refinement is less than global min, using global min instead!')
+                        geomRef = minRefLevel
+            meshSetup.set_uniform_refinement(assy,'Refinement level',geomRef)
+
+        for surf in assy.get_surfaces():
+            for key in refTable.keys():
+                #going through each key word, if key word is in pid name, that ref table is assigned
+                if key in surf.get_name():
+                    pidRefTable = refTable[key]
+                    maxCellSize = refTable[key]['maximum_surface_length']
+                    minCellSize = refTable[key]['curvature_minimum_length']
+
+
+    return meshSetup
+
+
+    
+
+def createRefinementRegion(templateLoc,fullCaseSetupDict,meshSetup,fluidDomain,geomDict):
+
+    refinementName = fullCaseSetupDict['GLOBAL_REFINEMENT']['DEFAULT_WAKE_REF'][0]
+    if refinementName.lower() == 'true':
+        refinementName = 'defaultWake'
+    refinementPath = os.path.join(templateLoc,'defaultRefinements',refinementName)
+    #check if wake config path exists
+    if os.path.exists(refinementPath):
+        wakeRefConfig = configparser.ConfigParser()
+        wakeRefConfig.optionxform = str
+        try:
+            wakeRefConfig.read_file(open(refinementPath))
+        except:
+            print('ERROR! wake configuration is invalid!\nPath: %s' % (refinementPath))
+            sys.exit()
+        wakeRefConfigSections = wakeRefConfig.sections()
+        print('\n\t\tCreating wake boxes: %s' % (", ".join(wakeRefConfigSections)))
+    else:
+        print('ERROR! wake configuration is invalid!\nPath: %s' % (refinementPath))
+        sys.exit()
+
+    wakeDict = {}
+    for wake in wakeRefConfig.sections():
+        print('\t\t\t%s' %(wake))
+        min = np.array(wakeRefConfig[wake]['MIN'].split(' '),dtype=float)
+        max = np.array(wakeRefConfig[wake]['MAX'].split(' '),dtype=float)
+        print('\t\t\t\tMin: %s'% (min))
+        print('\t\t\t\tMax: %s'% (max))
+        size = int(wakeRefConfig[wake]['REF_LEVEL'][0])
+        baseSize = float(fullCaseSetupDict['BC_SETUP']['BASE_CELL_SIZE'][0])
+        wakeDict[wake] = geometry.create_box(min, max, wake)
+        wakeVol = meshSetup.add_refinement_volume(wakeDict[wake])
+        wakeVol.set_refinement_region('Volume')
+        wakeVol.set_isotropic_refinement('Cell size', size, diffusion=2)
+        
+    print('\n\t\tChecking for refinement geometries...')
+    for assy in fluidDomain.get_root_assemblies():
+        if 'REF-' in assy.get_name():
+            print('\t\t\tFound refinement geometry: %s' % (assy.get_name()))
+            for geom in geomDict.keys():
+                if assy.get_name() in geom:
+                    refLevel = geomDict[geom]['refinement']
+                    boundingBox = assy.get_bounding_box()
+                    width = boundingBox.width()
+                    height = boundingBox.height()
+                    depth = boundingBox.depth()
+                    print('\t\t\t\tWidth: %1.3fm, Height: %1.3fm, Depth: %1.3fm' % (width, height, depth))
+                    print('\t\t\t\tSetting refinement level to: %s' % (refLevel))
+                    wakeVol = meshSetup.add_refinement_volume(assy)
+                    wakeVol.set_refinement_region('Volume')
+                    wakeVol.set_isotropic_refinement('Refinement level', refLevel, diffusion=2)
+        elif 'REFX-' in assy.get_name():
+            print('\t\t\tFound refinement geometry: %s' % (assy.get_name()))
+            for geom in geomDict.keys():
+                if assy.get_name() in geom:
+                    refLevel = fullCaseSetupDict[geom.split('.')[0]]['REF_LEVEL'][0]
+                    boundingBox = assy.get_bounding_box()
+                    width = boundingBox.width()
+                    height = boundingBox.height()
+                    depth = boundingBox.depth()
+                    print('\t\t\t\tWidth: %1.3fm, Height: %1.3fm, Depth: %1.3fm' % (width, height, depth))
+                    print('\t\t\t\tSetting refinement level to: %s' % (refLevel))
+                    wakeVol = meshSetup.add_refinement_volume(assy)
+                    wakeVol.set_refinement_region('Volume')
+                    wakeVol.set_isotropic_refinement('Refinement level', refLevel, diffusion=2)
+
+    print('\n\t\tSummary of refinement regions:')
+    for refinement in meshSetup.get_refinement_volumes():
+        print('\t\t\tRefinement region: %s, Type: %s' % (refinement.get_name(), refinement.get_refinement_region()))    
+    return meshSetup
+
         
 
 def getPIDRefTable(refTablePath,baseSize):
