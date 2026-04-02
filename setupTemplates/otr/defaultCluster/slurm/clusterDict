@@ -89,7 +89,7 @@
 
          "forces":"echo 'doing post run forces and summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/postRun.py --forces -s --summary >> log.postRun",
 
-         "gsheetExport":"echo 'exporting to gsheet...';/home/openfoam/openFoam/scripts/caseSetup/caseSetup/.venv/bin/python3 ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/gsheetExport.py >> log.gsheetExport",
+         "gsheetExport":"echo 'exporting to gsheet...';/home/openfoam/openFoam/scripts/caseSetup/caseSetup/.venvs/bin/python3 ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/gsheetExport.py >> log.gsheetExport",
          "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pvPost.py >> log.pvpost",
 		
         "makePpt":"echo 'generating ppt...';python3.8  ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pptGeneration/pptGeneration.py >> log.pptGen"
