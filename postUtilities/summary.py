@@ -182,7 +182,7 @@ def bcParser(fullCaseSetupDict,path,case):
     if 'half' in case or simType.lower() == 'half':
         yaw = 0
     else:
-        yaw = fullCaseSetupDict['BC_SETUP']['YAW'][0]
+        yaw = fullCaseSetupDict['BC_SETUP']['YAW']
         
     
     return inletMag,lastTime,yaw,movingGround,wheelRotation,simType,turbModel
