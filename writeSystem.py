@@ -9,7 +9,7 @@ from utilities import *
 
 steadyTurb = {'sa':'SpalartAllmaras','kosst':'kOmegaSST'}
 
-transientTurb = {'sa':'SpalartAllmarasIDDES','kosst':'kOmegaSSTIDDES'}
+transientTurb = {'sa':'SpalartAllmarasDDES','kosst':'kOmegaSSTDDES'}
 
 initDict = {'steady': {'potential':'controlDictPotential','none':''},
             'transient':{'potential':'controlDictPotential','steady':'controlDictSimpleInit','none':''}}
