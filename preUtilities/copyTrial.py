@@ -92,7 +92,7 @@ def include_patterns(*patterns):
 def copyRequired(casesDir,sourcePath,destPath):
 
 	print("\tCopying required files...")
-	copytree(sourcePath,destPath,symlinks=True,ignore=ignore_patterns('*ANSA*','*ansa*','*.eMesh','*ADB*', '*.obj*','EnSight','*.save',
+	copytree(sourcePath,destPath,symlinks=True,ignore=ignore_patterns('*ANSA*','*ansa*','*.eMesh','*ADB*','*fidelity*','*Fidelity*', '*.obj*','EnSight','*.save',
 																   'fullCaseSetupDict','polyMesh','extendedFeatureEdgeMesh',
 																   'processor*','log.*','*.foam','postProcessing*','*.out','*PyFoamHistory*',
 																   '*.csv','*.stl*','*.png','*.pdf','postProReport','*Script*')) 
