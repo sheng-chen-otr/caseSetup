@@ -27,6 +27,24 @@ def velVector(inletMag,yaw,pitch):
     liftVec = y_rotation(initLiftVec,pitch)
     return " ".join(str(x) for x in pitchTransVel), " ".join(str(x) for x in dragVec)," ".join(str(x) for x in liftVec)
 
+
+def calculateRideHeights(rideHeights,fullCaseSetupDict):
+    '''
+    Docstring for calculateRideHeights
+    
+    :param rideHeights: ride heights from ride height file
+    :param fullCaseSetupDict: full case setup dictionary from caseSetupDict file
+    '''
+    #get reference values
+    REFCOR = fullCaseSetupDict['BC_SETUP']['REFCOR']
+    REFWIDTH = fullCaseSetupDict['BC_SETUP']['REFWIDTH']
+    REFLEN = fullCaseSetupDict['BC_SETUP']['REFLEN']
+
+    #calculate the ride heights depending on the reference values
+
+
+
+
 def getBoundingBoxOBJ(geomFile):
     objPath = 'constant/triSurface/%s' % (geomFile)
     
