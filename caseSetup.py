@@ -105,9 +105,13 @@ def main():
         writeSurfaces(templateLoc, geomDict,fullCaseSetupDict)
         writeTransportProperties(templateLoc, fullCaseSetupDict)
         writeTurbulenceProperties(templateLoc, fullCaseSetupDict)
-        makeScripts(templateLoc,fullCaseSetupDict)
-        copyScripts(templateLoc, fullCaseSetupDict,case)
         writeToCaseSetup(fullCaseSetupDict,'fullCaseSetupDict')
+        if fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RIDE_HEIGHT'][0].lower() == 'true':
+            rideHeights = calculateRideHeights(fullCaseSetupDict)
+            createRideHeightCases(rideHeights, fullCaseSetupDict)
+        else:
+            makeScripts(templateLoc,fullCaseSetupDict)
+            copyScripts(templateLoc, fullCaseSetupDict,case)
         #copy over the pvPostSetup
 
         if args.postProDict:

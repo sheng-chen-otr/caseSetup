@@ -6,10 +6,14 @@ import math
 import gzip
 import re
 import multiprocessing
-try:
-    from paraview.simple import *
-except:
-    print('ERROR! Unable to import paraview modules, skipping dependant operations!')
+import pandas as pd
+import configparser
+
+updateCaseSetupFlag = False
+
+
+
+
 
 def velVector(inletMag,yaw,pitch):
     initVel = [float(inletMag), 0, 0]
@@ -28,19 +32,242 @@ def velVector(inletMag,yaw,pitch):
     return " ".join(str(x) for x in pitchTransVel), " ".join(str(x) for x in dragVec)," ".join(str(x) for x in liftVec)
 
 
-def calculateRideHeights(rideHeights,fullCaseSetupDict):
+def calculateRideHeights(fullCaseSetupDict):
     '''
-    Docstring for calculateRideHeights
+    Calculate ride heights and update dataframe with pitch, roll angles and wheel movements.
     
-    :param rideHeights: ride heights from ride height file
+    Since CFD is in vehicle coordinate system (tunnel/wheels move around car body):
+    - Positive pitch: front goes up, rear goes down
+    - Positive roll: right side goes up, left side goes down
+    - Heave: vertical translation of entire car
+    
     :param fullCaseSetupDict: full case setup dictionary from caseSetupDict file
+    :return: rideHeights dataframe with added columns: pitch, roll, wheel_fl, wheel_fr, wheel_rl, wheel_rr
     '''
+    print('\tCalculating ride heights...')
     #get reference values
     REFCOR = fullCaseSetupDict['BC_SETUP']['REFCOR']
-    REFWIDTH = fullCaseSetupDict['BC_SETUP']['REFWIDTH']
-    REFLEN = fullCaseSetupDict['BC_SETUP']['REFLEN']
+    REFWIDTH = float(fullCaseSetupDict['BC_SETUP']['REFWIDTH'][0])
+    REFLEN = float(fullCaseSetupDict['BC_SETUP']['REFLEN'][0])
 
-    #calculate the ride heights depending on the reference values
+    #get rideheight file
+    RIDE_HEIGHT_FILE = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RIDE_HEIGHT_FILE'][0]
+    execDir = os.path.dirname(os.path.realpath(__file__))
+    rideHeightFilePath = os.path.join(execDir,'rideHeightUtils',RIDE_HEIGHT_FILE)
+    if not os.path.exists(rideHeightFilePath):
+        sys.exit('ERROR! Ride height file %s cannot be found!' % (rideHeightFilePath))
+    rideHeights = pd.read_csv(rideHeightFilePath)
+
+    #converting to meters if units are mm
+    if fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RH_UNIT'][0].lower() == 'mm':
+        rideHeights[['fl','fr','rl','rr']] = rideHeights[['fl','fr','rl','rr']].multiply(0.001)
+    elif fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RH_UNIT'][0].lower() == 'm':
+        rideHeights[['fl','fr','rl','rr']] = rideHeights[['fl','fr','rl','rr']].multiply(1)
+
+    #get ride height settings
+    INIT_RH = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['INIT_RH'][0]
+    if INIT_RH == '':
+        print('\t\tNo initial ride height provided, assuming delta positions at wheel ground points.')
+        initFL = 0
+        initFR = 0
+        initRL = 0
+        initRR = 0
+    elif len(INIT_RH) == 4:
+        initFL = float(INIT_RH[0])
+        initFR = float(INIT_RH[1])
+        initRL = float(INIT_RH[2])
+        initRR = float(INIT_RH[3])
+    else:
+        sys.exit('ERROR! Invalid initial ride height provided, please provide 4 values for FL, FR, RL, RR or leave blank to assume ride height points are wheel movements!')
+
+    if fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RH_REF_WIDTH'][0] == '':
+        bw = [REFWIDTH,REFWIDTH]
+    else:
+        bw = [float(fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RH_REF_WIDTH'][0]),float(fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RH_REF_WIDTH'][0])]
+
+    if fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RH_REF_LEN'][0] == '':
+        bl = REFLEN
+    else:        
+        bl = float(fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RH_REF_LEN'][0])
+
+    # Initialize new columns in dataframe
+    rideHeights['pitch'] = 0.0
+    rideHeights['roll'] = 0.0
+    rideHeights['heave'] = 0.0
+    rideHeights['wheel_fl'] = 0.0
+    rideHeights['wheel_fr'] = 0.0
+    rideHeights['wheel_rl'] = 0.0
+    rideHeights['wheel_rr'] = 0.0
+    rideHeights['tunnel_pitch'] = 0.0
+    rideHeights['tunnel_roll'] = 0.0
+    rideHeights['tunnel_heave'] = 0.0
+
+    for idx, row in rideHeights.iterrows():
+        # Calculate roll angles at front and rear
+        fr_roll_angle, fr_dz_center = calculateRollAngles(row['fl'],row['fr'],bw[0])
+        rr_roll_angle, rr_dz_center = calculateRollAngles(row['rl'],row['rr'],bw[1])
+        
+        #check if front and rear roll angles are the same
+        drollAngle = abs(fr_roll_angle - rr_roll_angle)
+        if drollAngle > 0.05:
+            sys.exit('Error! Front and rear roll angles mis-match for point: %s' % (row['point']))
+        
+        # Calculate pitch angle from front and rear center heights
+        pitch_angle, dz_wb_center = calculatePitchAngles(fr_dz_center, rr_dz_center, bl, REFCOR)
+        
+        # Store pitch and roll angles
+        rideHeights.loc[idx, 'pitch'] = pitch_angle
+        rideHeights.loc[idx, 'roll'] = fr_roll_angle  # Use front roll angle since they should match
+        rideHeights.loc[idx, 'heave'] = dz_wb_center  # Heave is center displacement
+        
+        # Calculate wheel movements in tunnel coordinate system
+        # In vehicle coordinates: wheel positions relative to reference
+        # In tunnel coordinates: reference moves relative to wheels (inverse transformation)
+        wheel_fl, wheel_fr, wheel_rl, wheel_rr, tunnel_pitch, tunnel_roll, tunnel_dz = calculateWheelMovements(
+            row['fl'], row['fr'], row['rl'], row['rr'],
+            pitch_angle, fr_roll_angle, dz_wb_center
+        )
+        
+        rideHeights.loc[idx, 'wheel_fl'] = wheel_fl
+        rideHeights.loc[idx, 'wheel_fr'] = wheel_fr
+        rideHeights.loc[idx, 'wheel_rl'] = wheel_rl
+        rideHeights.loc[idx, 'wheel_rr'] = wheel_rr
+        rideHeights.loc[idx, 'tunnel_pitch'] = tunnel_pitch
+        rideHeights.loc[idx, 'tunnel_roll'] = tunnel_roll
+        rideHeights.loc[idx, 'tunnel_heave'] = tunnel_dz
+
+    print('\nUpdated rideHeights dataframe:')
+    print(rideHeights)
+    
+    return rideHeights
+
+def createRideHeightCases(rideHeights, fullCaseSetupDict):
+    '''
+    Creates the cases for each ride height point by copying the base case and modifying the necessary files with the new ride height information.
+
+    The cases are created inside each case directory with the name of the ride height point. 
+    For example, if the base case is "baseCase" and there is a ride height point 1, then the new case will be created as "baseCase_1".
+    The caseSetup file is updated with the new ride height information for each case, the DOMAIN_PITCH and DOMAIN_ROLL are updated with the calculated pitch and roll angles for each ride height point, and the wheel movements are updated in the appropriate files 
+    
+    :param case: Description
+    :param rideHeights: Description
+    :param fullCaseSetupDict: Description
+    '''
+    baseCaseDir = os.path.join(os.getcwd())
+    baseCaseName = os.path.basename(baseCaseDir)
+    print('\t\tCreating ride height cases based on base case: %s' % (baseCaseName))
+    for idx, row in rideHeights.iterrows():
+        if row['point'] not in fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RH_POINTS']:
+            continue
+        newCaseName = "%s_%s" % (baseCaseName, int(row['point']))
+        newCaseDir = os.path.join(os.getcwd(), newCaseName)
+        if not os.path.exists(newCaseDir):
+            os.makedirs(newCaseDir)
+        
+        #write new caseSetup file with updated pitch and roll angles for domain
+        newCaseSetupPath = os.path.join(newCaseDir,'caseSetup')
+        updatedFullCaseSetupDict = fullCaseSetupDict.copy()
+        updatedFullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'] = float(row['tunnel_pitch'])
+        updatedFullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'] = float(row['tunnel_roll'])
+        currentREFCOR = updatedFullCaseSetupDict['BC_SETUP']['REFCOR']
+        updatedFullCaseSetupDict['BC_SETUP']['REFCOR'] = [currentREFCOR[0], currentREFCOR[1], str(float(currentREFCOR[2]) + row['tunnel_heave'])]
+        writeToRHCaseSetup(updatedFullCaseSetupDict,newCaseSetupPath)
+
+
+        print('\t\tCreated case: %s with updated pitch: %s, roll: %s, heave: %s' % (newCaseName, row['tunnel_pitch'], row['tunnel_roll'], row['tunnel_heave']))
+    
+
+        
+        
+
+
+def writeToRHCaseSetup(writeCaseSetupDict,newCasePath,output='default'):
+    writeConfig = configparser.ConfigParser()
+    writeConfig.optionxform = str
+    for module in writeCaseSetupDict.keys():
+        writeConfig.add_section(module)
+        for key in writeCaseSetupDict[module].keys():
+            #print(" ".join(list(writeCaseSetupDict[module][key])))
+            try:
+                writeConfig.set(module,key," ".join(list(writeCaseSetupDict[module][key])))
+            except:
+                writeConfig.set(module,key,str(writeCaseSetupDict[module][key]))
+    
+    try:
+        #caseSetupConfig.read_file(open("%s/%s/caseSetup" % (path,case)))
+        if output == 'default':
+            with open(newCasePath,'w') as caseSetupFile:
+                writeConfig.write(caseSetupFile)
+        else:
+            with open(newCasePath,'w') as caseSetupFile:
+                writeConfig.write(caseSetupFile)
+    except:
+        print('\nERROR! Unable to write caseSetup!')
+        
+    if updateCaseSetupFlag == True:
+        sys.exit('\nWARNING: caseSetup has been updated with default values, please check caseSetup and rerun.')
+                
+
+def calculateRollAngles(dl,dr,bw):
+    alpha = math.degrees(math.asin((dl-dr)/bw))
+    d_center = (dl+dr)/2
+    return alpha, d_center
+
+def calculatePitchAngles(dzf,dzr,bl,REFCOR):
+    theta = math.degrees(math.asin((dzf-dzr)/bl))
+    dz_wb_center = ((dzf+dzr)/2)-float(REFCOR[2])
+
+    return theta, dz_wb_center
+
+
+
+
+def calculateWheelMovements(z_fl, z_fr, z_rl, z_rr, pitch_deg, roll_deg, heave):
+    '''
+    Calculate wheel movements in tunnel coordinate system.
+    
+    In the CFD coordinate system, the tunnel (and wheels) move around the car body.
+    Since the tunnel/wheels move around the car, the wheel movements are the opposite
+    of the ride height values.
+    
+    REFCOR: Reference center of rotation at the wheelbase center (y=0) projected to ground
+    
+    Convention:
+    - Positive pitch: front goes up, rear goes down
+    - Positive roll: right side goes up, left side goes down  
+    - Heave: vertical translation of entire car
+    
+    The wheel vertical positions (z_fl, z_fr, z_rl, z_rr) from the ride height file
+    represent car geometry. In the tunnel frame, wheel movements are opposite.
+    
+    :param z_fl, z_fr, z_rl, z_rr: vertical displacements of each wheel (car frame)
+    :param pitch_deg: pitch angle in degrees (positive = front up)
+    :param roll_deg: roll angle in degrees (positive = right up)
+    :param heave: vertical heave displacement at reference center
+    :param bw: wheel track [front_track, rear_track]
+    :param bl: wheelbase length
+    :param REFCOR: reference corner coordinates [x, y, z] - wheelbase center at y=0 on ground
+    :return: wheel movements for FL, FR, RL, RR in tunnel frame
+    '''
+    
+    # Wheel movements are opposite direction to ride height (tunnel moves around car)
+    wheel_fl = -z_fl
+    wheel_fr = -z_fr
+    wheel_rl = -z_rl
+    wheel_rr = -z_rr
+
+    # calculate tunnel movement due to pitch (rotation around y-axis)
+    tunnel_pitch = -pitch_deg
+    tunnel_roll = -roll_deg
+    # calculate tunnel vertical movement before applying roll and pitch
+    tunnel_dz = -heave
+
+    
+
+
+    
+    
+    return wheel_fl, wheel_fr, wheel_rl, wheel_rr, tunnel_pitch, tunnel_roll, tunnel_dz
 
 
 

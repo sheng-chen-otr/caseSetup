@@ -165,6 +165,8 @@ def writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict):
         search_and_replace("system/forceCoeffsExport" , "<FORCE_PATCHES>",allString)
         for key in fullCaseSetupDict['BC_SETUP'].keys():
             if 'drag' in key.lower() or 'lift' in key.lower() or 'pitch' in key.lower():
+                if not '_VEC' in key:
+                    continue
                 forceType = key.split('_')[0].lower()
                 print('\t\tSetting %s vector:' % (forceType.upper()))
                 forceVec = fullCaseSetupDict['BC_SETUP'][key] #initial force vec, checking if single key word or a vector
