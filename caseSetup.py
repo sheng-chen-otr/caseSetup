@@ -56,6 +56,8 @@ parser.add_argument("--modules", action="store_true",
                     help='Shows all possible modules.')
 parser.add_argument("--postProDict", action="store_true", 
                     help='Copies post-processing config file into case folder.')
+parser.add_argument("--rideHeightMode", action="store_true", 
+                    help='Run in ride height mode, does not link geometry files.')
 args = parser.parse_args()
 CONTROLDICT = args.controlDict
 NEWCS = args.new
@@ -69,7 +71,7 @@ addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG']
 
 #getting default values from template
 def main():
-    titleText = '''\t##############################\n\t\tcaseSetup-v4.1.1\t\n\t##############################'''
+    titleText = '''\t##############################\n\t\tcaseSetup-v4.2-dev\t\n\t##############################'''
     print(titleText)
     getTemplateType(SETUP)
     
@@ -84,11 +86,14 @@ def main():
         
         cleanUpCaseSetup(geomDict,writeCaseSetupDict,fullCaseSetupDict,defaultDict)
         writeToCaseSetup(writeCaseSetupDict)
-        linkGeomFiles(geomDict)
+        if args.rideHeightMode == False:
+            linkGeomFiles(geomDict)
                 
         geomDict ,fullCaseSetupDict = writeSnappy(geomDict,fullCaseSetupDict)
+        
         writeSurfaceFeatureExtract(templateLoc,geomDict,fullCaseSetupDict)
         writeBlockMesh(templateLoc,fullCaseSetupDict)
+        transformBlockMesh(fullCaseSetupDict)
         writeDecomposeParDict(templateLoc, fullCaseSetupDict)
         writeControlDict(templateLoc, fullCaseSetupDict)
         copyFunctionObjects(templateLoc,foList,geomDict,fullCaseSetupDict)
@@ -106,12 +111,23 @@ def main():
         writeTransportProperties(templateLoc, fullCaseSetupDict)
         writeTurbulenceProperties(templateLoc, fullCaseSetupDict)
         writeToCaseSetup(fullCaseSetupDict,'fullCaseSetupDict')
-        if fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RIDE_HEIGHT'][0].lower() == 'true':
-            rideHeights = calculateRideHeights(fullCaseSetupDict)
-            createRideHeightCases(rideHeights, fullCaseSetupDict)
-        else:
+        
+        if args.rideHeightMode:
             makeScripts(templateLoc,fullCaseSetupDict)
             copyScripts(templateLoc, fullCaseSetupDict,case)
+        else:
+            if fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RIDE_HEIGHT'][0].lower() == 'true':
+                rideHeights = calculateRideHeights(fullCaseSetupDict)
+                rideHeights = createRideHeightCases(rideHeights, fullCaseSetupDict)
+                rideHeights = transformGeom(fullCaseSetupDict,rideHeights,geomDict)
+                runRHCaseSetup(rideHeights,fullCaseSetupDict)
+            
+            else:
+                makeScripts(templateLoc,fullCaseSetupDict)
+                copyScripts(templateLoc, fullCaseSetupDict,case)
+        
+            
+        
         #copy over the pvPostSetup
 
         if args.postProDict:

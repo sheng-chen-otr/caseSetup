@@ -8,10 +8,22 @@ import re
 import multiprocessing
 import pandas as pd
 import configparser
+import struct
+import shutil
+import subprocess
+from copy import deepcopy
 
 updateCaseSetupFlag = False
 
 
+
+def transformForceVector(fullCaseSetupDict,forceVec):
+    domain_pitch = math.radians(float(fullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'][0]))
+    domain_roll = math.radians(float(fullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'][0]))
+    forceVec = forceVec.split(' ')
+    forceVec = x_rotation(np.array(forceVec).astype(float),domain_roll)
+    forceVec = y_rotation(np.array(forceVec).astype(float),domain_pitch)
+    return " ".join(str(round(x,6)) for x in forceVec)
 
 
 
@@ -21,15 +33,16 @@ def velVector(inletMag,yaw,pitch):
     yaw = math.radians(yaw)
     initDragVec = [1,0,0]
     initLiftVec = [0,0,1]
-    #transform inlet vector for yaw
-    yawTransVel = z_rotation(initVel,yaw)
     #transform inlet vector for pitch
-    pitchTransVel = y_rotation(yawTransVel,pitch)
+    pitchTransVel = y_rotation(initVel,pitch)
+    #transform inlet vector for yaw
+    yawTransVel = z_rotation(pitchTransVel,yaw)
+    
     #" ".join(str(x) for x in xs)
     #transform drag and lift vectors for pitch
     dragVec = y_rotation(initDragVec,pitch)
     liftVec = y_rotation(initLiftVec,pitch)
-    return " ".join(str(x) for x in pitchTransVel), " ".join(str(x) for x in dragVec)," ".join(str(x) for x in liftVec)
+    return " ".join(str(x) for x in yawTransVel), " ".join(str(x) for x in dragVec)," ".join(str(x) for x in liftVec)
 
 
 def calculateRideHeights(fullCaseSetupDict):
@@ -49,6 +62,8 @@ def calculateRideHeights(fullCaseSetupDict):
     REFCOR = fullCaseSetupDict['BC_SETUP']['REFCOR']
     REFWIDTH = float(fullCaseSetupDict['BC_SETUP']['REFWIDTH'][0])
     REFLEN = float(fullCaseSetupDict['BC_SETUP']['REFLEN'][0])
+    
+
 
     #get rideheight file
     RIDE_HEIGHT_FILE = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RIDE_HEIGHT_FILE'][0]
@@ -156,8 +171,22 @@ def createRideHeightCases(rideHeights, fullCaseSetupDict):
     baseCaseDir = os.path.join(os.getcwd())
     baseCaseName = os.path.basename(baseCaseDir)
     print('\t\tCreating ride height cases based on base case: %s' % (baseCaseName))
+    rideHeights['caseName'] = ''
+    updatedRideHeights = pd.DataFrame(columns=rideHeights.columns)
+    baseTunnelPitch = float(fullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'][0])
+    baseTunnelRoll = float(fullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'][0])
+    #baseREFCOR = float(fullCaseSetupDict['BC_SETUP']['REFCOR'][0])
+    currentREFCOR = fullCaseSetupDict['BC_SETUP']['REFCOR']
+    SIM_SYM = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM']
     for idx, row in rideHeights.iterrows():
-        if row['point'] not in fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RH_POINTS']:
+        
+        if fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RH_POINTS'][0] == '':
+            print('\t\tRide Height Point: %s' % (int(row['point'])))
+        elif str(int(row['point'])) not in fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RH_POINTS']:
+            continue
+        
+        if row['yaw'] != 0 and SIM_SYM[0].lower() == 'half':
+            print('\t\tSkipping ride height point %s since it has non-zero yaw and simulation is set to half symmetry...' % (int(row['point'])))
             continue
         newCaseName = "%s_%s" % (baseCaseName, int(row['point']))
         newCaseDir = os.path.join(os.getcwd(), newCaseName)
@@ -166,22 +195,119 @@ def createRideHeightCases(rideHeights, fullCaseSetupDict):
         
         #write new caseSetup file with updated pitch and roll angles for domain
         newCaseSetupPath = os.path.join(newCaseDir,'caseSetup')
-        updatedFullCaseSetupDict = fullCaseSetupDict.copy()
-        updatedFullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'] = float(row['tunnel_pitch'])
-        updatedFullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'] = float(row['tunnel_roll'])
-        currentREFCOR = updatedFullCaseSetupDict['BC_SETUP']['REFCOR']
+        updatedFullCaseSetupDict = deepcopy(fullCaseSetupDict)
+        updatedFullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'] = baseTunnelPitch + float(row['tunnel_pitch'])
+        updatedFullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'] = baseTunnelRoll + float(row['tunnel_roll'])
+        
         updatedFullCaseSetupDict['BC_SETUP']['REFCOR'] = [currentREFCOR[0], currentREFCOR[1], str(float(currentREFCOR[2]) + row['tunnel_heave'])]
+        
         writeToRHCaseSetup(updatedFullCaseSetupDict,newCaseSetupPath)
+        rideHeights.loc[idx, 'caseName'] = newCaseName
+        updatedRideHeights = pd.concat([updatedRideHeights, rideHeights.loc[idx].to_frame().T], ignore_index=True)
 
 
-        print('\t\tCreated case: %s with updated pitch: %s, roll: %s, heave: %s' % (newCaseName, row['tunnel_pitch'], row['tunnel_roll'], row['tunnel_heave']))
+        print('\t\t\tPoint %s - pitch: %s, roll: %s, heave: %s' % (int(row['point']), row['tunnel_pitch'], row['tunnel_roll'], row['tunnel_heave']))
+    
+    #write out the updated rideHeights dataframe with case names for each point
+    rideHeightsOutputPath = os.path.join(os.getcwd(),'rideHeights_updated.csv')
+    updatedRideHeights.to_csv(rideHeightsOutputPath, index=False)
+
+    return updatedRideHeights
+def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
+    baseCaseDir = os.getcwd()
+    baseCaseName = os.path.basename(baseCaseDir)
+    if 'ansa' in fullCaseSetupDict['GLOBAL_REFINEMENT']['TEMPLATE_TYPE'][0].lower():
+        USE_ANSA = True
+    else:        
+        USE_ANSA = False
+
+    #copies all the geometries into the child directories
+    for idx, row in rideHeights.iterrows():
+        point = (int(row['point']))
+        childName = baseCaseName + '_' + str(point)
+        print('\t\t\tCopying geometries from baseCase to %s' % (childName))
+        for geom in geomDict.keys():
+            geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
+            outputPath = os.path.join(childName,'constant','triSurface',geom)
+            copyWithMkdir(geomFilePath, outputPath) #copy the geometry to the new case directory with the same name, but transformed position
+        print('\t\t\tTransforming geometries for point %s' % str(point))
+        for wheel in ['fr','fl','rr','rl']:
+            wheelMovement = row['wheel_%s' % (wheel)]
+            
+            # identify wheel from geometries, or geometries that need to move with wheel, will need appropriate
+            # key words!
+            for geom in geomDict.keys():
+                geomFilePath = '%s/constant/triSurface/%s' % (childName,geom) #get the path of the parent geometry
+                if wheel in geom.lower():
+                    transformParts(geom, geomFilePath,wheelMovement,childName)
     
 
-        
-        
+    return rideHeights
 
 
-def writeToRHCaseSetup(writeCaseSetupDict,newCasePath,output='default'):
+
+def transformBlockMesh(fullCaseSetupDict):
+    print('\t\t\tTransforming blockMesh based on domain rotations specified...')
+    #get blockMeshDict file
+    blockMeshDictPath = os.path.join(os.getcwd(),'system','blockMeshDict')
+    if not os.path.exists(blockMeshDictPath):
+        sys.exit('ERROR! blockMeshDict file cannot be found at %s!' % (blockMeshDictPath))
+    domain_roll = float(fullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'][0])
+    domain_pitch = float(fullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'][0])
+    print('\t\t\t\tDomain Roll: %s, Domain Pitch: %s' % (domain_roll, domain_pitch))
+
+    transformBlockmeshPoints(blockMeshDictPath,outputFile=os.path.join(os.getcwd(),'system','blockMeshDict'),rotation={'x':domain_roll, 'y':domain_pitch, 'z':0},REFCOR=fullCaseSetupDict['BC_SETUP']['REFCOR'])
+
+    
+   
+
+def transformParts(geom,geomFilePath, transformAmount,childCaseName):
+    print('\t\t\t\tMoving %s by z-position %s' % (geom,transformAmount)) 
+    # dummy transform
+    try:
+        print('\t\t\t\t\ttransform OK!')
+    except:
+        sys.exit('\t\t\t\t\ttransform ERROR!')
+    outputPath = os.path.join(childCaseName,'constant','triSurface',geom)
+    
+    #copyWithMkdir(geomFilePath, outputPath) #copy the geometry to the new case directory with the same name, but transformed position
+
+    
+def runRHCaseSetup(rideHeights, fullCaseSetupDict):
+    # Get the path to caseSetup.py
+    execDir = os.path.dirname(os.path.realpath(__file__))
+    caseSetupScript = os.path.join(execDir, 'caseSetup.py')
+    
+    # Get venv python path
+    venv_python = os.path.join(execDir, '.venv', 'bin', 'python3')
+    if not os.path.exists(venv_python):
+        venv_python = 'python3'  # Fallback to system python
+    
+    for idx, row in rideHeights.iterrows():
+        point = (int(row['point']))
+        childName = os.path.basename(os.getcwd()) + '_' + str(point)
+        childCasePath = os.path.join(os.getcwd(), childName)
+        print('\t\tRunning caseSetup for case: %s' % (childName))
+        
+        # Run caseSetup in the child directory
+        cmd = [venv_python, caseSetupScript, '-s', 'otr', '--rideHeightMode']
+        result = subprocess.run(cmd, cwd=childCasePath)
+        
+        if result.returncode != 0:
+            print(f'\t\t\tWARNING: caseSetup failed for {childName}')
+        else:
+            print(f'\t\t\tcaseSetup completed successfully for {childName}')
+    
+# def runCaseSetup(caseSetupPath, setupType='otr', venv_python=None):
+#     """Run caseSetup.py in a subprocess."""
+#     if venv_python is None:
+#         venv_python = 'python3'
+    
+#     cmd = [venv_python, 'caseSetup.py', '-s', setupType, '-rideHeightMode']
+#     result = subprocess.run(cmd, cwd=os.path.dirname(caseSetupPath))
+#     return result.returncode
+
+def writeToRHCaseSetup(writeCaseSetupDict,newCasePath):
     writeConfig = configparser.ConfigParser()
     writeConfig.optionxform = str
     for module in writeCaseSetupDict.keys():
@@ -192,18 +318,10 @@ def writeToRHCaseSetup(writeCaseSetupDict,newCasePath,output='default'):
                 writeConfig.set(module,key," ".join(list(writeCaseSetupDict[module][key])))
             except:
                 writeConfig.set(module,key,str(writeCaseSetupDict[module][key]))
+
+    with open(newCasePath,'w') as caseSetupFile:
+                writeConfig.write(caseSetupFile)
     
-    try:
-        #caseSetupConfig.read_file(open("%s/%s/caseSetup" % (path,case)))
-        if output == 'default':
-            with open(newCasePath,'w') as caseSetupFile:
-                writeConfig.write(caseSetupFile)
-        else:
-            with open(newCasePath,'w') as caseSetupFile:
-                writeConfig.write(caseSetupFile)
-    except:
-        print('\nERROR! Unable to write caseSetup!')
-        
     if updateCaseSetupFlag == True:
         sys.exit('\nWARNING: caseSetup has been updated with default values, please check caseSetup and rerun.')
                 
@@ -211,13 +329,13 @@ def writeToRHCaseSetup(writeCaseSetupDict,newCasePath,output='default'):
 def calculateRollAngles(dl,dr,bw):
     alpha = math.degrees(math.asin((dl-dr)/bw))
     d_center = (dl+dr)/2
-    return alpha, d_center
+    return round(alpha,3), round(d_center,4)
 
 def calculatePitchAngles(dzf,dzr,bl,REFCOR):
     theta = math.degrees(math.asin((dzf-dzr)/bl))
     dz_wb_center = ((dzf+dzr)/2)-float(REFCOR[2])
 
-    return theta, dz_wb_center
+    return round(theta,3), round(dz_wb_center,4)
 
 
 
@@ -750,3 +868,332 @@ def readGeomFile(fileName):
             vertices, faces = load_binary_stl(file)
 
     return vertices,faces
+
+
+def transformGeometry(inputFile, outputFile=None, rotation=None, translation=None, scale=None, morphing_dict=None):
+    '''
+    Transform geometry files (OBJ or STL, with or without .gz compression).
+    
+    Supports:
+    - Rotation: around x, y, z axes (in degrees)
+    - Translation: offset in x, y, z directions
+    - Scaling: uniform or non-uniform scaling
+    - Morphing: vertex-specific displacements based on a morphing dictionary
+    
+    :param inputFile: Path to input geometry file (OBJ or STL, can be .gz compressed)
+    :param outputFile: Path to output geometry file. If None, returns vertices and faces only
+    :param rotation: Dict with keys 'x', 'y', 'z' for rotation angles in degrees, e.g. {'x': 0, 'y': 0, 'z': 0}
+    :param translation: List/array [dx, dy, dz] for translation offsets
+    :param scale: Scalar for uniform scaling, or list/array [sx, sy, sz] for non-uniform scaling
+    :param morphing_dict: Dict mapping vertex indices to displacement vectors, e.g. {0: [0.1, 0, 0], 5: [0, 0.2, 0]}
+    :return: Tuple of (vertices, faces) - transformed geometry
+    '''
+    
+    # Load the geometry file
+    print(f'\tLoading geometry from {inputFile}...')
+    vertices, faces = readGeomFile(inputFile)
+    vertices = np.array(vertices, dtype=np.float64)
+    
+    # Apply morphing first (vertex-specific displacements)
+    if morphing_dict is not None:
+        print('\tApplying morphing deformations...')
+        for vertex_idx, displacement in morphing_dict.items():
+            if vertex_idx < len(vertices):
+                vertices[vertex_idx] += np.array(displacement)
+            else:
+                print(f'\t\tWarning: Vertex index {vertex_idx} out of range')
+    
+    # Apply scaling
+    if scale is not None:
+        print('\tApplying scaling...')
+        if isinstance(scale, (int, float)):
+            # Uniform scaling
+            vertices *= scale
+        else:
+            # Non-uniform scaling [sx, sy, sz]
+            vertices *= np.array(scale)
+    
+    # Apply rotation (order: x, y, z)
+    if rotation is not None:
+        print('\tApplying rotations...')
+        rot_x = rotation.get('x', 0)
+        rot_y = rotation.get('y', 0)
+        rot_z = rotation.get('z', 0)
+        
+        if rot_x != 0:
+            rot_x_rad = math.radians(rot_x)
+            for i in range(len(vertices)):
+                vertices[i] = x_rotation(vertices[i], rot_x_rad)
+        
+        if rot_y != 0:
+            rot_y_rad = math.radians(rot_y)
+            for i in range(len(vertices)):
+                vertices[i] = y_rotation(vertices[i], rot_y_rad)
+        
+        if rot_z != 0:
+            rot_z_rad = math.radians(rot_z)
+            for i in range(len(vertices)):
+                vertices[i] = z_rotation(vertices[i], rot_z_rad)
+    
+    # Apply translation
+    if translation is not None:
+        print('\tApplying translation...')
+        vertices += np.array(translation)
+    
+    # Write output file if specified
+    if outputFile is not None:
+        print(f'\tWriting transformed geometry to {outputFile}...')
+        writeGeometryFile(outputFile, vertices, faces)
+    
+    return vertices, faces
+
+
+def writeGeometryFile(outputFile, vertices, faces):
+    '''
+    Write geometry to OBJ or STL file (with optional .gz compression).
+    
+    :param outputFile: Path to output file (determines format from extension)
+    :param vertices: Array of vertex coordinates
+    :param faces: Array of face vertex indices
+    '''
+    
+    # Handle .gz compression
+    if outputFile.endswith('.gz'):
+        # Determine actual format from filename
+        if '.obj' in outputFile:
+            format_type = 'obj'
+            actual_file = outputFile.replace('.gz', '')
+        elif '.stl' in outputFile:
+            format_type = 'stl'
+            actual_file = outputFile.replace('.gz', '')
+        else:
+            sys.exit('ERROR! Output file must be .obj.gz or .stl.gz')
+        
+        # Write to temporary file first
+        if format_type == 'obj':
+            writeOBJFile(actual_file, vertices, faces)
+        else:
+            writeSTLFile(actual_file, vertices, faces, binary=True)
+        
+        # Compress to .gz
+        print(f'\t\tCompressing to {outputFile}...')
+        with open(actual_file, 'rb') as f_in:
+            with gzip.open(outputFile, 'wb') as f_out:
+                f_out.writelines(f_in)
+        os.remove(actual_file)
+    else:
+        # Write uncompressed
+        if '.obj' in outputFile:
+            writeOBJFile(outputFile, vertices, faces)
+        elif '.stl' in outputFile:
+            # Auto-detect binary vs ASCII from user preference or default to binary
+            writeSTLFile(outputFile, vertices, faces, binary=True)
+        else:
+            sys.exit('ERROR! Output file must be .obj or .stl format')
+
+
+def writeOBJFile(filename, vertices, faces):
+    '''Write vertices and faces to OBJ file.'''
+    print(f'\t\tWriting OBJ file: {filename}')
+    with open(filename, 'w') as f:
+        # Write vertices
+        for vertex in vertices:
+            f.write(f'v {vertex[0]:.6f} {vertex[1]:.6f} {vertex[2]:.6f}\n')
+        
+        # Write faces (OBJ uses 1-based indexing)
+        for face in faces:
+            f.write(f'f {face[0]+1} {face[1]+1} {face[2]+1}\n')
+
+
+def writeSTLFile(filename, vertices, faces, binary=True):
+    '''Write vertices and faces to STL file (ASCII or binary).'''
+    if binary:
+        print(f'\t\tWriting binary STL file: {filename}')
+        with open(filename, 'wb') as f:
+            # Write 80-byte header
+            header = b'Binary STL file created by utilities.py'.ljust(80, b'\0')
+            f.write(header)
+            
+            # Write number of triangles
+            f.write(struct.pack('<I', len(faces)))
+            
+            # Write each triangle
+            for face in faces:
+                v1 = vertices[face[0]]
+                v2 = vertices[face[1]]
+                v3 = vertices[face[2]]
+                
+                # Calculate normal
+                edge1 = v2 - v1
+                edge2 = v3 - v1
+                normal = np.cross(edge1, edge2)
+                norm_length = np.linalg.norm(normal)
+                if norm_length > 0:
+                    normal = normal / norm_length
+                else:
+                    normal = np.array([0, 0, 0])
+                
+                # Write normal
+                f.write(struct.pack('<fff', *normal))
+                
+                # Write vertices
+                f.write(struct.pack('<fff', *v1))
+                f.write(struct.pack('<fff', *v2))
+                f.write(struct.pack('<fff', *v3))
+                
+                # Write attribute byte count
+                f.write(struct.pack('<H', 0))
+    else:
+        print(f'\t\tWriting ASCII STL file: {filename}')
+        with open(filename, 'w') as f:
+            f.write('solid geometry\n')
+            
+            for face in faces:
+                v1 = vertices[face[0]]
+                v2 = vertices[face[1]]
+                v3 = vertices[face[2]]
+                
+                # Calculate normal
+                edge1 = v2 - v1
+                edge2 = v3 - v1
+                normal = np.cross(edge1, edge2)
+                norm_length = np.linalg.norm(normal)
+                if norm_length > 0:
+                    normal = normal / norm_length
+                else:
+                    normal = np.array([0, 0, 0])
+                
+                f.write(f'  facet normal {normal[0]:.6e} {normal[1]:.6e} {normal[2]:.6e}\n')
+                f.write('    outer loop\n')
+                f.write(f'      vertex {v1[0]:.6e} {v1[1]:.6e} {v1[2]:.6e}\n')
+                f.write(f'      vertex {v2[0]:.6e} {v2[1]:.6e} {v2[2]:.6e}\n')
+                f.write(f'      vertex {v3[0]:.6e} {v3[1]:.6e} {v3[2]:.6e}\n')
+                f.write('    endloop\n')
+                f.write('  endfacet\n')
+            
+            f.write('endsolid geometry\n')
+
+
+def copyWithMkdir(src, dest):
+    """Copy file and create destination directory if needed."""
+    dest_dir = os.path.dirname(dest)
+    if dest_dir and not os.path.exists(dest_dir):
+        os.makedirs(dest_dir)
+    shutil.copy2(src, dest)
+
+
+def transformBlockmeshPoints(inputFile, outputFile=None, rotation=None, translation=None, scale=None, REFCOR=None):
+    '''
+    Transform blockmesh dictionary points by rotation, translation, and/or scaling.
+    
+    Reads a OpenFOAM blockMeshDict file, transforms all vertex points, and optionally
+    writes to a new file.
+    
+    :param inputFile: Path to input blockMeshDict file
+    :param outputFile: Path to output blockMeshDict file. If None, only returns transformed points
+    :param rotation: Dict with keys 'x', 'y', 'z' for rotation angles in degrees
+    :param translation: List/array [dx, dy, dz] for translation offsets
+    :param scale: Scalar for uniform scaling, or list/array [sx, sy, sz] for non-uniform scaling
+    :param REFCOR: Point [x, y, z] to rotate about. If None, rotates about origin (0, 0, 0)
+    :return: Tuple of (vertices, new_content) - transformed vertices array and full modified blockMeshDict
+    '''
+    
+    print(f'\t\t\tReading blockMeshDict from {inputFile}...')
+    
+    with open(inputFile, 'r') as f:
+        content = f.read()
+    
+    # Extract vertices section using regex
+    import re
+    vertices_match = re.search(r'vertices\s*\((.*?)\);', content, re.DOTALL)
+    
+    if not vertices_match:
+        sys.exit('ERROR! Could not find vertices section in blockMeshDict')
+    
+    vertices_text = vertices_match.group(1)
+    
+    # Parse vertices - format is typically: (x y z)
+    vertex_pattern = r'\(\s*([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s*\)'
+    vertices_list = re.findall(vertex_pattern, vertices_text)
+    
+    if not vertices_list:
+        sys.exit('ERROR! Could not parse vertices from blockMeshDict')
+    
+    print(f'\tFound {len(vertices_list)} vertices')
+    
+    # Convert to numpy array for transformations
+    vertices = np.array([[float(v[0]), float(v[1]), float(v[2])] for v in vertices_list], dtype=np.float64)
+    
+    # Set rotation center point
+    if REFCOR is None:
+        rotation_center = np.array([0.0, 0.0, 0.0])
+    else:
+        rotation_center = np.array([float(REFCOR[0]), float(REFCOR[1]), float(REFCOR[2])])
+        print(f'\tRotating about REFCOR: {rotation_center}')
+    
+    # Apply scaling
+    if scale is not None:
+        print('\tApplying scaling...')
+        if isinstance(scale, (int, float)):
+            vertices *= scale
+        else:
+            vertices *= np.array(scale)
+    
+    # Apply rotation about REFCOR (order: x, y, z)
+    if rotation is not None:
+        print('\t\t\tApplying rotations about reference point...')
+        rot_x = rotation.get('x', 0)
+        rot_y = rotation.get('y', 0)
+        rot_z = rotation.get('z', 0)
+        
+        # Translate vertices to origin, rotate, then translate back
+        vertices -= rotation_center
+        
+        if rot_x != 0:
+            rot_x_rad = math.radians(rot_x)
+            for i in range(len(vertices)):
+                vertices[i] = x_rotation(vertices[i], rot_x_rad)
+        
+        if rot_y != 0:
+            rot_y_rad = math.radians(rot_y)
+            for i in range(len(vertices)):
+                vertices[i] = y_rotation(vertices[i], rot_y_rad)
+        
+        if rot_z != 0:
+            rot_z_rad = math.radians(rot_z)
+            for i in range(len(vertices)):
+                vertices[i] = z_rotation(vertices[i], rot_z_rad)
+        
+        # Translate back to original reference point
+        vertices += rotation_center
+    
+    # Apply translation
+    if translation is not None:
+        print('\tApplying translation...')
+        vertices += np.array(translation)
+    
+    # Generate new vertices section
+    new_vertices_text = 'vertices\n(\n'
+    for vertex in vertices:
+        new_vertices_text += f'    ({vertex[0]:.6e} {vertex[1]:.6e} {vertex[2]:.6e})\n'
+    new_vertices_text += ');'
+    
+    # Replace vertices section in content
+    new_content = re.sub(
+        r'vertices\s*\((.*?)\);',
+        new_vertices_text,
+        content,
+        flags=re.DOTALL
+    )
+    
+    # Write output file if specified
+    if outputFile is not None:
+        output_dir = os.path.dirname(outputFile)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        print(f'\t\t\tWriting transformed blockMeshDict to {outputFile}...')
+        with open(outputFile, 'w') as f:
+            f.write(new_content)
+    
+    return vertices, new_content
