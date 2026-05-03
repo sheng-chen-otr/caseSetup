@@ -20,7 +20,7 @@ rhoInf          1;           // Redundant for incompressible
 liftDir         (<LIFT_VEC>);
 dragDir         (<DRAG_VEC>);
 CofR            (<REFCOR>);  // Axle midpoint on ground
-pitchAxis       (0 1 0);
+pitchAxis       (<PITCH_VEC>);
 magUInf         <INLET_MAG>; 
 lRef            <REFLEN>;        // Wheelbase length
 Aref            <REFAREA>;        // Estimated
@@ -41,7 +41,7 @@ decomposePatchValues    false;
 liftDir         (<LIFT_VEC>);
 dragDir         (<DRAG_VEC>);
 CofR            (<REFCOR>);  // Axle midpoint on ground
-pitchAxis       (0 1 0);
+pitchAxis       (<PITCH_VEC>);
 binData
 {
 nBin        100;          // output data into 20 bins

@@ -165,15 +165,21 @@ def writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict):
         search_and_replace("system/forceCoeffsExport" , "<FORCE_PATCHES>",allString)
         for key in fullCaseSetupDict['BC_SETUP'].keys():
             if 'drag' in key.lower() or 'lift' in key.lower() or 'pitch' in key.lower():
+                if not '_VEC' in key:
+                    continue
                 forceType = key.split('_')[0].lower()
                 print('\t\tSetting %s vector:' % (forceType.upper()))
                 forceVec = fullCaseSetupDict['BC_SETUP'][key] #initial force vec, checking if single key word or a vector
-    
+
                 if forceType in forceVecDict.keys():
                     if forceVec[0].lower() in forceVecDict[forceType].keys():
                         forceKey = forceVec[0].lower()
                         forceVec = forceVecDict[forceType][forceVec[0].lower()]
                         print('\t\t\tusing %s: %s' % (forceKey,forceVec))
+                        print('\t\t\ttransforming force vector to match domain...')
+                        forceVec = transformForceVector(fullCaseSetupDict,forceVec)
+                        print('\t\t\t\tupdated force vector: %s' % (forceVec))
+
                     else:
                         print('\t\t\tusing user input: %s' % (forceVec))
                         forceVec = ' '.join(forceVec)
@@ -396,10 +402,11 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
     inletMag = fullCaseSetupDict['BC_SETUP']['INLET_MAG']
     yaw = fullCaseSetupDict['BC_SETUP']['YAW']
     sim_sym = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM']
+    pitch = float(fullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'][0])
     if sim_sym[0].lower() == 'half':
-        inletVec = velVector(float(inletMag[0]),0,0)
+        inletVec = velVector(float(inletMag[0]),0,pitch)
     else:
-        inletVec = velVector(float(inletMag[0]),float(yaw[0]),0)
+        inletVec = velVector(float(inletMag[0]),float(yaw[0]),pitch)
     velString = 'U uniform (%s);' % (inletVec[0])
     initStringArray.append(velString)   
     
