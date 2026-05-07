@@ -364,6 +364,7 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
         # Write output (with gz compression if needed)
         outIsGz = outputFile.lower().endswith('.gz')
         if outIsGz:
+            print('Writing out to %s' % (outputFile))
             with gzip.open(outputFile, 'wt') as f:
                 f.writelines(outLines)
         else:
