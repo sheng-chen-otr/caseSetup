@@ -188,6 +188,9 @@ def createRideHeightCases(rideHeights, fullCaseSetupDict):
         if row['yaw'] != 0 and SIM_SYM[0].lower() == 'half':
             print('\t\t\tSkipping ride height point %s since it has non-zero yaw and simulation is set to half symmetry...' % (int(row['point'])))
             continue
+        elif row['roll'] != 0 and SIM_SYM[0].lower() == 'half':
+            print('\t\t\tSkipping ride height point %s since it has non-zero roll and simulation is set to half symmetry...' % (int(row['point'])))
+            continue
         newCaseName = "%s_%s" % (baseCaseName, int(row['point']))
         newCaseDir = os.path.join(os.getcwd(), newCaseName)
         if not os.path.exists(newCaseDir):
