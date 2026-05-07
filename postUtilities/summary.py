@@ -31,6 +31,8 @@ print("#### CASE SUMMARY ####")
 # configSections = fullCaseSetupDict.sections()
 
 def main():
+
+   
     
     coeffFiles = getCoeffPaths()
     for part in coeffFiles:
@@ -41,6 +43,8 @@ def main():
     inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(path,case)
     runDate,runTime,version,solver = getOfVersion()
     refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
+   
+    
     #default datas
     rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
     data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
@@ -187,7 +191,7 @@ def bcParser(fullCaseSetupDict,path,case):
     
     return inletMag,lastTime,yaw,movingGround,wheelRotation,simType,turbModel
 
-def getCoeffPaths(path,case):
+def getCoeffPaths(path):
     print("Getting force coefficients...")
     #check if postProcessing dir exists
     postProPath = "%s/postProcessing" % (path)
@@ -272,7 +276,7 @@ def averageCoeffs(fullCaseSetupDict,case,part,coeffFiles):
     averagedArray.to_csv("trial%s_AVG_%s_coeff.csv" % (case, part),sep=',',float_format='%.4f',index=False)
 
     #np.savetxt("trial%s_AVG_%s_coeff.csv" % (case, part), np.transpose(avgs), delimiter=",",header="CD,CL,CLF,CLR,CSF,CSR,CI-CD,CI-CL")
-    return averagedData
+    return averagedData,averagedArray
         
 
 def cellCount(fullCaseSetupDict,path,case):
