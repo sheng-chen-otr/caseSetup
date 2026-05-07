@@ -270,7 +270,7 @@ def transformParts(geom,geomFilePath, transformAmount,childCaseName):
     try:
         outputPath = os.path.join(childCaseName,'constant','triSurface',geom)
         if not 'dummy' in geom:
-            transformGeometryPreservePID(geom,outputFile=outputPath,translation=[0,0,transformAmount])
+            transformGeometryPreservePID(geomFilePath,outputFile=outputPath,translation=[0,0,transformAmount])
         else:
             print('')
         print('\t\t\t\t\ttransform OK!')
@@ -300,7 +300,8 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
     print(f'\tTransforming {inputFile} -> {outputFile} (preserving PIDs)...')
     
     # Determine file format
-    lowerName = inputFile.lower()
+    
+    lowerName = os.path.basename(inputFile).lower()
     isGz = lowerName.endswith('.gz')
     if '.obj' in lowerName:
         fmt = 'obj'
