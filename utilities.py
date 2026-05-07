@@ -311,6 +311,7 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
         sys.exit('ERROR! Input file must be .obj, .stl, .obj.gz, or .stl.gz')
     
     # Open input (text mode for OBJ/ASCII STL, binary for binary STL detection)
+    print('\t\t\tOpening file %s' % (inputFile))
     def openInput(mode='rt'):
         if isGz:
             return gzip.open(inputFile, mode)
@@ -494,7 +495,7 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
                 outBuf += struct.pack('<fff', *v2)
                 outBuf += struct.pack('<fff', *v3)
                 outBuf += attr
-            
+            print('\t\t\tWriting out to %s' % (outputFile))
             if outIsGz:
                 with gzip.open(outputFile, 'wb') as f:
                     f.write(outBuf)
@@ -505,7 +506,7 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
                 with open(outputFile, 'wb') as f:
                     f.write(outBuf)
             
-            print(f'\t\tTransformed binary STL ({numTri} triangles), preserved header/solid name.')
+            print(f'\t\t\tTransformed binary STL ({numTri} triangles), preserved header/solid name.')
             return outputFile
 def transformGeometry(inputFile, outputFile=None, rotation=None, translation=None, scale=None, morphing_dict=None):
     '''
