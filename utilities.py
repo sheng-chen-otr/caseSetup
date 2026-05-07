@@ -240,7 +240,6 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
             # identify wheel from geometries, or geometries that need to move with wheel, will need appropriate
             # key words!
             for geom in geomDict.keys():
-                print(geom)
                 geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
                 if wheel in geom.lower():
                     transformParts(geom,geomFilePath,wheelMovement,childName)
@@ -266,12 +265,14 @@ def transformBlockMesh(fullCaseSetupDict):
    
 
 def transformParts(geom,geomFilePath, transformAmount,childCaseName):
-    print(geomFilePath)
     print('\t\t\t\tMoving %s by z-position %s' % (geom,transformAmount)) 
     # dummy transform
     try:
         outputPath = os.path.join(childCaseName,'constant','triSurface',geom)
-        transformGeometry(geom,outputFile=outputPath,translation=[0,0,transformAmount])
+        if not 'dummy' in geom:
+            transformGeometryPreservePID(geom,outputFile=outputPath,translation=[0,0,transformAmount])
+        else:
+            print('')
         print('\t\t\t\t\ttransform OK!')
     except Exception as E:
         print(E)
@@ -279,7 +280,232 @@ def transformParts(geom,geomFilePath, transformAmount,childCaseName):
 
     
     #copyWithMkdir(geomFilePath, outputPath) #copy the geometry to the new case directory with the same name, but transformed position
-
+def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translation=None, scale=None, morphing_dict=None):
+    '''
+    Transform geometry files (OBJ or STL, with or without .gz compression) while preserving
+    PID naming (groups in OBJ, solid names in STL).
+    
+    For OBJ files: preserves 'g <name>' and 'o <name>' groupings
+    For STL files: preserves 'solid <name>' / 'endsolid <name>' multi-solid structure
+                   (binary STLs only have a single solid name in their header)
+    
+    :param inputFile: Path to input geometry file (.obj, .stl, .obj.gz, .stl.gz)
+    :param outputFile: Path to output geometry file (same supported extensions)
+    :param rotation: Dict with keys 'x', 'y', 'z' for rotation angles in degrees
+    :param translation: List/array [dx, dy, dz] for translation offsets
+    :param scale: Scalar or [sx, sy, sz] for scaling
+    :param morphing_dict: Dict mapping vertex indices to displacement vectors
+    :return: Path to output file
+    '''
+    print(f'\tTransforming {inputFile} -> {outputFile} (preserving PIDs)...')
+    
+    # Determine file format
+    lowerName = inputFile.lower()
+    isGz = lowerName.endswith('.gz')
+    if '.obj' in lowerName:
+        fmt = 'obj'
+    elif '.stl' in lowerName:
+        fmt = 'stl'
+    else:
+        sys.exit('ERROR! Input file must be .obj, .stl, .obj.gz, or .stl.gz')
+    
+    # Open input (text mode for OBJ/ASCII STL, binary for binary STL detection)
+    def openInput(mode='rt'):
+        if isGz:
+            return gzip.open(inputFile, mode)
+        else:
+            return open(inputFile, mode)
+    
+    # ---- Build transformation function for a vertex ----
+    def transformVertex(v, idx=None):
+        v = np.array(v, dtype=np.float64)
+        if morphing_dict is not None and idx is not None and idx in morphing_dict:
+            v = v + np.array(morphing_dict[idx])
+        if scale is not None:
+            if isinstance(scale, (int, float)):
+                v = v * scale
+            else:
+                v = v * np.array(scale)
+        if rotation is not None:
+            rx = rotation.get('x', 0)
+            ry = rotation.get('y', 0)
+            rz = rotation.get('z', 0)
+            if rx != 0:
+                v = x_rotation(v, math.radians(rx))
+            if ry != 0:
+                v = y_rotation(v, math.radians(ry))
+            if rz != 0:
+                v = z_rotation(v, math.radians(rz))
+        if translation is not None:
+            v = v + np.array(translation)
+        return v
+    
+    # ---- OBJ handling ----
+    if fmt == 'obj':
+        with openInput('rt') as f:
+            lines = f.readlines()
+        
+        outLines = []
+        vertexIdx = 0
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('v '):
+                parts = stripped.split()
+                v = [float(parts[1]), float(parts[2]), float(parts[3])]
+                vNew = transformVertex(v, vertexIdx)
+                outLines.append(f'v {vNew[0]:.6f} {vNew[1]:.6f} {vNew[2]:.6f}\n')
+                vertexIdx += 1
+            else:
+                # Preserve everything else: g, o, f, vn, vt, comments, mtllib, usemtl
+                outLines.append(line if line.endswith('\n') else line + '\n')
+        
+        # Write output (with gz compression if needed)
+        outIsGz = outputFile.lower().endswith('.gz')
+        if outIsGz:
+            with gzip.open(outputFile, 'wt') as f:
+                f.writelines(outLines)
+        else:
+            outDir = os.path.dirname(outputFile)
+            if outDir and not os.path.exists(outDir):
+                os.makedirs(outDir)
+            with open(outputFile, 'wt') as f:
+                f.writelines(outLines)
+        
+        print(f'\t\tTransformed {vertexIdx} vertices, preserved OBJ groups.')
+        return outputFile
+    
+    # ---- STL handling ----
+    if fmt == 'stl':
+        # Detect ASCII vs binary
+        with openInput('rb') as f:
+            head = f.read(512)
+        try:
+            headStr = head.decode('utf-8', errors='ignore').lstrip().lower()
+            asciiLikely = headStr.startswith('solid') and 'facet' in head.decode('utf-8', errors='ignore').lower()
+        except Exception:
+            asciiLikely = False
+        
+        outIsGz = outputFile.lower().endswith('.gz')
+        
+        if asciiLikely:
+            # ASCII STL — preserve solid/endsolid names and structure
+            with openInput('rt') as f:
+                lines = f.readlines()
+            
+            outLines = []
+            currentNormal = None
+            triBuffer = []  # collect 3 vertices for current facet
+            
+            for line in lines:
+                stripped = line.strip()
+                low = stripped.lower()
+                
+                if low.startswith('solid') or low.startswith('endsolid') or \
+                   low.startswith('outer loop') or low.startswith('endloop') or \
+                   low.startswith('endfacet'):
+                    outLines.append(line if line.endswith('\n') else line + '\n')
+                    if low.startswith('endfacet'):
+                        triBuffer = []
+                        currentNormal = None
+                
+                elif low.startswith('facet normal'):
+                    # We will recompute the normal after transformation
+                    triBuffer = []
+                    # placeholder; we replace later by buffering
+                    # Strategy: hold off writing facet normal until we have the 3 vertices
+                    outLines.append(('__FACET_NORMAL_PLACEHOLDER__', len(triBuffer)))
+                
+                elif low.startswith('vertex'):
+                    parts = stripped.split()
+                    v = [float(parts[1]), float(parts[2]), float(parts[3])]
+                    vNew = transformVertex(v)
+                    triBuffer.append(vNew)
+                    outLines.append(f'      vertex {vNew[0]:.6e} {vNew[1]:.6e} {vNew[2]:.6e}\n')
+                    
+                    # When we have 3 vertices, replace the placeholder normal
+                    if len(triBuffer) == 3:
+                        edge1 = triBuffer[1] - triBuffer[0]
+                        edge2 = triBuffer[2] - triBuffer[0]
+                        n = np.cross(edge1, edge2)
+                        nLen = np.linalg.norm(n)
+                        if nLen > 0:
+                            n = n / nLen
+                        else:
+                            n = np.array([0.0, 0.0, 0.0])
+                        # Find the most recent placeholder and replace
+                        for i in range(len(outLines) - 1, -1, -1):
+                            if isinstance(outLines[i], tuple) and outLines[i][0] == '__FACET_NORMAL_PLACEHOLDER__':
+                                outLines[i] = f'  facet normal {n[0]:.6e} {n[1]:.6e} {n[2]:.6e}\n'
+                                break
+                else:
+                    outLines.append(line if line.endswith('\n') else line + '\n')
+            
+            # Safety: replace any unfilled placeholders
+            outLines = [l if not isinstance(l, tuple) else '  facet normal 0.000000e+00 0.000000e+00 0.000000e+00\n' for l in outLines]
+            
+            if outIsGz:
+                with gzip.open(outputFile, 'wt') as f:
+                    f.writelines(outLines)
+            else:
+                outDir = os.path.dirname(outputFile)
+                if outDir and not os.path.exists(outDir):
+                    os.makedirs(outDir)
+                with open(outputFile, 'wt') as f:
+                    f.writelines(outLines)
+            
+            print('\t\tTransformed ASCII STL, preserved solid names.')
+            return outputFile
+        
+        else:
+            # Binary STL — preserve the 80-byte header (which contains the solid name)
+            with openInput('rb') as f:
+                data = f.read()
+            
+            header = data[:80]
+            numTri = struct.unpack('<I', data[80:84])[0]
+            offset = 84
+            
+            outBuf = bytearray()
+            outBuf += header
+            outBuf += struct.pack('<I', numTri)
+            
+            for _ in range(numTri):
+                # skip stored normal — we recompute
+                offset += 12
+                v1 = np.array(struct.unpack('<fff', data[offset:offset+12])); offset += 12
+                v2 = np.array(struct.unpack('<fff', data[offset:offset+12])); offset += 12
+                v3 = np.array(struct.unpack('<fff', data[offset:offset+12])); offset += 12
+                attr = data[offset:offset+2]; offset += 2
+                
+                v1 = transformVertex(v1)
+                v2 = transformVertex(v2)
+                v3 = transformVertex(v3)
+                
+                n = np.cross(v2 - v1, v3 - v1)
+                nLen = np.linalg.norm(n)
+                if nLen > 0:
+                    n = n / nLen
+                else:
+                    n = np.array([0.0, 0.0, 0.0])
+                
+                outBuf += struct.pack('<fff', *n)
+                outBuf += struct.pack('<fff', *v1)
+                outBuf += struct.pack('<fff', *v2)
+                outBuf += struct.pack('<fff', *v3)
+                outBuf += attr
+            
+            if outIsGz:
+                with gzip.open(outputFile, 'wb') as f:
+                    f.write(outBuf)
+            else:
+                outDir = os.path.dirname(outputFile)
+                if outDir and not os.path.exists(outDir):
+                    os.makedirs(outDir)
+                with open(outputFile, 'wb') as f:
+                    f.write(outBuf)
+            
+            print(f'\t\tTransformed binary STL ({numTri} triangles), preserved header/solid name.')
+            return outputFile
 def transformGeometry(inputFile, outputFile=None, rotation=None, translation=None, scale=None, morphing_dict=None):
     '''
     Transform geometry files (OBJ or STL, with or without .gz compression).
