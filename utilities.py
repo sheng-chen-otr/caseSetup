@@ -243,6 +243,13 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
                 geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
                 if wheel in geom.lower():
                     transformParts(geom,geomFilePath,wheelMovement,childName)
+        for geom in geomDict.keys():
+            geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
+            geomChildPath = '%s/constant/triSurface/%s' % (childName,geom)
+            if not any(x in geom for x in ['fr','fl','rr','rl']):
+                print('\t\t\tCopying non-moving geometry ...' % (geom))
+                copyWithMkdir(geomFilePath, geomChildPath)
+
     
 
     return rideHeights
