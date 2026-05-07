@@ -300,8 +300,7 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
     print(f'\tTransforming {inputFile} -> {outputFile} (preserving PIDs)...')
     
     # Determine file format
-    
-    lowerName = os.path.basename(inputFile).lower()
+    lowerName = inputFile.lower()
     isGz = lowerName.endswith('.gz')
     if '.obj' in lowerName:
         fmt = 'obj'
@@ -310,13 +309,20 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
     else:
         sys.exit('ERROR! Input file must be .obj, .stl, .obj.gz, or .stl.gz')
     
-    # Open input (text mode for OBJ/ASCII STL, binary for binary STL detection)
-    print('\t\t\tOpening file %s' % (inputFile))
+    # Open input (text or binary)
     def openInput(mode='rt'):
         if isGz:
             return gzip.open(inputFile, mode)
         else:
             return open(inputFile, mode)
+    
+    # Ensure output directory exists
+    def ensureOutputDir():
+        outDir = os.path.dirname(outputFile)
+        if outDir and not os.path.exists(outDir):
+            os.makedirs(outDir)
+    
+    outIsGz = outputFile.lower().endswith('.gz')
     
     # ---- Build transformation function for a vertex ----
     def transformVertex(v, idx=None):
@@ -361,16 +367,11 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
                 # Preserve everything else: g, o, f, vn, vt, comments, mtllib, usemtl
                 outLines.append(line if line.endswith('\n') else line + '\n')
         
-        # Write output (with gz compression if needed)
-        outIsGz = outputFile.lower().endswith('.gz')
+        ensureOutputDir()
         if outIsGz:
-            print('Writing out to %s' % (outputFile))
             with gzip.open(outputFile, 'wt') as f:
                 f.writelines(outLines)
         else:
-            outDir = os.path.dirname(outputFile)
-            if outDir and not os.path.exists(outDir):
-                os.makedirs(outDir)
             with open(outputFile, 'wt') as f:
                 f.writelines(outLines)
         
@@ -384,11 +385,9 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
             head = f.read(512)
         try:
             headStr = head.decode('utf-8', errors='ignore').lstrip().lower()
-            asciiLikely = headStr.startswith('solid') and 'facet' in head.decode('utf-8', errors='ignore').lower()
+            asciiLikely = headStr.startswith('solid') and 'facet' in headStr
         except Exception:
             asciiLikely = False
-        
-        outIsGz = outputFile.lower().endswith('.gz')
         
         if asciiLikely:
             # ASCII STL — preserve solid/endsolid names and structure
@@ -396,7 +395,6 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
                 lines = f.readlines()
             
             outLines = []
-            currentNormal = None
             triBuffer = []  # collect 3 vertices for current facet
             
             for line in lines:
@@ -409,14 +407,11 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
                     outLines.append(line if line.endswith('\n') else line + '\n')
                     if low.startswith('endfacet'):
                         triBuffer = []
-                        currentNormal = None
                 
                 elif low.startswith('facet normal'):
-                    # We will recompute the normal after transformation
+                    # Hold a placeholder; will be replaced after the 3 vertices
                     triBuffer = []
-                    # placeholder; we replace later by buffering
-                    # Strategy: hold off writing facet normal until we have the 3 vertices
-                    outLines.append(('__FACET_NORMAL_PLACEHOLDER__', len(triBuffer)))
+                    outLines.append(('__FACET_NORMAL_PLACEHOLDER__',))
                 
                 elif low.startswith('vertex'):
                     parts = stripped.split()
@@ -425,7 +420,6 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
                     triBuffer.append(vNew)
                     outLines.append(f'      vertex {vNew[0]:.6e} {vNew[1]:.6e} {vNew[2]:.6e}\n')
                     
-                    # When we have 3 vertices, replace the placeholder normal
                     if len(triBuffer) == 3:
                         edge1 = triBuffer[1] - triBuffer[0]
                         edge2 = triBuffer[2] - triBuffer[0]
@@ -435,7 +429,6 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
                             n = n / nLen
                         else:
                             n = np.array([0.0, 0.0, 0.0])
-                        # Find the most recent placeholder and replace
                         for i in range(len(outLines) - 1, -1, -1):
                             if isinstance(outLines[i], tuple) and outLines[i][0] == '__FACET_NORMAL_PLACEHOLDER__':
                                 outLines[i] = f'  facet normal {n[0]:.6e} {n[1]:.6e} {n[2]:.6e}\n'
@@ -444,15 +437,15 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
                     outLines.append(line if line.endswith('\n') else line + '\n')
             
             # Safety: replace any unfilled placeholders
-            outLines = [l if not isinstance(l, tuple) else '  facet normal 0.000000e+00 0.000000e+00 0.000000e+00\n' for l in outLines]
+            outLines = [l if not isinstance(l, tuple)
+                        else '  facet normal 0.000000e+00 0.000000e+00 0.000000e+00\n'
+                        for l in outLines]
             
+            ensureOutputDir()
             if outIsGz:
                 with gzip.open(outputFile, 'wt') as f:
                     f.writelines(outLines)
             else:
-                outDir = os.path.dirname(outputFile)
-                if outDir and not os.path.exists(outDir):
-                    os.makedirs(outDir)
                 with open(outputFile, 'wt') as f:
                     f.writelines(outLines)
             
@@ -473,7 +466,7 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
             outBuf += struct.pack('<I', numTri)
             
             for _ in range(numTri):
-                # skip stored normal — we recompute
+                # skip stored normal — recompute
                 offset += 12
                 v1 = np.array(struct.unpack('<fff', data[offset:offset+12])); offset += 12
                 v2 = np.array(struct.unpack('<fff', data[offset:offset+12])); offset += 12
@@ -496,19 +489,18 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
                 outBuf += struct.pack('<fff', *v2)
                 outBuf += struct.pack('<fff', *v3)
                 outBuf += attr
-            print('\t\t\tWriting out to %s' % (outputFile))
+            
+            ensureOutputDir()
             if outIsGz:
                 with gzip.open(outputFile, 'wb') as f:
                     f.write(outBuf)
             else:
-                outDir = os.path.dirname(outputFile)
-                if outDir and not os.path.exists(outDir):
-                    os.makedirs(outDir)
                 with open(outputFile, 'wb') as f:
                     f.write(outBuf)
             
-            print(f'\t\t\tTransformed binary STL ({numTri} triangles), preserved header/solid name.')
+            print(f'\t\tTransformed binary STL ({numTri} triangles), preserved header/solid name.')
             return outputFile
+
 def transformGeometry(inputFile, outputFile=None, rotation=None, translation=None, scale=None, morphing_dict=None):
     '''
     Transform geometry files (OBJ or STL, with or without .gz compression).
