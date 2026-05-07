@@ -228,11 +228,11 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
     for idx, row in rideHeights.iterrows():
         point = (int(row['point']))
         childName = baseCaseName + '_' + str(point)
-        print('\t\t\tCopying geometries from baseCase to %s' % (childName))
-        for geom in geomDict.keys():
-            geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
-            outputPath = os.path.join(childName,'constant','triSurface',geom)
-            copyWithMkdir(geomFilePath, outputPath) #copy the geometry to the new case directory with the same name, but transformed position
+        # print('\t\t\tCopying geometries from baseCase to %s' % (childName))
+        # for geom in geomDict.keys():
+        #     geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
+        #     outputPath = os.path.join(childName,'constant','triSurface',geom)
+        #     copyWithMkdir(geomFilePath, outputPath) #copy the geometry to the new case directory with the same name, but transformed position
         print('\t\t\tTransforming geometries for point %s' % str(point))
         for wheel in ['fr','fl','rr','rl']:
             wheelMovement = row['wheel_%s' % (wheel)]
@@ -240,9 +240,10 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
             # identify wheel from geometries, or geometries that need to move with wheel, will need appropriate
             # key words!
             for geom in geomDict.keys():
-                geomFilePath = '%s/constant/triSurface/%s' % (childName,geom) #get the path of the parent geometry
+                print(geom)
+                geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
                 if wheel in geom.lower():
-                    transformParts(geom, geomFilePath,wheelMovement,childName)
+                    transformParts(geom,geomFilePath,wheelMovement,childName)
     
 
     return rideHeights
@@ -265,16 +266,96 @@ def transformBlockMesh(fullCaseSetupDict):
    
 
 def transformParts(geom,geomFilePath, transformAmount,childCaseName):
+    print(geomFilePath)
     print('\t\t\t\tMoving %s by z-position %s' % (geom,transformAmount)) 
     # dummy transform
     try:
+        outputPath = os.path.join(childCaseName,'constant','triSurface',geom)
+        transformGeometry(geom,outputFile=outputPath,translation=[0,0,transformAmount])
         print('\t\t\t\t\ttransform OK!')
-    except:
+    except Exception as E:
+        print(E)
         sys.exit('\t\t\t\t\ttransform ERROR!')
-    outputPath = os.path.join(childCaseName,'constant','triSurface',geom)
+
     
     #copyWithMkdir(geomFilePath, outputPath) #copy the geometry to the new case directory with the same name, but transformed position
 
+def transformGeometry(inputFile, outputFile=None, rotation=None, translation=None, scale=None, morphing_dict=None):
+    '''
+    Transform geometry files (OBJ or STL, with or without .gz compression).
+    
+    Supports:
+    - Rotation: around x, y, z axes (in degrees)
+    - Translation: offset in x, y, z directions
+    - Scaling: uniform or non-uniform scaling
+    - Morphing: vertex-specific displacements based on a morphing dictionary
+    
+    :param inputFile: Path to input geometry file (OBJ or STL, can be .gz compressed)
+    :param outputFile: Path to output geometry file. If None, returns vertices and faces only
+    :param rotation: Dict with keys 'x', 'y', 'z' for rotation angles in degrees, e.g. {'x': 0, 'y': 0, 'z': 0}
+    :param translation: List/array [dx, dy, dz] for translation offsets
+    :param scale: Scalar for uniform scaling, or list/array [sx, sy, sz] for non-uniform scaling
+    :param morphing_dict: Dict mapping vertex indices to displacement vectors, e.g. {0: [0.1, 0, 0], 5: [0, 0.2, 0]}
+    :return: Tuple of (vertices, faces) - transformed geometry
+    '''
+    
+    # Load the geometry file
+    print(f'\tLoading geometry from {inputFile}...')
+    vertices, faces = readGeomFile(inputFile)
+    vertices = np.array(vertices, dtype=np.float64)
+    
+    # Apply morphing first (vertex-specific displacements)
+    if morphing_dict is not None:
+        print('\tApplying morphing deformations...')
+        for vertex_idx, displacement in morphing_dict.items():
+            if vertex_idx < len(vertices):
+                vertices[vertex_idx] += np.array(displacement)
+            else:
+                print(f'\t\tWarning: Vertex index {vertex_idx} out of range')
+    
+    # Apply scaling
+    if scale is not None:
+        print('\tApplying scaling...')
+        if isinstance(scale, (int, float)):
+            # Uniform scaling
+            vertices *= scale
+        else:
+            # Non-uniform scaling [sx, sy, sz]
+            vertices *= np.array(scale)
+    
+    # Apply rotation (order: x, y, z)
+    if rotation is not None:
+        print('\tApplying rotations...')
+        rot_x = rotation.get('x', 0)
+        rot_y = rotation.get('y', 0)
+        rot_z = rotation.get('z', 0)
+        
+        if rot_x != 0:
+            rot_x_rad = math.radians(rot_x)
+            for i in range(len(vertices)):
+                vertices[i] = x_rotation(vertices[i], rot_x_rad)
+        
+        if rot_y != 0:
+            rot_y_rad = math.radians(rot_y)
+            for i in range(len(vertices)):
+                vertices[i] = y_rotation(vertices[i], rot_y_rad)
+        
+        if rot_z != 0:
+            rot_z_rad = math.radians(rot_z)
+            for i in range(len(vertices)):
+                vertices[i] = z_rotation(vertices[i], rot_z_rad)
+    
+    # Apply translation
+    if translation is not None:
+        print('\tApplying translation...')
+        vertices += np.array(translation)
+    
+    # Write output file if specified
+    if outputFile is not None:
+        print(f'\tWriting transformed geometry to {outputFile}...')
+        writeGeometryFile(outputFile, vertices, faces)
+    
+    return vertices, faces
     
 def runRHCaseSetup(rideHeights, fullCaseSetupDict):
     # Get the path to caseSetup.py
@@ -873,82 +954,7 @@ def readGeomFile(fileName):
     return vertices,faces
 
 
-def transformGeometry(inputFile, outputFile=None, rotation=None, translation=None, scale=None, morphing_dict=None):
-    '''
-    Transform geometry files (OBJ or STL, with or without .gz compression).
-    
-    Supports:
-    - Rotation: around x, y, z axes (in degrees)
-    - Translation: offset in x, y, z directions
-    - Scaling: uniform or non-uniform scaling
-    - Morphing: vertex-specific displacements based on a morphing dictionary
-    
-    :param inputFile: Path to input geometry file (OBJ or STL, can be .gz compressed)
-    :param outputFile: Path to output geometry file. If None, returns vertices and faces only
-    :param rotation: Dict with keys 'x', 'y', 'z' for rotation angles in degrees, e.g. {'x': 0, 'y': 0, 'z': 0}
-    :param translation: List/array [dx, dy, dz] for translation offsets
-    :param scale: Scalar for uniform scaling, or list/array [sx, sy, sz] for non-uniform scaling
-    :param morphing_dict: Dict mapping vertex indices to displacement vectors, e.g. {0: [0.1, 0, 0], 5: [0, 0.2, 0]}
-    :return: Tuple of (vertices, faces) - transformed geometry
-    '''
-    
-    # Load the geometry file
-    print(f'\tLoading geometry from {inputFile}...')
-    vertices, faces = readGeomFile(inputFile)
-    vertices = np.array(vertices, dtype=np.float64)
-    
-    # Apply morphing first (vertex-specific displacements)
-    if morphing_dict is not None:
-        print('\tApplying morphing deformations...')
-        for vertex_idx, displacement in morphing_dict.items():
-            if vertex_idx < len(vertices):
-                vertices[vertex_idx] += np.array(displacement)
-            else:
-                print(f'\t\tWarning: Vertex index {vertex_idx} out of range')
-    
-    # Apply scaling
-    if scale is not None:
-        print('\tApplying scaling...')
-        if isinstance(scale, (int, float)):
-            # Uniform scaling
-            vertices *= scale
-        else:
-            # Non-uniform scaling [sx, sy, sz]
-            vertices *= np.array(scale)
-    
-    # Apply rotation (order: x, y, z)
-    if rotation is not None:
-        print('\tApplying rotations...')
-        rot_x = rotation.get('x', 0)
-        rot_y = rotation.get('y', 0)
-        rot_z = rotation.get('z', 0)
-        
-        if rot_x != 0:
-            rot_x_rad = math.radians(rot_x)
-            for i in range(len(vertices)):
-                vertices[i] = x_rotation(vertices[i], rot_x_rad)
-        
-        if rot_y != 0:
-            rot_y_rad = math.radians(rot_y)
-            for i in range(len(vertices)):
-                vertices[i] = y_rotation(vertices[i], rot_y_rad)
-        
-        if rot_z != 0:
-            rot_z_rad = math.radians(rot_z)
-            for i in range(len(vertices)):
-                vertices[i] = z_rotation(vertices[i], rot_z_rad)
-    
-    # Apply translation
-    if translation is not None:
-        print('\tApplying translation...')
-        vertices += np.array(translation)
-    
-    # Write output file if specified
-    if outputFile is not None:
-        print(f'\tWriting transformed geometry to {outputFile}...')
-        writeGeometryFile(outputFile, vertices, faces)
-    
-    return vertices, faces
+
 
 
 def writeGeometryFile(outputFile, vertices, faces):
