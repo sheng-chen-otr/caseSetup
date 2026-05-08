@@ -157,7 +157,7 @@ def generate_summary():
                 
                 for varkey in partVarDict.keys():
                     rowNames.append(part + varkey)
-                    data.append(partVarDict[part][partVarDict[varkey]])
+                    data.append(avgPartDict[part][partVarDict[varkey]])
         if avgPorous != None:
             for col in avgPorous.index:
                 rowNames.append(col)
