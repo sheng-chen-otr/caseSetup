@@ -93,17 +93,18 @@ def generate_summary():
             if os.path.isdir(rideHeightDir):
                 rhCases.append(rideHeightDir)
         porousDict = {}
-
+        partsDict = {}
         for case in rhCases:
             rhPath = os.path.join(os.getcwd(),case)
+            partsDict[case] = {} #prepare to collect the forces for parts
             try:
                 coeffFiles = getCoeffPaths(rhPath)
                 for part in coeffFiles:
                     if part != 'all':
-                        averageCoeffs(fullCaseSetupDict,case,part,coeffFiles)
+                        partAverage,partAverageArray = averageCoeffs(fullCaseSetupDict,case,part,coeffFiles)
+                        partAverage = pd.DataFrame([partAverage])
+                    partsDict[case][part] = partAverage
                 avgData,averagedArray = averageCoeffs(fullCaseSetupDict,case,'all',coeffFiles)
-
-                
                 numCells,mesher,sym = cellCount(fullCaseSetupDict,os.getcwd(),case)
                 inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,os.getcwd(),case)
                 runDate,runTime,version,solver = getOfVersion(rhPath)
@@ -124,8 +125,13 @@ def generate_summary():
                 porousDict = {}
             else:
                 porousDict[case] = porousData
+        #average all the part data
+        avgPartDict = {}
+        for part in partsDict[partsDict.keys()[0]].keys():
+            avgPartDict[part] = pd.concat([partsDict[case][part] for case in partsDict.keys()]).mean(axis=0)
+        print(avgPartDict)
 
-
+        
         rhMeans = rhAvgData.mean(axis=0).round(3)
         #average all the porous media data
         if len(porousDict.keys()) < 1:
@@ -141,8 +147,8 @@ def generate_summary():
             avgPorous = porousArray.mean(axis=0).round(3)
 
         #default datas
-        rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
-        data = [job,caseName,solver,version,'N/A','N/A','N/A',mesher,sym.lower(),refArea,'N/A',simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,rhMeans['cd'],rhMeans['cl'],rhMeans['cl/cd'],rhMeans['cop'],rhMeans['cd_ci'],rhMeans['cl_ci']]
+        rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI','FW CL','FW CD','RW CL','RW CD']
+        data = [job,caseName,solver,version,'N/A','N/A','N/A',mesher,sym.lower(),refArea,'N/A',simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,rhMeans['cd'],rhMeans['cl'],rhMeans['cl/cd'],rhMeans['cop'],rhMeans['cd_ci'],rhMeans['cl_ci'],ddddd]
         
         if avgPorous != None:
             for col in avgPorous.index:

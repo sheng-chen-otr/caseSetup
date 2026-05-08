@@ -160,6 +160,7 @@ def main():
     #checking if run in a trial directory
     if os.path.basename(os.path.split(case_path)[0]) != 'CASES':
         sys.exit('ERROR! Please run in a trial directory!')
+    
     jobName = getWorksheetName(case_path)
     WORKSHEET_NAME = '%s - Trials List' % (jobName)
     jobRoot = os.path.abspath(os.path.join(path, os.pardir))
