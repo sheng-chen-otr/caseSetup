@@ -81,6 +81,7 @@ def generate_summary():
 
     if rideHeightSetup:
         print('Detected ride height map, averaging map values!')
+        
         runPoints = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RH_POINTS']
         caseName = os.path.basename(os.getcwd())
         rhCases = []
@@ -88,7 +89,9 @@ def generate_summary():
         for point in runPoints:
             if point == ' ':
                 continue
-            rhCases.append("%s_%s" % (caseName,point))
+            rideHeightDir = "%s_%s" % (caseName,point)
+            if os.path.isdir(rideHeightDir):
+                rhCases.append(rideHeightDir)
         for case in rhCases:
             rhPath = os.path.join(os.getcwd(),case)
             try:
