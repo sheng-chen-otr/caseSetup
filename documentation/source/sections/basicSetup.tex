@@ -368,3 +368,19 @@ Deleting the module \codeword{defaultRideHeight} will expose the following block
     USE_DEPEND = True
 \end{lstlisting}
 
+This section outlines the usage of the ride height mapping tool. A ride height map is useful to understand the dynamic sensitivity of an aero package as the car goes through the corners. We can use it to run in virtual lap time simulations as well. The use of the ride height mapping tool is diverse, we can use it for evaluation of a concept to understand the overall sensitivity from concept to concept. Some concepts perform better under braking, or under acceleration.
+
+For the sake of simplicity, we make the assumption that there is enough time for the air flow to settle and there is no hysterisis from attitude to attitude on the track, although this might not be true. Therefore, each ride height is run statically with no movement in the simulation after transformation. 
+
+\subsubsection{Ride Height Map Generation}
+Generating a ride height map is done by using on track or simulations data, looking at the front ride height vs rear ride height scatter plots and creating a point grid that encompases the data. There might be some outliers that rarely get reached, but it is helpful to add a point there to ensure the map is interpolated well. A full ride height map can be many points, which can result in very long total computational times. They should not be something run day to day. Rather a limit selection of ride heights can be run for conceptual analysis. The full map can be run at the end of a design cycle to evaluate the overall sensitivity. 
+
+For day to day usage, the ride height points can be limited to 3-5 points relevant to the geometry concept at hand. For example, a front wing change it might be more relevant to use select nose down and nose down plus roll conditions in addition to a level condition. 
+
+\subsubsection{Ride Height Tool Operation}
+The ride height tool operates by reading a \codeword{.csv} file containing front left (\codeword{fl}), front right (\codeword{fr}),  rear left (\codeword{rl}), and rear right (\codeword{rr}) ride heights as a deviation from the baseline condition. The ride height translation is done with a car centric coordinate system, meaning the car body does not move, only the wheels do as well as the domain. This gives the easiet comparison between ride heights in post processing. The ride height reference points are currently referenced to the axle location in \codeword{x} and \codeword{z} directions at the wheel base center in \codeword{y}. This is also assuming your front and rear wheelbases are the same. Future iterations will include alternate reference point locations.
+
+Additionally, the model used for the ride height mapping should not contain suspension components as they will not be transformed at this time. Future iterations might include suspension kinematic transformations.
+
+\subsubsection{Ride Height Tool Usage}
+The use the ride height tool, delete the \codeword{defaultRideHeight} module in the \codeword{DEFAULT_MODULES} line in \codeword{caseSetup}. This will reveal the ride height module in \codeword{caseSetup}.

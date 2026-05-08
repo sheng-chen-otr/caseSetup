@@ -86,6 +86,7 @@ def generate_summary():
         rhCases = []
         rhAvgData = pd.DataFrame(columns=['CD','CL','CLF','CLR','CSF','CSR','CI-CD','CI-CL'])
         for point in runPoints:
+            print(point)
             rhCases.append("%s_%s" % (caseName,point))
         for case in rhCases:
             rhPath = os.path.join(os.getcwd(),case)

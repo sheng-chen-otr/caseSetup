@@ -67,8 +67,13 @@ def calculateRideHeights(fullCaseSetupDict):
 
     #get rideheight file
     RIDE_HEIGHT_FILE = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RIDE_HEIGHT_FILE'][0]
-    execDir = os.path.dirname(os.path.realpath(__file__))
-    rideHeightFilePath = os.path.join(execDir,'rideHeightUtils',RIDE_HEIGHT_FILE)
+    if os.path.exists(RIDE_HEIGHT_FILE):
+        print('\t\tReading ride height file from: %s' % RIDE_HEIGHT_FILE)
+        rideHeightFilePath = RIDE_HEIGHT_FILE
+    else:
+        execDir = os.path.dirname(os.path.realpath(__file__))
+        rideHeightFilePath = os.path.join(execDir,'rideHeightUtils',RIDE_HEIGHT_FILE)
+        print('\t\tReading ride height file from: %s' % rideHeightFilePath)
     if not os.path.exists(rideHeightFilePath):
         sys.exit('ERROR! Ride height file %s cannot be found!' % (rideHeightFilePath))
     rideHeights = pd.read_csv(rideHeightFilePath)
@@ -247,7 +252,7 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
             geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
             geomChildPath = '%s/constant/triSurface/%s' % (childName,geom)
             if not any(x in geom for x in ['fr','fl','rr','rl']):
-                print('\t\t\tCopying non-moving geometry: %s...' % (geom))
+                print('\t\t\tCopying non-moving geometry:...' % (geom))
                 copyWithMkdir(geomFilePath, geomChildPath)
 
     
