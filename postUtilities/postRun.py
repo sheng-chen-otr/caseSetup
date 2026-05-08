@@ -108,7 +108,7 @@ def generate_summary():
                 inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,os.getcwd(),case)
                 runDate,runTime,version,solver = getOfVersion(rhPath)
                 refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
-                caseAvgData = pd.DataFrame(avgData)
+                caseAvgData = pd.DataFrame.from_dict(avgData)
                 #rhAvgData = pd.concat([rhAvgData,averagedArray],axis=0)
                 rhAvgData = pd.concat([rhAvgData,caseAvgData],axis=0)
             except Exception as E:
@@ -136,7 +136,7 @@ def generate_summary():
             porousKeys = porousDict[porousDict.keys()[0]].keys()
             porousArray = pd.DataFrame(columns=porousKeys)
             for case in porousDict.keys():
-                casePorousArray = pd.DataFrame(porousDict[case])
+                casePorousArray = pd.DataFrame.from_dict(porousDict[case])
                 porousArray = pd.concat([porousArray,casePorousArray])
             avgPorous = porousArray.mean(axis=0)
 
@@ -149,10 +149,6 @@ def generate_summary():
                 rowNames.append(col)
             for val in avgPorous:
                 data.append(val)
-            
-        
-
-
 
         summary = pd.DataFrame(columns=rowNames)
         summary.loc[-1] = data
