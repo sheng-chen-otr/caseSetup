@@ -175,9 +175,10 @@ def generate_summary():
                 
     else:
         coeffFiles = getCoeffPaths(casePath, case)
+        partsDict = {}
         for part in coeffFiles:
             if part != 'all':
-                avgData = averageCoeffs(fullCaseSetupDict,case,part,coeffFiles)
+                partsDict[part],avgDataArray = averageCoeffs(fullCaseSetupDict,case,part,coeffFiles)
         avgData = averageCoeffs(fullCaseSetupDict,case,'all',coeffFiles)
         
         numCells,mesher,sym = cellCount(fullCaseSetupDict,casePath,case)
@@ -188,6 +189,13 @@ def generate_summary():
         #default datas
         rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
         data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
+        for part in partsDict.keys():
+            partVarDict = {'CL':'cl',
+                           'CD':'cd'}
+            
+            for varkey in partVarDict.keys():
+                rowNames.append(part + ' ' + varkey)
+                data.append(avgPartDict[part][partVarDict[varkey]])
         try:
             porousData = getPorousData(path,case)
             #adding porous data
