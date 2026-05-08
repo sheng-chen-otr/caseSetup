@@ -128,8 +128,9 @@ def generate_summary():
         #average all the part data
         avgPartDict = {}
         for part in partsDict[list(partsDict.keys())[0]].keys():
-            avgPartDict[part] = pd.concat([partsDict[case][part] for case in partsDict.keys()]).mean(axis=0)
-        print(avgPartDict)
+            avgPartDict[part] = pd.concat([partsDict[case][part] for case in partsDict.keys()]).mean(axis=0).round(3)
+        
+        
 
         
         rhMeans = rhAvgData.mean(axis=0).round(3)
@@ -147,9 +148,16 @@ def generate_summary():
             avgPorous = porousArray.mean(axis=0).round(3)
 
         #default datas
-        rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI','FW CL','FW CD','RW CL','RW CD']
-        data = [job,caseName,solver,version,'N/A','N/A','N/A',mesher,sym.lower(),refArea,'N/A',simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,rhMeans['cd'],rhMeans['cl'],rhMeans['cl/cd'],rhMeans['cop'],rhMeans['cd_ci'],rhMeans['cl_ci'],ddddd]
-        
+        rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
+        data = [job,caseName,solver,version,'N/A','N/A','N/A',mesher,sym.lower(),refArea,'N/A',simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,rhMeans['cd'],rhMeans['cl'],rhMeans['cl/cd'],rhMeans['cop'],rhMeans['cd_ci'],rhMeans['cl_ci']]
+        if len(avgPartDict.keys()) > 0:
+            for part in avgPartDict.keys():
+                partVarDict = {'CL':'cl',
+                               'CD':'cd'}
+                
+                for varkey in partVarDict.keys():
+                    rowNames.append(part + varkey)
+                    data.append(partVarDict[part][partVarDict[varkey]])
         if avgPorous != None:
             for col in avgPorous.index:
                 rowNames.append(col)
