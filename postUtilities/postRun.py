@@ -93,6 +93,7 @@ def generate_summary():
             if os.path.isdir(rideHeightDir):
                 rhCases.append(rideHeightDir)
         for case in rhCases:
+            print(case)
             rhPath = os.path.join(os.getcwd(),case)
             try:
                 coeffFiles = getCoeffPaths(rhPath)
@@ -111,7 +112,8 @@ def generate_summary():
                 print('\t\tUnable to average: %s' % (case))
                 print(E)
 
-        print(rhAvgData)
+        rhMeans = rhAvgData.mean(axis=0)
+        print(rhMeans)
         
 
 
