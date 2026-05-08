@@ -125,7 +125,7 @@ def generate_summary():
 
 
         rhMeans = rhAvgData.mean(axis=0)
-        for index in rhMeans.index():
+        for index in rhMeans.index:
             print(index)
         #average all the porous media data
         if len(porousDict.keys()) < 1:
