@@ -175,7 +175,7 @@ def generate_summary():
                 
     else:
         caseName = os.path.basename(casePath)
-        coeffFiles = getCoeffPaths(casePath, caseName)
+        coeffFiles = getCoeffPaths(casePath)
         partsDict = {}
         for part in coeffFiles:
             if part != 'all':
