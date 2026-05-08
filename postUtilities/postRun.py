@@ -157,7 +157,7 @@ def generate_summary():
             print('{:>100s}{:>30s}'.format(col,str(summary[col].values[0])))
             
         summary = summary.transpose()
-        summary.to_csv("%s/%s/summary_rhmeans.csv"% (casePath),header=False)
+        summary.to_csv("%s/summary.csv"% (casePath),header=False)
                 
     else:
         coeffFiles = getCoeffPaths(casePath, case)
