@@ -666,8 +666,8 @@ def writeBlockMesh(templateLoc, fullCaseSetupDict):
     #used to determine where the "center" of the domain should lie
     #the offset is used to shift the domain in X by amount specified
     whctx = fullCaseSetupDict['BC_SETUP']['FRT_WH_CTR'][0] #wheel front axle location projected to ground
-    whcty = fullCaseSetupDict['BC_SETUP']['FRT_WH_CTR'][1] #symmetry plane location
-    whctz = fullCaseSetupDict['BC_SETUP']['FRT_WH_CTR'][2] #wheel contact patch intersection with ground
+    whcty = fullCaseSetupDict['BC_SETUP']['REFCOR'][1] #symmetry plane location
+    whctz = fullCaseSetupDict['BC_SETUP']['REFCOR'][2] #wheel contact patch intersection with ground
     domOffset = fullCaseSetupDict['BC_SETUP']['DOMAIN_OFFSET'][0] #offset value of the domain
     xdom = fullCaseSetupDict['BC_SETUP']['DOMAIN_SIZE'][0] #domain size in X
     ydom = fullCaseSetupDict['BC_SETUP']['DOMAIN_SIZE'][1] #domain size in Y
