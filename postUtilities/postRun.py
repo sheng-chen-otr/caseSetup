@@ -102,9 +102,9 @@ def generate_summary():
                 avgData,averagedArray = averageCoeffs(fullCaseSetupDict,case,'all',coeffFiles)
 
                 
-                numCells,mesher,sym = cellCount(fullCaseSetupDict,casePath,case)
-                inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,path,case)
-                runDate,runTime,version,solver = getOfVersion(casePath)
+                numCells,mesher,sym = cellCount(fullCaseSetupDict,os.getcwd(),case)
+                inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,os.getcwd(),case)
+                runDate,runTime,version,solver = getOfVersion(rhPath)
                 refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
                 rhAvgData = pd.concat([rhAvgData,averagedArray],axis=0)
             except Exception as E:
