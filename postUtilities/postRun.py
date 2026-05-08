@@ -156,7 +156,7 @@ def generate_summary():
                                'CD':'cd'}
                 
                 for varkey in partVarDict.keys():
-                    rowNames.append(part + varkey)
+                    rowNames.append(part + ' ' + varkey)
                     data.append(avgPartDict[part][partVarDict[varkey]])
         if avgPorous != None:
             for col in avgPorous.index:
