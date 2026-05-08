@@ -79,7 +79,7 @@ def generate_summary():
     rideHeightSetup = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RIDE_HEIGHT']
    
 
-    if rideHeightSetup == True and not '_' in os.path.basename(os.getcwd()):
+    if rideHeightSetup.lower() == 'true' and not '_' in os.path.basename(os.getcwd()):
         print('Detected ride height map, averaging map values!')
         runPoints = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RH_POINTS']
         caseName = os.path.basename(os.getcwd())
