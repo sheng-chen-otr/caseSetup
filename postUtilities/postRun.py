@@ -196,7 +196,7 @@ def generate_summary():
             
             for varkey in partVarDict.keys():
                 rowNames.append(part + ' ' + varkey)
-                data.append(avgPartDict[part][partVarDict[varkey]])
+                data.append(partsDict[part][partVarDict[varkey]])
         try:
             porousData = getPorousData(path,case)
             #adding porous data
