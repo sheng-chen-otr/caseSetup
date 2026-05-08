@@ -77,7 +77,7 @@ def generate_summary():
     fullCaseSetupDict.read_file(open(caseSetupPath))
     configSections = fullCaseSetupDict.sections()
     rideHeightSetup = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RIDE_HEIGHT']
-    
+   
 
     if rideHeightSetup and not '_' in os.path.basename(os.getcwd()):
         print('Detected ride height map, averaging map values!')
@@ -142,7 +142,7 @@ def generate_summary():
 
         #default datas
         rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
-        data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
+        data = [job,caseName,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
         
         if avgPorous != None:
             for col in avgPorous.index:
@@ -161,7 +161,7 @@ def generate_summary():
             print('{:>100s}{:>30s}'.format(col,str(summary[col].values[0])))
             
         summary = summary.transpose()
-        summary.to_csv("%s/%s/summary_rhmeans.csv"% (path,case),header=False)
+        summary.to_csv("%s/%s/summary_rhmeans.csv"% (casePath,caseName),header=False)
                 
     else:
         coeffFiles = getCoeffPaths(casePath, case)
