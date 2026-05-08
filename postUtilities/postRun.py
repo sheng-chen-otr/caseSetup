@@ -126,7 +126,7 @@ def generate_summary():
                 porousDict[case] = porousData
 
 
-        rhMeans = rhAvgData.mean(axis=0)
+        rhMeans = rhAvgData.mean(axis=0).round(3)
         #average all the porous media data
         if len(porousDict.keys()) < 1:
             print('\t\tNo porous data to average!')
@@ -138,7 +138,7 @@ def generate_summary():
             for case in porousDict.keys():
                 casePorousArray = pd.DataFrame.from_dict(porousDict[case])
                 porousArray = pd.concat([porousArray,casePorousArray])
-            avgPorous = porousArray.mean(axis=0)
+            avgPorous = porousArray.mean(axis=0).round(3)
 
         #default datas
         rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
