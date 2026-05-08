@@ -130,22 +130,26 @@ def generate_summary():
         #average all the porous media data
         if len(porousDict.keys()) < 1:
             print('\t\tNo porous data to average!')
+            avgPorous = None
         else:
-            
             #get the names of all the porous media data
             porousKeys = porousDict[porousDict.keys()[0]].keys()
             porousArray = pd.DataFrame(columns=porousKeys)
             for case in porousDict.keys():
                 casePorousArray = pd.DataFrame(porousDict[case])
                 porousArray = pd.concat([porousArray,casePorousArray])
-        avgPorous = porousArray.mean(axis=0)
+            avgPorous = porousArray.mean(axis=0)
 
         #default datas
         rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
         data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
         
-        for col in avgPorous.index():
-            rowNames.append(col)
+        if avgPorous != None:
+            for col in avgPorous.index:
+                rowNames.append(col)
+            for val in avgPorous:
+                data.append(val)
+            
         
 
 
