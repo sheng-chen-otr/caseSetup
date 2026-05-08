@@ -108,7 +108,7 @@ def generate_summary():
                 inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,os.getcwd(),case)
                 runDate,runTime,version,solver = getOfVersion(rhPath)
                 refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
-                caseAvgData = pd.DataFrame.from_dict(avgData,orient='columns')
+                caseAvgData = pd.DataFrame([avgData])
                 #rhAvgData = pd.concat([rhAvgData,averagedArray],axis=0)
                 rhAvgData = pd.concat([rhAvgData,caseAvgData],axis=0)
             except Exception as E:
