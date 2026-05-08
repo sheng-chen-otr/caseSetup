@@ -129,6 +129,7 @@ def generate_summary():
         avgPartDict = {}
         for part in partsDict[partsDict.keys()[0]].keys():
             avgPartDict[part] = pd.concat([partsDict[case][part] for case in partsDict.keys()]).mean(axis=0)
+        print(avgPartDict)
 
         
         rhMeans = rhAvgData.mean(axis=0).round(3)
