@@ -84,7 +84,8 @@ def generate_summary():
         runPoints = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RH_POINTS']
         caseName = os.path.basename(os.getcwd())
         rhCases = []
-        rhAvgData = pd.DataFrame(columns=['CD','CL','CLF','CLR','CSF','CSR','CI-CD','CI-CL'])
+        #rhAvgData = pd.DataFrame(columns=['CD','CL','CLF','CLR','CSF','CSR','CI-CD','CI-CL'])
+        rhAvgData = pd.DataFrame()
         for point in runPoints:
             if point == ' ':
                 continue
@@ -94,7 +95,6 @@ def generate_summary():
         porousDict = {}
 
         for case in rhCases:
-            print(case)
             rhPath = os.path.join(os.getcwd(),case)
             try:
                 coeffFiles = getCoeffPaths(rhPath)
@@ -108,7 +108,9 @@ def generate_summary():
                 inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,os.getcwd(),case)
                 runDate,runTime,version,solver = getOfVersion(rhPath)
                 refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
-                rhAvgData = pd.concat([rhAvgData,averagedArray],axis=0)
+                caseAvgData = pd.DataFrame(avgData)
+                #rhAvgData = pd.concat([rhAvgData,averagedArray],axis=0)
+                rhAvgData = pd.concat([rhAvgData,caseAvgData],axis=0)
             except Exception as E:
                 print('\t\tUnable to average: %s' % (case))
                 print(E)
@@ -125,8 +127,6 @@ def generate_summary():
 
 
         rhMeans = rhAvgData.mean(axis=0)
-        for index in rhMeans.index:
-            print(index)
         #average all the porous media data
         if len(porousDict.keys()) < 1:
             print('\t\tNo porous data to average!')
@@ -142,7 +142,7 @@ def generate_summary():
 
         #default datas
         rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
-        data = [job,caseName,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
+        data = [job,caseName,solver,version,'N/A','N/A','N/A',mesher,sym.lower(),refArea,'N/A',simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,rhMeans['cd'],rhMeans['cl'],rhMeans['cl/cd'],rhMeans['cop'],rhMeans['cd_ci'],rhMeans['cl_ci']]
         
         if avgPorous != None:
             for col in avgPorous.index:
@@ -161,7 +161,7 @@ def generate_summary():
             print('{:>100s}{:>30s}'.format(col,str(summary[col].values[0])))
             
         summary = summary.transpose()
-        summary.to_csv("%s/%s/summary_rhmeans.csv"% (casePath,caseName),header=False)
+        summary.to_csv("%s/%s/summary_rhmeans.csv"% (casePath),header=False)
                 
     else:
         coeffFiles = getCoeffPaths(casePath, case)
