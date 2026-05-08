@@ -180,7 +180,7 @@ def generate_summary():
         for part in coeffFiles:
             if part != 'all':
                 partsDict[part],avgDataArray = averageCoeffs(fullCaseSetupDict,case,part,coeffFiles)
-        avgData = averageCoeffs(fullCaseSetupDict,case,'all',coeffFiles)
+        avgData,allDataArray = averageCoeffs(fullCaseSetupDict,case,'all',coeffFiles)
         
         numCells,mesher,sym = cellCount(fullCaseSetupDict,casePath,case)
         inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,path,case)
