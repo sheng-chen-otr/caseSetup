@@ -174,6 +174,7 @@ def generate_summary():
         summary.to_csv("%s/summary.csv"% (casePath),header=False)
                 
     else:
+        caseName = os.path.basename(casePath)
         coeffFiles = getCoeffPaths(casePath, caseName)
         partsDict = {}
         for part in coeffFiles:
