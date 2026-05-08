@@ -79,9 +79,8 @@ def generate_summary():
     rideHeightSetup = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RIDE_HEIGHT']
     
 
-    if rideHeightSetup:
+    if rideHeightSetup and not '_' in os.path.basename(os.getcwd()):
         print('Detected ride height map, averaging map values!')
-        
         runPoints = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RH_POINTS']
         caseName = os.path.basename(os.getcwd())
         rhCases = []
@@ -92,6 +91,8 @@ def generate_summary():
             rideHeightDir = "%s_%s" % (caseName,point)
             if os.path.isdir(rideHeightDir):
                 rhCases.append(rideHeightDir)
+        porousDict = {}
+
         for case in rhCases:
             print(case)
             rhPath = os.path.join(os.getcwd(),case)
@@ -112,11 +113,52 @@ def generate_summary():
                 print('\t\tUnable to average: %s' % (case))
                 print(E)
 
+            try:
+                porousData = getPorousData(path,case)
+            except Exception as e:
+                print('\tUnable to get porous media data, skipping...')
+                print(e)
+            if len(porousData.keys()) < 1:
+                porousDict = {}
+            else:
+                porousDict[case] = porousData
+
+
         rhMeans = rhAvgData.mean(axis=0)
-        print(rhMeans)
+        for index in rhMeans.index():
+            print(index)
+        #average all the porous media data
+        if len(porousDict.keys()) < 1:
+            print('\t\tNo porous data to average!')
+        else:
+            
+            #get the names of all the porous media data
+            porousKeys = porousDict[porousDict.keys()[0]].keys()
+            porousArray = pd.DataFrame(columns=porousKeys)
+            for case in porousDict.keys():
+                casePorousArray = pd.DataFrame(porousDict[case])
+                porousArray = pd.concat([porousArray,casePorousArray])
+        avgPorous = porousArray.mean(axis=0)
+
+        #default datas
+        rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
+        data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
+        
+        for col in avgPorous.index():
+            rowNames.append(col)
         
 
 
+
+        summary = pd.DataFrame(columns=rowNames)
+        summary.loc[-1] = data
+        print("\n\n")
+        for col in summary.columns:
+            print('{:>100s}{:>30s}'.format(col,str(summary[col].values[0])))
+            
+        summary = summary.transpose()
+        summary.to_csv("%s/%s/summary_rhmeans.csv"% (path,case),header=False)
+                
     else:
         coeffFiles = getCoeffPaths(casePath, case)
         for part in coeffFiles:
@@ -128,6 +170,7 @@ def generate_summary():
         inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,path,case)
         runDate,runTime,version,solver = getOfVersion(casePath)
         refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
+    
         #default datas
         rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
         data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
