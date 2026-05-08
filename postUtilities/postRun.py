@@ -127,7 +127,7 @@ def generate_summary():
                 porousDict[case] = porousData
         #average all the part data
         avgPartDict = {}
-        for part in partsDict[partsDict.keys[0]].keys():
+        for part in partsDict[list(partsDict.keys())[0]].keys():
             avgPartDict[part] = pd.concat([partsDict[case][part] for case in partsDict.keys()]).mean(axis=0)
         print(avgPartDict)
 
