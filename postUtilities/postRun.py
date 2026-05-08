@@ -107,8 +107,9 @@ def generate_summary():
                 runDate,runTime,version,solver = getOfVersion(casePath)
                 refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
                 rhAvgData = pd.concat([rhAvgData,averagedArray],axis=0)
-            except:
+            except Exception as E:
                 print('\t\tUnable to average: %s' % (case))
+                print(E)
 
         print(rhAvgData)
         
