@@ -162,9 +162,9 @@ def main():
     #     sys.exit('ERROR! Please run in a trial directory!')
     
     if '_' in case_name:
-        jobName = os.path.abspath(os.path.join(os.getcwd(), "../../../"))
-    else:
         jobName = os.path.abspath(os.path.join(os.getcwd(), "../../"))
+    else:
+        jobName = os.path.abspath(os.path.join(os.getcwd(), "../"))
     print(jobName)
     #jobName = getWorksheetName(case_path)
     WORKSHEET_NAME = '%s - Trials List' % (jobName)
