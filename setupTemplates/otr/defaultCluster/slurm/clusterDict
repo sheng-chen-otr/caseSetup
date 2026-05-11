@@ -52,7 +52,7 @@
 
           "precision":"SP=TRUE; VERSION=of2206; cd $SLURM_SUBMIT_DIR; if [ SP = 'TRUE' ]; then echo 'Running Solve Script in SP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP; else echo 'Running Solve Script in DP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; fi",
 
-          "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions; MPI='/usr/bin/mpirun'; FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'; caseTemplates='~/openFoam/scripts/caseSetup/caseSetup/zeroTemplates'; if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; fi;",
+          "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions; MPI='/usr/bin/mpirun'; FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'; caseTemplates='~/openFoam/scripts/caseSetup/caseSetup-dev/zeroTemplates'; if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; fi;",
 
           "createZeroDir":"if [ $? != 0 ]; then exit 1; fi; echo 'creating zero directories...'; if [[ -f 'constant/turbulencePropertiesSolve' ]]; then cp constant/turbulencePropertiesSolve constant/turbulenceProperties; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir \"$caseTemplates\" >> log.createZeroDirectory; fi;",
 
