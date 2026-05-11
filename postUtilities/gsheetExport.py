@@ -182,7 +182,7 @@ def main():
     full_case_setup_dict.read_file(open(case_setup_path))
 
     coeff_files = getCoeffPaths(case_path)
-    avg_data = averageCoeffs(full_case_setup_dict, case_name, "all", coeff_files)
+    avg_data,avg_data_array = averageCoeffs(full_case_setup_dict, case_name, "all", coeff_files)
     num_cells, mesher, _ = cellCount(full_case_setup_dict, case_path, case_name)
     inlet_mag, _, yaw, _, _, _, _ = bcParser(full_case_setup_dict, path, case_name)
     symType = full_case_setup_dict['GLOBAL_SIM_CONTROL']['SIM_SYM']
