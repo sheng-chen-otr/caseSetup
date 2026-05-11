@@ -202,12 +202,11 @@ def main():
     for part in coeff_files:
         part_lower = part.lower()
         if part_lower.startswith("fw") and fw_cd == "":
-            fw_data = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
-            print(fw_data)
+            fw_data,fw_data_array = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
             fw_cd = fw_data["cd"]
             fw_cl = fw_data["cl"]
         elif part_lower.startswith("rw") and rw_cd == "":
-            rw_data = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
+            rw_data,rw_data_array = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
             rw_cd = rw_data["cd"]
             rw_cl = rw_data["cl"]
         if fw_cd != "" and rw_cd != "":
