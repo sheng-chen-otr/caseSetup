@@ -203,6 +203,7 @@ def main():
         part_lower = part.lower()
         if part_lower.startswith("fw") and fw_cd == "":
             fw_data = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
+            print(fw_data)
             fw_cd = fw_data["cd"]
             fw_cl = fw_data["cl"]
         elif part_lower.startswith("rw") and rw_cd == "":
