@@ -29,7 +29,7 @@ def transformForceVector(fullCaseSetupDict,forceVec):
 
 def velVector(inletMag,yaw,pitch):
     initVel = [float(inletMag), 0, 0]
-    pitch = math.radians(-1*pitch)
+    pitch = math.radians(pitch)
     yaw = math.radians(yaw)
     initDragVec = [1,0,0]
     initLiftVec = [0,0,1]
