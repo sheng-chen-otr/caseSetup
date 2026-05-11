@@ -162,14 +162,15 @@ def main():
     #     sys.exit('ERROR! Please run in a trial directory!')
     
     if '_' in case_name:
-        jobName = os.path.abspath(os.path.join(os.getcwd(), "../../"))
+        jobPath = os.path.abspath(os.path.join(os.getcwd(), "../../../"))
     else:
-        jobName = os.path.abspath(os.path.join(os.getcwd(), "../"))
-    print(jobName)
+        jobPath = os.path.abspath(os.path.join(os.getcwd(), "../../"))
+    jobName = os.path.basename(jobPath)
     #jobName = getWorksheetName(case_path)
     WORKSHEET_NAME = '%s - Trials List' % (jobName)
-    jobRoot = os.path.abspath(os.path.join(path, os.pardir))
-    gsheetID = getSheetId(os.path.join(jobRoot, '02_reference', 'GSheet', '%s.gsheet' % jobName), jobName=jobName)
+    #jobRoot = os.path.abspath(os.path.join(path, os.pardir))
+    
+    gsheetID = getSheetId(os.path.join(jobPath, '02_reference', 'GSheet', '%s.gsheet' % jobName), jobName=jobName)
     print('\tFound gsheet id: %s' % (gsheetID))
     
     case_setup_path = Path(case_path) / "caseSetup"
