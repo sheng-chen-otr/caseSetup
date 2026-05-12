@@ -47,6 +47,10 @@ def setCasePaths(inputCaseList,casePath):
         print('\tExecuting in CASES directory...')
         searchPath = os.path.join('/',*casePath.split('/'))
         caseLoc = 'outTrial'
+    elif '_' in os.path.basename(casePath):
+        print('\tExecuting in rideHeight point directory...')
+        searchPath = os.path.join('/',*casePath.split('/')[:-1])
+        caseLoc = 'inTrial'
     else:
         sys.exit('ERROR! Unable to plot, script not executed in CASES directory or in trial directory!')
     
