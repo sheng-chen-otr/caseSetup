@@ -364,13 +364,12 @@ def createOctree2(fullCaseSetupDict,geomDict):
     globalMparFile = mparfile.copy()
     globalMparFile['octree_parameters_name'] = 'global_octree'
     globalMparFile['curvature_minimum_length'] = baseSize*1000
-    globalMparFile['sharp_edges_length'] = baseSize*1000
     globalMparFile['maximum_surface_length'] = baseSize*1000
     globalMparFile['maximum_length'] = baseSize*1000
     globalMparFile['hextreme_layers_flag'] = 'false'
     globalMparFile['distortion_angle_check_box'] = 'false'
-    globalMparFile['sharp_angle_check_box'] = 'true'
-    globalMparFile['sharp_edges_check_box'] = 'true'
+    globalMparFile['sharp_angle_check_box'] = 'false'
+    globalMparFile['sharp_edges_check_box'] = 'false'
     globalMparFile['free_edges_check_box'] = 'false'
     globalMparFile['intersection_lines_check_box'] = 'false'
     globalMparFile['self_proximity'] = 'false'

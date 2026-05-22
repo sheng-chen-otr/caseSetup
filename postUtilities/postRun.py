@@ -96,14 +96,15 @@ def generate_summary():
         partsDict = {}
         for case in rhCases:
             rhPath = os.path.join(os.getcwd(),case)
-            partsDict[case] = {} #prepare to collect the forces for parts
             try:
                 coeffFiles = getCoeffPaths(rhPath)
                 for part in coeffFiles:
+                   
                     if part != 'all':
                         partAverage,partAverageArray = averageCoeffs(fullCaseSetupDict,case,part,coeffFiles)
                         partAverage = pd.DataFrame([partAverage])
-                    partsDict[case][part] = partAverage
+                        partsDict[case] = {} #prepare to collect the forces for parts
+                        partsDict[case][part] = partAverage
                 avgData,averagedArray = averageCoeffs(fullCaseSetupDict,case,'all',coeffFiles)
                 numCells,mesher,sym = cellCount(fullCaseSetupDict,os.getcwd(),case)
                 inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,os.getcwd(),case)
@@ -114,8 +115,8 @@ def generate_summary():
                 rhAvgData = pd.concat([rhAvgData,caseAvgData],axis=0)
             except Exception as E:
                 print('\t\tUnable to average: %s' % (case))
-                print(E)
-
+                #print(E)
+            
             try:
                 porousData = getPorousData(path,case)
             except Exception as e:
@@ -129,6 +130,7 @@ def generate_summary():
         avgPartDict = {}
         for part in partsDict[list(partsDict.keys())[0]].keys():
             avgPartDict[part] = pd.concat([partsDict[case][part] for case in partsDict.keys()]).mean(axis=0).round(3)
+           
         
         
 
