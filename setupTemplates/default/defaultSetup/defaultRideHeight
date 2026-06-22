@@ -2,3 +2,8 @@
 RUN_RIDE_HEIGHT = false
 RIDE_HEIGHT_FILE = 
 USE_DEPEND = True
+USE_KINEMATIC_SOLVER = False
+HARDPOINT_FILE = rideHeightUtils/suspensionHardpoints_template.cfg
+HARDPOINT_SCALE = 1.0
+SUSPENSION_GEOM_FILE = suspension
+SUSP_REQUIRE_ALL_PIDS_MATCHED = False

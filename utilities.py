@@ -5,12 +5,15 @@ import subprocess as sp
 import math
 import gzip
 import re
+import json
+import csv
 import multiprocessing
 import pandas as pd
 import configparser
 import struct
 import shutil
 import subprocess
+from datetime import datetime
 from copy import deepcopy
 
 updateCaseSetupFlag = False
@@ -43,6 +46,256 @@ def velVector(inletMag,yaw,pitch):
     dragVec = y_rotation(initDragVec,pitch)
     liftVec = y_rotation(initLiftVec,pitch)
     return " ".join(str(x) for x in yawTransVel), " ".join(str(x) for x in dragVec)," ".join(str(x) for x in liftVec)
+
+
+def _truthy(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ['true', '1', 'yes', 'on']
+
+
+def _parse_keyword_list(raw, toLower=True):
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        tokens = []
+        for item in raw:
+            if isinstance(item, str):
+                tokens.extend(item.replace(',', ' ').split())
+            else:
+                tokens.append(str(item))
+    else:
+        tokens = str(raw).replace(',', ' ').split()
+    cleaned = [str(t).strip() for t in tokens if str(t).strip() != '']
+    if toLower:
+        return [t.lower() for t in cleaned]
+    return cleaned
+
+
+def _resolve_existing_path(pathCandidate):
+    if os.path.exists(pathCandidate):
+        return pathCandidate
+    execDir = os.path.dirname(os.path.realpath(__file__))
+    fallback = os.path.join(execDir, pathCandidate)
+    if os.path.exists(fallback):
+        return fallback
+    fallbackRh = os.path.join(execDir, 'rideHeightUtils', pathCandidate)
+    if os.path.exists(fallbackRh):
+        return fallbackRh
+    return None
+
+
+def _scale_suspension_hardpoints(obj, scale):
+    if isinstance(obj, dict):
+        return {k: _scale_suspension_hardpoints(v, scale) for k, v in obj.items()}
+    if isinstance(obj, list):
+        if len(obj) == 3 and all(isinstance(x, (int, float)) for x in obj):
+            return [float(x) * scale for x in obj]
+        return [_scale_suspension_hardpoints(v, scale) for v in obj]
+    return obj
+
+
+def _parse_cfg_vec3(raw, keyName):
+    vals = str(raw).replace(',', ' ').split()
+    if len(vals) != 3:
+        raise ValueError('%s must contain exactly 3 numeric values' % (keyName))
+    return [float(vals[0]), float(vals[1]), float(vals[2])]
+
+
+def _load_suspension_hardpoints_cfg(hardpointPath):
+    cfg = configparser.ConfigParser()
+    cfg.optionxform = str
+    cfg.read_file(open(hardpointPath))
+
+    cornerSections = {
+        'fl': 'SUSP_FL',
+        'fr': 'SUSP_FR',
+        'rl': 'SUSP_RL',
+        'rr': 'SUSP_RR',
+    }
+
+    keyMap = {
+        'wheel_center_static': 'WHEEL_CENTER_STATIC',
+        'uca_f_inner': 'UCA_F_INNER',
+        'uca_r_inner': 'UCA_R_INNER',
+        'lca_f_inner': 'LCA_F_INNER',
+        'lca_r_inner': 'LCA_R_INNER',
+        'tie_inner': 'TIE_INNER',
+        'uca_outer_static': 'UCA_OUTER_STATIC',
+        'lca_outer_static': 'LCA_OUTER_STATIC',
+        'tie_outer_static': 'TIE_OUTER_STATIC',
+        'pushrod_outer_static': 'PUSHROD_OUTER_STATIC',
+        'wheel_axis_local': 'WHEEL_AXIS_LOCAL',
+        'wheel_forward_local': 'WHEEL_FORWARD_LOCAL',
+    }
+
+    rockerKeyMap = {
+        'pivot': 'ROCKER_PIVOT',
+        'axis': 'ROCKER_AXIS',
+        'pushrod_joint_ref': 'ROCKER_PUSHROD_JOINT_REF',
+        'damper_joint_ref': 'ROCKER_DAMPER_JOINT_REF',
+        'damper_chassis': 'ROCKER_DAMPER_CHASSIS',
+    }
+
+    corners = {}
+    cornerPidKeywords = {'fl': [], 'fr': [], 'rl': [], 'rr': []}
+
+    for corner, sec in cornerSections.items():
+        if not cfg.has_section(sec):
+            continue
+
+        c = {}
+        for outKey, cfgKey in keyMap.items():
+            if cfg.has_option(sec, cfgKey):
+                c[outKey] = _parse_cfg_vec3(cfg.get(sec, cfgKey), '%s.%s' % (sec, cfgKey))
+
+        rocker = {}
+        for outKey, cfgKey in rockerKeyMap.items():
+            if not cfg.has_option(sec, cfgKey):
+                raise ValueError('Missing required key %s in section %s' % (cfgKey, sec))
+            rocker[outKey] = _parse_cfg_vec3(cfg.get(sec, cfgKey), '%s.%s' % (sec, cfgKey))
+        c['rocker'] = rocker
+
+        for required in ['wheel_center_static','uca_f_inner','uca_r_inner','lca_f_inner','lca_r_inner','tie_inner','uca_outer_static','lca_outer_static','tie_outer_static','pushrod_outer_static']:
+            if required not in c:
+                raise ValueError('Missing required key for %s: %s' % (sec, required))
+
+        corners[corner] = c
+
+        for key, val in cfg.items(sec):
+            keyUp = key.upper()
+            if 'PID' not in keyUp:
+                continue
+            v = str(val).strip()
+            if v != '':
+                cornerPidKeywords[corner].append(v)
+
+    # Optional component sections: merge PID keywords by CORNER field.
+    for sec in cfg.sections():
+        if sec in cornerSections.values():
+            continue
+        if not cfg.has_option(sec, 'CORNER'):
+            continue
+        c = cfg.get(sec, 'CORNER').strip().lower()
+        if c not in cornerPidKeywords:
+            continue
+        for key, val in cfg.items(sec):
+            keyUp = key.upper()
+            if 'PID' not in keyUp:
+                continue
+            v = str(val).strip()
+            if v != '':
+                cornerPidKeywords[c].append(v)
+
+    return corners, cornerPidKeywords
+
+
+def _load_suspension_kinematics_setup(fullCaseSetupDict):
+    # Preferred location is [RIDE_HEIGHT_SETUP] so no custom section handling is required.
+    section = None
+    sectionName = None
+    if 'RIDE_HEIGHT_SETUP' in fullCaseSetupDict and 'USE_KINEMATIC_SOLVER' in fullCaseSetupDict['RIDE_HEIGHT_SETUP']:
+        section = fullCaseSetupDict['RIDE_HEIGHT_SETUP']
+        sectionName = 'RIDE_HEIGHT_SETUP'
+
+    if section is None:
+        return None
+
+    if not _truthy(section.get('USE_KINEMATIC_SOLVER', ['false'])[0]):
+        return None
+
+    hardpointFile = section.get('HARDPOINT_FILE', [''])[0]
+    if hardpointFile == '':
+        hardpointFile = section.get('SUSPENSION_HARDPOINT_FILE', [''])[0]
+    if hardpointFile == '':
+        print('\t\tWARNING! [%s] enabled but HARDPOINT_FILE is empty. Skipping kinematic solver.' % (sectionName))
+        return None
+
+    hardpointPath = _resolve_existing_path(hardpointFile)
+    if hardpointPath is None:
+        print('\t\tWARNING! Suspension hardpoint file cannot be found: %s. Skipping kinematic solver.' % (hardpointFile))
+        return None
+
+    if hardpointPath.lower().endswith('.cfg') or hardpointPath.lower().endswith('.ini'):
+        try:
+            corners, cornerPidKeywords = _load_suspension_hardpoints_cfg(hardpointPath)
+        except Exception as e:
+            print('\t\tWARNING! Invalid suspension CFG format: %s. Skipping kinematic solver.' % (e))
+            return None
+    else:
+        print('\t\tWARNING! Unsupported hardpoint file type (CFG required): %s. Skipping kinematic solver.' % (hardpointPath))
+        return None
+
+    if not isinstance(corners, dict) or len(corners) == 0:
+        print('\t\tWARNING! Suspension hardpoint file has invalid format. Expected corner dictionary. Skipping kinematic solver.')
+        return None
+
+    scaleVal = section.get('HARDPOINT_SCALE', [''])[0]
+    if scaleVal == '':
+        scaleVal = section.get('SUSPENSION_HARDPOINT_SCALE', ['1.0'])[0]
+    scale = float(scaleVal)
+    if abs(scale - 1.0) > 1e-15:
+        corners = _scale_suspension_hardpoints(corners, scale)
+
+    return {
+        'corners': corners,
+        'corner_pid_keywords': cornerPidKeywords,
+        'source': hardpointPath,
+    }
+
+
+def _append_suspension_kinematics(rideHeights, fullCaseSetupDict):
+    setup = _load_suspension_kinematics_setup(fullCaseSetupDict)
+    if setup is None:
+        return rideHeights
+
+    try:
+        from rideHeightUtils.doubleWishbonePushrodKinematics import DoubleWishbonePushrodSolver
+    except Exception as e:
+        print('\t\tWARNING! Could not import DoubleWishbonePushrodSolver, skipping kinematics: %s' % (e))
+        return rideHeights
+
+    print('\tApplying suspension kinematic solver using hardpoints: %s' % (setup['source']))
+
+    cornerToTravelCol = {
+        'fl': 'wheel_fl',
+        'fr': 'wheel_fr',
+        'rl': 'wheel_rl',
+        'rr': 'wheel_rr',
+    }
+
+    for corner, travelCol in cornerToTravelCol.items():
+        if corner not in setup['corners']:
+            continue
+
+        try:
+            solver = DoubleWishbonePushrodSolver(setup['corners'][corner])
+        except Exception as e:
+            print('\t\tWARNING! Failed to initialize kinematic solver for corner %s: %s' % (corner, e))
+            continue
+
+        travel = [float(x) for x in rideHeights[travelCol].values]
+        try:
+            solved = solver.sweep_wheel_travel(travel)
+        except Exception as e:
+            print('\t\tWARNING! Failed to solve kinematics for corner %s: %s' % (corner, e))
+            continue
+
+        rideHeights['%s_camber_deg' % (corner)] = [row['camber_deg'] for row in solved]
+        rideHeights['%s_toe_deg' % (corner)] = [row['toe_deg'] for row in solved]
+        rideHeights['%s_damper_delta' % (corner)] = [row['damper_delta'] for row in solved]
+        rideHeights['%s_rocker_deg' % (corner)] = [row['rocker_theta_deg'] for row in solved]
+        rideHeights['%s_kin_residual' % (corner)] = [row['residual_norm'] for row in solved]
+
+        rideHeights['%s_wc_x' % (corner)] = [row['wheel_center'][0] for row in solved]
+        rideHeights['%s_wc_y' % (corner)] = [row['wheel_center'][1] for row in solved]
+        rideHeights['%s_wc_z' % (corner)] = [row['wheel_center'][2] for row in solved]
+
+        rideHeights['%s_rvec_x' % (corner)] = [row['state'].rvec[0] for row in solved]
+        rideHeights['%s_rvec_y' % (corner)] = [row['state'].rvec[1] for row in solved]
+        rideHeights['%s_rvec_z' % (corner)] = [row['state'].rvec[2] for row in solved]
+
+    return rideHeights
 
 
 def calculateRideHeights(fullCaseSetupDict):
@@ -156,6 +409,8 @@ def calculateRideHeights(fullCaseSetupDict):
         rideHeights.loc[idx, 'tunnel_roll'] = tunnel_roll
         rideHeights.loc[idx, 'tunnel_heave'] = tunnel_dz
 
+    rideHeights = _append_suspension_kinematics(rideHeights, fullCaseSetupDict)
+
     print('\nUpdated rideHeights dataframe:')
     print(rideHeights)
     
@@ -221,41 +476,694 @@ def createRideHeightCases(rideHeights, fullCaseSetupDict):
     updatedRideHeights.to_csv(rideHeightsOutputPath, index=False)
 
     return updatedRideHeights
+def _categorize_pid_keywords_by_component(cornerPidKeywords):
+    '''
+    Categorize PID keywords by component type based on keyword content.
+    Returns dict mapping corner -> {component_type -> [keywords]}
+    '''
+    compTypes = ['UCA', 'LCA', 'ROCKER', 'PUSHROD', 'DAMPER', 'WHEEL', 'TIE']
+    # Accept common abbreviations in addition to the full component name. Aliases are
+    # checked as substrings of the (upper-cased) keyword; keep them component-specific
+    # to avoid false matches.
+    compAliases = {
+        'UCA': ['UCA'],
+        'LCA': ['LCA'],
+        'ROCKER': ['ROCKER', 'ROCK', 'RKR'],
+        'PUSHROD': ['PUSHROD', 'PROD', 'PSHRD', 'PUSH', 'PR'],
+        'DAMPER': ['DAMPER', 'DAMP', 'SHOCK', 'STRUT'],
+        'WHEEL': ['WHEEL', 'WHL'],
+        'TIE': ['TIE', 'TIEROD', 'TROD'],
+    }
+    categorized = {}
+    
+    for corner, keywords in cornerPidKeywords.items():
+        categorized[corner] = {ct: [] for ct in compTypes}
+        for kw in keywords:
+            kw_upper = kw.upper()
+            for ct in compTypes:
+                if any(alias in kw_upper for alias in compAliases[ct]):
+                    categorized[corner][ct].append(kw)
+                    break
+    
+    return categorized
+
+
+def _validate_component_transforms(compTransforms, corner):
+    '''
+    Validate computed component transforms and warn if values exceed reasonable bounds.
+    Returns list of validation warnings.
+    '''
+    warnings = []
+    
+    for compType, transform in compTransforms.items():
+        # Check rotation magnitude
+        rvec = np.array(transform.get('rotation_rvec', [0, 0, 0]))
+        rot_angle_rad = np.linalg.norm(rvec)
+        rot_angle_deg = np.degrees(rot_angle_rad)
+        
+        # Reasonable bounds for suspension components
+        if compType == 'WHEEL':
+            max_rot = 15.0  # Wheel camber/toe typically < ±15°
+        elif compType in ['UCA', 'LCA']:
+            max_rot = 20.0  # Arm rotation < ±20°
+        elif compType == 'TIE':
+            max_rot = 25.0  # Tie rod more flexible, < ±25°
+        elif compType == 'ROCKER':
+            max_rot = 30.0  # Rocker can rotate more, < ±30°
+        else:
+            max_rot = 25.0  # Default
+        
+        if rot_angle_deg > max_rot:
+            warnings.append(f'{compType} ({corner}): rotation {rot_angle_deg:.2f}° exceeds typical bound {max_rot}°')
+        
+        # Check translation magnitude
+        trans = np.array(transform.get('translation', [0, 0, 0]))
+        trans_mag = np.linalg.norm(trans)
+        if trans_mag > 0.5:  # > 50 cm of translation is suspicious
+            warnings.append(f'{compType} ({corner}): translation {trans_mag:.4f}m exceeds typical bound 0.5m')
+    
+    return warnings
+
+
+def _write_component_transforms_log(childName, corner, row, compTransforms):
+    '''
+    Write detailed per-component transform log to CSV for inspection.
+    '''
+    logPath = os.path.join(childName, f'component_transforms_{corner}.csv')
+    
+    # Ensure parent directory exists
+    os.makedirs(os.path.dirname(logPath), exist_ok=True)
+    
+    rows = []
+    for compType, transform in compTransforms.items():
+        rvec = transform.get('rotation_rvec', [0, 0, 0])
+        rot_mag = np.linalg.norm(rvec)
+        trans = transform.get('translation', [0, 0, 0])
+        pivot = transform.get('pivot', [0, 0, 0])
+        morph = transform.get('morph', None)
+        damper_delta = transform.get('damper_delta', np.nan)
+        damper_len_static = transform.get('damper_length_static', np.nan)
+        damper_len_current = transform.get('damper_length_current', np.nan)
+        damper_morph_factor = transform.get('damper_morph_factor', np.nan)
+        
+        rows.append({
+            'component': compType,
+            'translation_x': trans[0],
+            'translation_y': trans[1],
+            'translation_z': trans[2],
+            'translation_mag': np.linalg.norm(trans),
+            'rotation_rvec_x': rvec[0],
+            'rotation_rvec_y': rvec[1],
+            'rotation_rvec_z': rvec[2],
+            'rotation_angle_rad': rot_mag,
+            'rotation_angle_deg': np.degrees(rot_mag),
+            'pivot_x': pivot[0],
+            'pivot_y': pivot[1],
+            'pivot_z': pivot[2],
+            'morph_mode': '' if morph is None else morph.get('mode', ''),
+            'damper_delta': damper_delta,
+            'damper_length_static': damper_len_static,
+            'damper_length_current': damper_len_current,
+            'damper_morph_factor': damper_morph_factor,
+        })
+    
+    import pandas as pd
+    df = pd.DataFrame(rows)
+    df.to_csv(logPath, index=False)
+
+
+def _plot_suspension_linkage(kinSetup, corner, row, compTransforms, childName, rideHeights):
+    '''
+    Plot suspension linkage before/after to visually validate kinematics.
+    Saves as PNG image.
+    '''
+    try:
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+    except ImportError:
+        print(f'\t\t\tWARNING: matplotlib not available, skipping linkage visualization for {corner}')
+        return
+    
+    hardpoints = kinSetup['corners'][corner]
+
+    def _rotate_point_about_pivot(point, pivot, rvec):
+        theta = np.linalg.norm(rvec)
+        if theta <= 1e-15:
+            return point.copy()
+        k = rvec / theta
+        v = point - pivot
+        v_rot = (
+            v * np.cos(theta)
+            + np.cross(k, v) * np.sin(theta)
+            + k * np.dot(k, v) * (1.0 - np.cos(theta))
+        )
+        return pivot + v_rot
+    
+    # Prepare figure
+    fig = plt.figure(figsize=(14, 6))
+    
+    # ===== BEFORE (left plot) =====
+    ax1 = fig.add_subplot(121, projection='3d')
+    
+    # Static configuration
+    colors = {'UCA': 'red', 'LCA': 'blue', 'ROCKER': 'green', 'TIE': 'orange', 'WHEEL': 'black'}
+    
+    # UCA
+    if 'uca_f_inner' in hardpoints:
+        uca_fi = np.array(hardpoints['uca_f_inner'])
+        uca_ri = np.array(hardpoints['uca_r_inner'])
+        uca_o = np.array(hardpoints['uca_outer_static'])
+        ax1.plot([uca_fi[0], uca_ri[0]], [uca_fi[1], uca_ri[1]], [uca_fi[2], uca_ri[2]], 'r-', linewidth=2, label='UCA chassis')
+        ax1.plot([uca_ri[0], uca_o[0]], [uca_ri[1], uca_o[1]], [uca_ri[2], uca_o[2]], 'r--', linewidth=1.5, label='UCA outer')
+        ax1.scatter(*uca_fi, color='red', s=50)
+        ax1.scatter(*uca_ri, color='red', s=50)
+        ax1.scatter(*uca_o, color='red', s=100, marker='s')
+    
+    # LCA
+    if 'lca_f_inner' in hardpoints:
+        lca_fi = np.array(hardpoints['lca_f_inner'])
+        lca_ri = np.array(hardpoints['lca_r_inner'])
+        lca_o = np.array(hardpoints['lca_outer_static'])
+        ax1.plot([lca_fi[0], lca_ri[0]], [lca_fi[1], lca_ri[1]], [lca_fi[2], lca_ri[2]], 'b-', linewidth=2, label='LCA chassis')
+        ax1.plot([lca_ri[0], lca_o[0]], [lca_ri[1], lca_o[1]], [lca_ri[2], lca_o[2]], 'b--', linewidth=1.5, label='LCA outer')
+        ax1.scatter(*lca_fi, color='blue', s=50)
+        ax1.scatter(*lca_ri, color='blue', s=50)
+        ax1.scatter(*lca_o, color='blue', s=100, marker='s')
+    
+    # ROCKER
+    if 'rocker' in hardpoints:
+        rocker_pivot = np.array(hardpoints['rocker']['pivot'])
+        rocker_axis = np.array(hardpoints['rocker']['axis']) / np.linalg.norm(hardpoints['rocker']['axis'])
+        ax1.scatter(*rocker_pivot, color='green', s=150, marker='^', label='Rocker pivot')
+        # Draw rocker axis
+        rocker_axis_end = rocker_pivot + rocker_axis * 0.2
+        ax1.plot([rocker_pivot[0], rocker_axis_end[0]], [rocker_pivot[1], rocker_axis_end[1]], [rocker_pivot[2], rocker_axis_end[2]], 'g--', linewidth=2)
+    
+    # TIE
+    if 'tie_inner' in hardpoints:
+        tie_i = np.array(hardpoints['tie_inner'])
+        tie_o = np.array(hardpoints['tie_outer_static'])
+        ax1.plot([tie_i[0], tie_o[0]], [tie_i[1], tie_o[1]], [tie_i[2], tie_o[2]], 'orange', linewidth=2, label='Tie rod')
+        ax1.scatter(*tie_i, color='orange', s=50)
+        ax1.scatter(*tie_o, color='orange', s=100, marker='s')
+
+    # PUSHROD
+    if 'rocker' in hardpoints and 'pushrod_outer_static' in hardpoints:
+        pr_i = np.array(hardpoints['rocker']['pushrod_joint_ref'])
+        pr_o = np.array(hardpoints['pushrod_outer_static'])
+        ax1.plot([pr_i[0], pr_o[0]], [pr_i[1], pr_o[1]], [pr_i[2], pr_o[2]], 'purple', linewidth=2, label='Pushrod')
+
+    # DAMPER
+    if 'rocker' in hardpoints:
+        dm_i = np.array(hardpoints['rocker']['damper_joint_ref'])
+        dm_o = np.array(hardpoints['rocker']['damper_chassis'])
+        ax1.plot([dm_i[0], dm_o[0]], [dm_i[1], dm_o[1]], [dm_i[2], dm_o[2]], 'brown', linewidth=2, label='Damper')
+    
+    # WHEEL
+    if 'wheel_center_static' in hardpoints:
+        wc = np.array(hardpoints['wheel_center_static'])
+        ax1.scatter(*wc, color='black', s=200, marker='o', label='Wheel center')
+    
+    ax1.set_xlabel('X')
+    ax1.set_ylabel('Y')
+    ax1.set_zlabel('Z')
+    ax1.set_title(f'Suspension Linkage - STATIC ({corner.upper()})')
+    ax1.legend(fontsize=8)
+    
+    # ===== AFTER (right plot) =====
+    ax2 = fig.add_subplot(122, projection='3d')
+    
+    # Current configuration (apply transforms)
+    if 'WHEEL' in compTransforms:
+        wheel_trans = np.array(compTransforms['WHEEL']['translation'])
+    else:
+        wheel_trans = np.array([0, 0, 0])
+    
+    # UCA with rotation
+    if 'uca_f_inner' in hardpoints and 'UCA' in compTransforms:
+        uca_fi_curr = np.array(hardpoints['uca_f_inner'])  # Chassis point fixed
+        uca_ri_curr = np.array(hardpoints['uca_r_inner'])
+        uca_o_curr = np.array(hardpoints['uca_outer_static']) + wheel_trans
+        
+        ax2.plot([uca_fi_curr[0], uca_ri_curr[0]], [uca_fi_curr[1], uca_ri_curr[1]], [uca_fi_curr[2], uca_ri_curr[2]], 'r-', linewidth=2)
+        ax2.plot([uca_ri_curr[0], uca_o_curr[0]], [uca_ri_curr[1], uca_o_curr[1]], [uca_ri_curr[2], uca_o_curr[2]], 'r--', linewidth=1.5)
+        ax2.scatter(*uca_fi_curr, color='red', s=50)
+        ax2.scatter(*uca_ri_curr, color='red', s=50)
+        ax2.scatter(*uca_o_curr, color='red', s=100, marker='s')
+    
+    # LCA with rotation
+    if 'lca_f_inner' in hardpoints and 'LCA' in compTransforms:
+        lca_fi_curr = np.array(hardpoints['lca_f_inner'])
+        lca_ri_curr = np.array(hardpoints['lca_r_inner'])
+        lca_o_curr = np.array(hardpoints['lca_outer_static']) + wheel_trans
+        
+        ax2.plot([lca_fi_curr[0], lca_ri_curr[0]], [lca_fi_curr[1], lca_ri_curr[1]], [lca_fi_curr[2], lca_ri_curr[2]], 'b-', linewidth=2)
+        ax2.plot([lca_ri_curr[0], lca_o_curr[0]], [lca_ri_curr[1], lca_o_curr[1]], [lca_ri_curr[2], lca_o_curr[2]], 'b--', linewidth=1.5)
+        ax2.scatter(*lca_fi_curr, color='blue', s=50)
+        ax2.scatter(*lca_ri_curr, color='blue', s=50)
+        ax2.scatter(*lca_o_curr, color='blue', s=100, marker='s')
+    
+    # ROCKER with rotation
+    if 'rocker' in hardpoints and 'ROCKER' in compTransforms:
+        rocker_pivot = np.array(hardpoints['rocker']['pivot'])
+        rocker_axis = np.array(hardpoints['rocker']['axis']) / np.linalg.norm(hardpoints['rocker']['axis'])
+        ax2.scatter(*rocker_pivot, color='green', s=150, marker='^')
+        rocker_axis_end = rocker_pivot + rocker_axis * 0.2
+        ax2.plot([rocker_pivot[0], rocker_axis_end[0]], [rocker_pivot[1], rocker_axis_end[1]], [rocker_pivot[2], rocker_axis_end[2]], 'g--', linewidth=2)
+    
+    # TIE with rotation
+    if 'tie_inner' in hardpoints and 'TIE' in compTransforms:
+        tie_i = np.array(hardpoints['tie_inner'])
+        tie_o_curr = np.array(hardpoints['tie_outer_static']) + wheel_trans
+        ax2.plot([tie_i[0], tie_o_curr[0]], [tie_i[1], tie_o_curr[1]], [tie_i[2], tie_o_curr[2]], 'orange', linewidth=2)
+        ax2.scatter(*tie_i, color='orange', s=50)
+        ax2.scatter(*tie_o_curr, color='orange', s=100, marker='s')
+
+    # PUSHROD current
+    if 'rocker' in hardpoints and 'pushrod_outer_static' in hardpoints and 'ROCKER' in compTransforms:
+        rocker_pivot = np.array(hardpoints['rocker']['pivot'])
+        rocker_rvec = np.array(compTransforms['ROCKER']['rotation_rvec'])
+        pr_i_static = np.array(hardpoints['rocker']['pushrod_joint_ref'])
+        pr_i_curr = _rotate_point_about_pivot(pr_i_static, rocker_pivot, rocker_rvec)
+        pr_o_curr = np.array(hardpoints['pushrod_outer_static']) + wheel_trans
+        ax2.plot([pr_i_curr[0], pr_o_curr[0]], [pr_i_curr[1], pr_o_curr[1]], [pr_i_curr[2], pr_o_curr[2]], 'purple', linewidth=2)
+
+    # DAMPER current
+    if 'rocker' in hardpoints and 'ROCKER' in compTransforms:
+        rocker_pivot = np.array(hardpoints['rocker']['pivot'])
+        rocker_rvec = np.array(compTransforms['ROCKER']['rotation_rvec'])
+        dm_i_static = np.array(hardpoints['rocker']['damper_joint_ref'])
+        dm_i_curr = _rotate_point_about_pivot(dm_i_static, rocker_pivot, rocker_rvec)
+        dm_o = np.array(hardpoints['rocker']['damper_chassis'])
+        ax2.plot([dm_i_curr[0], dm_o[0]], [dm_i_curr[1], dm_o[1]], [dm_i_curr[2], dm_o[2]], 'brown', linewidth=2)
+    
+    # WHEEL with rotation
+    if 'wheel_center_static' in hardpoints and 'WHEEL' in compTransforms:
+        wc_curr = np.array(hardpoints['wheel_center_static']) + wheel_trans
+        ax2.scatter(*wc_curr, color='black', s=200, marker='o')
+    
+    ax2.set_xlabel('X')
+    ax2.set_ylabel('Y')
+    ax2.set_zlabel('Z')
+    ax2.set_title(f'Suspension Linkage - CURRENT ({corner.upper()})')
+    
+    plt.tight_layout()
+    
+    # Save image
+    imagePath = os.path.join(childName, f'linkage_validation_{corner}.png')
+    # Ensure parent directory exists
+    os.makedirs(os.path.dirname(imagePath), exist_ok=True)
+    plt.savefig(imagePath, dpi=100, bbox_inches='tight')
+    print(f'\t\t\t\tSaved linkage plot: {imagePath}')
+    plt.close()
+
+
+def _create_linkage_gifs(baseCaseName, points, corners=('fl', 'fr', 'rl', 'rr'), frameDurationMs=450):
+    '''
+    Build animated GIFs from per-point linkage_validation PNGs for each corner.
+    '''
+    try:
+        from PIL import Image
+    except ImportError:
+        print('\t\t\tWARNING: Pillow not available, skipping GIF creation.')
+        return
+
+    for corner in corners:
+        framePaths = []
+        for point in points:
+            p = os.path.join(f'{baseCaseName}_{int(point)}', f'linkage_validation_{corner}.png')
+            if os.path.exists(p):
+                framePaths.append(p)
+
+        if len(framePaths) == 0:
+            continue
+
+        # Keep only initial and final states in the animation.
+        if len(framePaths) > 1:
+            framePaths = [framePaths[0], framePaths[-1]]
+
+        images = [Image.open(fp).convert('P', palette=Image.ADAPTIVE) for fp in framePaths]
+        outPath = os.path.join(os.getcwd(), f'linkage_animation_{corner}.gif')
+        images[0].save(
+            outPath,
+            save_all=True,
+            append_images=images[1:],
+            duration=frameDurationMs,
+            loop=0,
+            optimize=False,
+        )
+        for img in images:
+            img.close()
+        print(f'\t\t\tSaved linkage animation GIF: {outPath}')
+
+
+def _compute_component_transforms(kinSetup, corner, row, rideHeights):
+    '''
+    Compute per-component transforms based on kinematic solver state.
+    Returns dict mapping component_type -> {translation, rotation_rvec, pivot}
+    '''
+    compTransforms = {}
+    hardpoints = kinSetup['corners'][corner]
+
+    def _rvec_from_vectors(v_static, v_current):
+        v_static_norm = v_static / (np.linalg.norm(v_static) + 1e-15)
+        v_current_norm = v_current / (np.linalg.norm(v_current) + 1e-15)
+        rot_axis = np.cross(v_static_norm, v_current_norm)
+        rot_axis_norm = np.linalg.norm(rot_axis)
+        cos_angle = np.dot(v_static_norm, v_current_norm)
+        cos_angle = np.clip(cos_angle, -1.0, 1.0)
+        rot_angle = np.arccos(cos_angle)
+        if rot_axis_norm > 1e-15:
+            return (rot_axis / rot_axis_norm) * rot_angle
+        return np.array([0.0, 0.0, 0.0])
+
+    def _rotate_point_about_pivot(point, pivot, rvec):
+        theta = np.linalg.norm(rvec)
+        if theta <= 1e-15:
+            return point.copy()
+        k = rvec / theta
+        v = point - pivot
+        v_rot = (
+            v * np.cos(theta)
+            + np.cross(k, v) * np.sin(theta)
+            + k * np.dot(k, v) * (1.0 - np.cos(theta))
+        )
+        return pivot + v_rot
+    
+    # Wheel: follows wheel center and rotates with camber/toe from kinematic solver
+    wcx, wcy, wcz = '%s_wc_x' % corner, '%s_wc_y' % corner, '%s_wc_z' % corner
+    if all(k in rideHeights.columns for k in [wcx, wcy, wcz]):
+        staticWC = np.array(hardpoints['wheel_center_static'], dtype=np.float64)
+        currentWC = np.array([float(row[wcx]), float(row[wcy]), float(row[wcz])], dtype=np.float64)
+        wheelTranslation = (currentWC - staticWC).tolist()
+        
+        # Get wheel rotation from kinematic solver (includes camber and toe)
+        rvec_x_col, rvec_y_col, rvec_z_col = '%s_rvec_x' % corner, '%s_rvec_y' % corner, '%s_rvec_z' % corner
+        if all(k in rideHeights.columns for k in [rvec_x_col, rvec_y_col, rvec_z_col]):
+            wheelRvec = [float(row[rvec_x_col]), float(row[rvec_y_col]), float(row[rvec_z_col])]
+        else:
+            wheelRvec = [0.0, 0.0, 0.0]
+        
+        compTransforms['WHEEL'] = {
+            'translation': wheelTranslation,
+            'rotation_rvec': wheelRvec,
+            'pivot': staticWC.tolist(),
+        }
+    
+    # UCA & LCA: both constrained at chassis (fixed) and wheel (moves with wheel center)
+    # Compute rotation from linkage geometry change
+    for compType in ['UCA', 'LCA']:
+        inner_f_key = '%s_f_inner' % compType.lower()
+        inner_r_key = '%s_r_inner' % compType.lower()
+        outer_key = '%s_outer_static' % compType.lower()
+        
+        if all(k in hardpoints for k in [inner_f_key, inner_r_key, outer_key]):
+            # Static configuration
+            innerF = np.array(hardpoints[inner_f_key], dtype=np.float64)
+            innerR = np.array(hardpoints[inner_r_key], dtype=np.float64)
+            outerStatic = np.array(hardpoints[outer_key], dtype=np.float64)
+            
+            # Compute chassis mounting point as midpoint of F and R inner points
+            innerCenter = (innerF + innerR) / 2.0
+            
+            # New outer position: move with wheel
+            if 'WHEEL' in compTransforms:
+                wheelTrans = np.array(compTransforms['WHEEL']['translation'])
+                outerNew = outerStatic + wheelTrans
+            else:
+                outerNew = outerStatic
+            
+            # Compute rotation from linkage vector change
+            # Static linkage vector: from chassis point to wheel attachment
+            v_static = outerStatic - innerCenter
+            # Current linkage vector after wheel moves
+            v_current = outerNew - innerCenter
+            
+            rvec = _rvec_from_vectors(v_static, v_current)
+            
+            # Use inner center (chassis point) as pivot for rotation
+            compTransforms[compType] = {
+                'translation': [0.0, 0.0, 0.0],
+                'rotation_rvec': rvec.tolist(),
+                'pivot': innerCenter.tolist(),
+            }
+    
+    # ROCKER: rotates about ROCKER_PIVOT
+    if 'rocker' in hardpoints:
+        rocker_pivot = np.array(hardpoints['rocker']['pivot'], dtype=np.float64)
+        
+        # Get rocker angle from kinematic solver
+        rocker_deg_col = '%s_rocker_deg' % corner
+        if rocker_deg_col in rideHeights.columns:
+            rocker_angle = float(row[rocker_deg_col])
+            
+            # Get rocker axis
+            rocker_axis = np.array(hardpoints['rocker']['axis'], dtype=np.float64)
+            rocker_axis = rocker_axis / np.linalg.norm(rocker_axis)  # normalize
+            
+            # Convert angle to rotation vector (axis * angle in radians)
+            rvec = rocker_axis * np.radians(rocker_angle)
+            
+            compTransforms['ROCKER'] = {
+                'translation': [0.0, 0.0, 0.0],
+                'rotation_rvec': rvec.tolist(),
+                'pivot': rocker_pivot.tolist(),
+            }
+    
+    # PUSHROD: one end on rocker, one end on wheel side. Solve from endpoint motion.
+    if 'ROCKER' in compTransforms and 'pushrod_outer_static' in hardpoints and 'rocker' in hardpoints and 'WHEEL' in compTransforms:
+        pushrodInnerStatic = np.array(hardpoints['rocker']['pushrod_joint_ref'], dtype=np.float64)
+        pushrodOuterStatic = np.array(hardpoints['pushrod_outer_static'], dtype=np.float64)
+
+        rockerPivot = np.array(hardpoints['rocker']['pivot'], dtype=np.float64)
+        rockerRvec = np.array(compTransforms['ROCKER']['rotation_rvec'], dtype=np.float64)
+        rockerTrans = np.array(compTransforms['ROCKER']['translation'], dtype=np.float64)
+        pushrodInnerCurrent = _rotate_point_about_pivot(pushrodInnerStatic, rockerPivot, rockerRvec) + rockerTrans
+
+        wheelTrans = np.array(compTransforms['WHEEL']['translation'], dtype=np.float64)
+        pushrodOuterCurrent = pushrodOuterStatic + wheelTrans
+
+        v_static = pushrodOuterStatic - pushrodInnerStatic
+        v_current = pushrodOuterCurrent - pushrodInnerCurrent
+        pushrodRvec = _rvec_from_vectors(v_static, v_current)
+
+        compTransforms['PUSHROD'] = {
+            'translation': (pushrodInnerCurrent - pushrodInnerStatic).tolist(),
+            'rotation_rvec': pushrodRvec.tolist(),
+            'pivot': pushrodInnerStatic.tolist(),
+        }
+
+    # DAMPER: chassis end fixed, rocker end follows rocker rotation; apply stroke morph from solver damper delta.
+    if 'ROCKER' in compTransforms and 'rocker' in hardpoints:
+        damperJointStatic = np.array(hardpoints['rocker']['damper_joint_ref'], dtype=np.float64)
+        damperChassis = np.array(hardpoints['rocker']['damper_chassis'], dtype=np.float64)
+
+        rockerPivot = np.array(hardpoints['rocker']['pivot'], dtype=np.float64)
+        rockerRvec = np.array(compTransforms['ROCKER']['rotation_rvec'], dtype=np.float64)
+        rockerTrans = np.array(compTransforms['ROCKER']['translation'], dtype=np.float64)
+        damperJointCurrent = _rotate_point_about_pivot(damperJointStatic, rockerPivot, rockerRvec) + rockerTrans
+
+        v_static = damperJointStatic - damperChassis
+        v_current = damperJointCurrent - damperChassis
+        damperRvec = _rvec_from_vectors(v_static, v_current)
+
+        static_len = float(np.linalg.norm(v_static))
+        damper_delta_col = '%s_damper_delta' % corner
+        if damper_delta_col in rideHeights.columns:
+            damper_delta = float(row[damper_delta_col])
+        else:
+            damper_delta = float(np.linalg.norm(v_current) - static_len)
+        current_len = static_len + damper_delta
+        if static_len > 1e-15:
+            morph_factor = max(current_len / static_len, 1e-6)
+        else:
+            morph_factor = 1.0
+
+        compTransforms['DAMPER'] = {
+            'translation': [0.0, 0.0, 0.0],
+            'rotation_rvec': damperRvec.tolist(),
+            'pivot': damperChassis.tolist(),
+            'morph': {
+                'mode': 'vector_scale',
+                'vector': v_static.tolist(),
+                'factor': morph_factor,
+                'origin': damperChassis.tolist(),
+                'limits': {'min': 0.0, 'max': static_len},
+            },
+            'damper_delta': damper_delta,
+            'damper_length_static': static_len,
+            'damper_length_current': current_len,
+            'damper_morph_factor': morph_factor,
+        }
+    
+    # TIE: fixed at chassis (TIE_INNER), moves with wheel (TIE_OUTER_STATIC)
+    # Compute rotation from linkage geometry change
+    if 'tie_inner' in hardpoints and 'tie_outer_static' in hardpoints:
+        tieInner = np.array(hardpoints['tie_inner'], dtype=np.float64)
+        tieOuter = np.array(hardpoints['tie_outer_static'], dtype=np.float64)
+        
+        if 'WHEEL' in compTransforms:
+            wheelTrans = np.array(compTransforms['WHEEL']['translation'])
+            tieNew = tieOuter + wheelTrans
+            
+            # Compute rotation from linkage vector change
+            v_static = tieOuter - tieInner
+            v_current = tieNew - tieInner
+            
+            # Normalize vectors
+            v_static_norm = v_static / (np.linalg.norm(v_static) + 1e-15)
+            v_current_norm = v_current / (np.linalg.norm(v_current) + 1e-15)
+            
+            # Rotation axis
+            rot_axis = np.cross(v_static_norm, v_current_norm)
+            rot_axis_norm = np.linalg.norm(rot_axis)
+            
+            # Rotation angle
+            cos_angle = np.dot(v_static_norm, v_current_norm)
+            cos_angle = np.clip(cos_angle, -1.0, 1.0)
+            rot_angle = np.arccos(cos_angle)
+            
+            # Convert to rotation vector
+            if rot_axis_norm > 1e-15:
+                rvec = (rot_axis / rot_axis_norm) * rot_angle
+            else:
+                rvec = np.array([0.0, 0.0, 0.0])
+            
+            compTransforms['TIE'] = {
+                'translation': [0.0, 0.0, 0.0],
+                'rotation_rvec': rvec.tolist(),
+                'pivot': tieInner.tolist(),
+            }
+    
+    return compTransforms
+
+
 def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
     baseCaseDir = os.getcwd()
     baseCaseName = os.path.basename(baseCaseDir)
     if 'ansa' in fullCaseSetupDict['GLOBAL_REFINEMENT']['TEMPLATE_TYPE'][0].lower():
         USE_ANSA = True
-    else:        
+    else:
         USE_ANSA = False
 
-    #copies all the geometries into the child directories
-    for idx, row in rideHeights.iterrows():
-        point = (int(row['point']))
-        childName = baseCaseName + '_' + str(point)
-        # print('\t\t\tCopying geometries from baseCase to %s' % (childName))
-        # for geom in geomDict.keys():
-        #     geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
-        #     outputPath = os.path.join(childName,'constant','triSurface',geom)
-        #     copyWithMkdir(geomFilePath, outputPath) #copy the geometry to the new case directory with the same name, but transformed position
-        print('\t\t\tTransforming geometries for point %s' % str(point))
-        for wheel in ['fr','fl','rr','rl']:
-            wheelMovement = row['wheel_%s' % (wheel)]
-            
-            # identify wheel from geometries, or geometries that need to move with wheel, will need appropriate
-            # key words!
-            for geom in geomDict.keys():
-                geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
-                if wheel in geom.lower():
-                    transformParts(geom,geomFilePath,wheelMovement,childName)
-        for geom in geomDict.keys():
-            geomFilePath = 'constant/triSurface/%s' % (geom) #get the path of the parent geometry
-            geomChildPath = '%s/constant/triSurface/%s' % (childName,geom)
-            if not any(x in geom for x in ['fr','fl','rr','rl']):
-                print('\t\t\tCopying non-moving geometry: %s' % (geom))
-                copyWithMkdir(geomFilePath, geomChildPath)
+    kinSetup = _load_suspension_kinematics_setup(fullCaseSetupDict)
+    rideHeightSetup = fullCaseSetupDict.get('RIDE_HEIGHT_SETUP', {})
+    requireSuspensionPidMatch = _truthy(rideHeightSetup.get('SUSP_REQUIRE_ALL_PIDS_MATCHED', ['false'])[0])
 
-    
+    # Corner keywords from hardpoint cfg (preferred), then optional override/extension from caseSetup.
+    cornerPidKeywords = {'fl': [], 'fr': [], 'rl': [], 'rr': []}
+    if kinSetup is not None and 'corner_pid_keywords' in kinSetup:
+        for c in cornerPidKeywords.keys():
+            cornerPidKeywords[c].extend(list(kinSetup['corner_pid_keywords'].get(c, [])))
+
+    # de-duplicate while preserving order
+    for c in cornerPidKeywords.keys():
+        dedup = []
+        seen = set()
+        for k in cornerPidKeywords[c]:
+            if k not in seen:
+                dedup.append(k)
+                seen.add(k)
+        cornerPidKeywords[c] = dedup
+
+    # Categorize keywords by component type
+    categorizedKeywords = _categorize_pid_keywords_by_component(cornerPidKeywords)
+
+    # copies/transforms all geometries into each child case directory
+    processedPoints = []
+    for idx, row in rideHeights.iterrows():
+        point = int(row['point'])
+        childName = baseCaseName + '_' + str(point)
+        transformedGeoms = set()
+        processedPoints.append(point)
+
+        print('\t\t\tTransforming geometries for point %s' % str(point))
+
+        # Build per-component, per-corner transforms from kinematics
+        pidTransformDict = {}
+        
+        for corner in ['fr', 'fl', 'rr', 'rl']:
+            if kinSetup is None or corner not in kinSetup['corners']:
+                continue
+            
+            # Compute transforms for each component type
+            compTransforms = _compute_component_transforms(kinSetup, corner, row, rideHeights)
+            
+            # **[NEW] Validate transforms
+            validation_warnings = _validate_component_transforms(compTransforms, corner)
+            if validation_warnings:
+                for warn in validation_warnings:
+                    print(f'\t\t\t\tWARNING: {warn}')
+            
+            # **[NEW] Write transform log
+            _write_component_transforms_log(childName, corner, row, compTransforms)
+            
+            # **[NEW] Plot linkage before/after
+            _plot_suspension_linkage(kinSetup, corner, row, compTransforms, childName, rideHeights)
+            
+            # Map each component's keywords to its transform
+            for compType, compTransform in compTransforms.items():
+                keywords = categorizedKeywords[corner].get(compType, [])
+                if len(keywords) == 0:
+                    continue
+                
+                regex = '|'.join(re.escape(k) for k in keywords)
+                pidTransformDict[regex] = compTransform
+                print('\t\t\t\t%s (%s) transform: translation=[%1.6f, %1.6f, %1.6f]' % 
+                      (compType, corner, compTransform['translation'][0], 
+                       compTransform['translation'][1], compTransform['translation'][2]))
+
+        for geom in geomDict.keys():
+            geomFilePath = 'constant/triSurface/%s' % (geom)
+            outputPath = os.path.join(childName, 'constant', 'triSurface', geom)
+
+            # try PID-aware suspension transform first
+            if len(pidTransformDict) > 0:
+                try:
+                    pidResult = transformGeometryByPIDRegex(
+                        inputFile=geomFilePath,
+                        outputFile=outputPath,
+                        pidTransformDict=pidTransformDict,
+                        pivot=None,
+                        requireAllPIDsMatched=requireSuspensionPidMatch,
+                        logBasePath=outputPath + '.susp_pid_transform'
+                    )
+                    if pidResult.get('matched_pid_count', 0) > 0:
+                        transformedGeoms.add(geom)
+                        continue
+                except Exception as e:
+                    # skip non-OBJ/STL formats or binary STL files for PID-path and continue with filename fallback
+                    print('\t\t\t\tPID scan skipped for %s: %s' % (geom, e))
+
+        # legacy filename-based fallback for wheel files that were not PID-transformed
+        # (fallback uses basic wheel translation only)
+        if kinSetup is not None:
+            for corner in ['fr', 'fl', 'rr', 'rl']:
+                if corner not in kinSetup['corners']:
+                    continue
+                compTransforms = _compute_component_transforms(kinSetup, corner, row, rideHeights)
+                if 'WHEEL' in compTransforms:
+                    tVec = compTransforms['WHEEL']['translation']
+                    for geom in geomDict.keys():
+                        if geom in transformedGeoms:
+                            continue
+                        geomFilePath = 'constant/triSurface/%s' % (geom)
+                        if corner in geom.lower():
+                            transformParts(geom, geomFilePath, tVec, childName)
+                            transformedGeoms.add(geom)
+
+        # copy all untouched files
+        for geom in geomDict.keys():
+            if geom in transformedGeoms:
+                continue
+            geomFilePath = 'constant/triSurface/%s' % (geom)
+            geomChildPath = '%s/constant/triSurface/%s' % (childName,geom)
+            print('\t\t\tCopying non-moving geometry: %s' % (geom))
+            copyWithMkdir(geomFilePath, geomChildPath)
+
+    # Build corner animation GIFs from per-point linkage validation plots.
+    if len(processedPoints) > 0:
+        _create_linkage_gifs(baseCaseName, processedPoints, corners=('fl', 'fr', 'rl', 'rr'))
 
     return rideHeights
 
@@ -277,12 +1185,17 @@ def transformBlockMesh(fullCaseSetupDict):
    
 
 def transformParts(geom,geomFilePath, transformAmount,childCaseName):
-    print('\t\t\t\tMoving %s by z-position %s' % (geom,transformAmount)) 
+    if isinstance(transformAmount, (list, tuple, np.ndarray)):
+        tVec = [float(transformAmount[0]), float(transformAmount[1]), float(transformAmount[2])]
+    else:
+        tVec = [0.0, 0.0, float(transformAmount)]
+
+    print('\t\t\t\tMoving %s by translation [%s, %s, %s]' % (geom,tVec[0],tVec[1],tVec[2])) 
     # dummy transform
     try:
         outputPath = os.path.join(childCaseName,'constant','triSurface',geom)
         if not 'dummy' in geom:
-            transformGeometryPreservePID(geomFilePath,outputFile=outputPath,translation=[0,0,transformAmount])
+            transformGeometryPreservePID(geomFilePath,outputFile=outputPath,translation=tVec)
         else:
             print('')
         print('\t\t\t\t\ttransform OK!')
@@ -512,6 +1425,517 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
             
             print(f'\t\tTransformed binary STL ({numTri} triangles), preserved header/solid name.')
             return outputFile
+
+
+def _open_text_file_maybe_gz(path, mode='rt'):
+    if path.lower().endswith('.gz'):
+        return gzip.open(path, mode)
+    return open(path, mode)
+
+
+def _is_ascii_stl_path(inputFile):
+    with _open_text_file_maybe_gz(inputFile, 'rb') as f:
+        head = f.read(1024)
+    headStr = head.decode('utf-8', errors='ignore').lstrip().lower()
+    return headStr.startswith('solid') and ('facet' in headStr or 'endsolid' in headStr)
+
+
+def _build_pid_regex_mapping(pidNames, pidTransformDict):
+    pidToConfig = {}
+    unmatched = []
+
+    for pid in pidNames:
+        matches = []
+        for pattern, cfg in pidTransformDict.items():
+            if re.search(pattern, pid):
+                matches.append((pattern, cfg))
+
+        if len(matches) == 0:
+            unmatched.append(pid)
+        elif len(matches) > 1:
+            patterns = [m[0] for m in matches]
+            raise ValueError(f'PID "{pid}" matches multiple regex patterns: {patterns}')
+        else:
+            pidToConfig[pid] = matches[0][1]
+
+    return pidToConfig, unmatched
+
+
+def _canonical_transform_signature(cfg):
+    # Stable signature used to detect conflicting transforms on shared OBJ vertices.
+    if cfg is None:
+        return json.dumps({}, sort_keys=True)
+    return json.dumps(cfg, sort_keys=True)
+
+
+def _rodrigues_matrix_from_rvec(rvec):
+    rv = np.array(rvec, dtype=np.float64)
+    theta = np.linalg.norm(rv)
+    if theta < 1e-15:
+        return np.eye(3)
+    k = rv / theta
+    kx, ky, kz = k
+    K = np.array(
+        [[0.0, -kz, ky], [kz, 0.0, -kx], [-ky, kx, 0.0]],
+        dtype=np.float64,
+    )
+    return np.eye(3) + math.sin(theta) * K + (1.0 - math.cos(theta)) * (K @ K)
+
+
+def _build_vertex_transformer(cfg, pivot):
+    if cfg is None:
+        cfg = {}
+
+    translation = cfg.get('translation', [0.0, 0.0, 0.0])
+    rotation = cfg.get('rotation', {'x': 0.0, 'y': 0.0, 'z': 0.0})
+    rotationRvec = cfg.get('rotation_rvec', None)
+    morphing_dict = cfg.get('morphing_dict', None)
+    morph = cfg.get('morph', None)
+    
+    # Use pivot from config if present, otherwise use parameter (allows per-regex pivot override)
+    pivot = cfg.get('pivot', pivot)
+
+    tx, ty, tz = translation
+    rx = float(rotation.get('x', 0.0))
+    ry = float(rotation.get('y', 0.0))
+    rz = float(rotation.get('z', 0.0))
+
+    p = np.array(pivot, dtype=np.float64)
+    d = np.array([tx, ty, tz], dtype=np.float64)
+
+    Rr = None
+    if rotationRvec is not None:
+        Rr = _rodrigues_matrix_from_rvec(rotationRvec)
+
+    axisToIdx = {'x': 0, 'y': 1, 'z': 2}
+
+    def transform_vertex(v, global_idx=None):
+        vv = np.array(v, dtype=np.float64)
+
+        if morph is not None:
+            mode = morph.get('mode', '').lower()
+
+            if mode == 'displacement':
+                disp = np.array(morph.get('vector', [0.0, 0.0, 0.0]), dtype=np.float64)
+                vv = vv + disp
+
+            elif mode == 'axis_scale':
+                axis = morph.get('axis', 'z').lower()
+                if axis not in axisToIdx:
+                    raise ValueError(f'Invalid morph axis: {axis}. Expected one of x/y/z.')
+
+                factor = float(morph.get('factor', 1.0))
+                origin = np.array(morph.get('origin', pivot), dtype=np.float64)
+                limits = morph.get('limits', None)
+                axisIdx = axisToIdx[axis]
+
+                inRange = True
+                if limits is not None:
+                    minVal = limits.get('min', None)
+                    maxVal = limits.get('max', None)
+                    coord = vv[axisIdx]
+                    if minVal is not None and coord < float(minVal):
+                        inRange = False
+                    if maxVal is not None and coord > float(maxVal):
+                        inRange = False
+
+                if inRange:
+                    vv[axisIdx] = origin[axisIdx] + (vv[axisIdx] - origin[axisIdx]) * factor
+
+            elif mode == 'vector_stroke':
+                axisVector = np.array(morph.get('vector', [0.0, 0.0, 1.0]), dtype=np.float64)
+                vnorm = np.linalg.norm(axisVector)
+                if vnorm == 0.0:
+                    raise ValueError('vector_stroke requires a non-zero morph vector.')
+                u = axisVector / vnorm
+
+                origin = np.array(morph.get('origin', pivot), dtype=np.float64)
+                distance = float(morph.get('distance', 0.0))
+                # Convention: positive distance compresses toward origin; negative extends away.
+                targetLength = float(morph.get('target_length', 0.0))
+                limits = morph.get('limits', None)
+
+                rel = vv - origin
+                s = float(np.dot(rel, u))
+                radial = rel - s * u
+
+                inRange = True
+                if limits is not None:
+                    minVal = limits.get('min', None)
+                    maxVal = limits.get('max', None)
+                    if minVal is not None and s < float(minVal):
+                        inRange = False
+                    if maxVal is not None and s > float(maxVal):
+                        inRange = False
+
+                if inRange:
+                    # Compress by explicit distance along the selected axis segment.
+                    newS = s - distance
+                    if targetLength > 0.0:
+                        newS = max(0.0, min(targetLength, newS))
+                    vv = origin + radial + newS * u
+
+            elif mode == 'vector_scale':
+                axisVector = np.array(morph.get('vector', [0.0, 0.0, 1.0]), dtype=np.float64)
+                vnorm = np.linalg.norm(axisVector)
+                if vnorm == 0.0:
+                    raise ValueError('vector_scale requires a non-zero morph vector.')
+                u = axisVector / vnorm
+
+                origin = np.array(morph.get('origin', pivot), dtype=np.float64)
+                factor = float(morph.get('factor', 1.0))
+                limits = morph.get('limits', None)
+
+                rel = vv - origin
+                s = float(np.dot(rel, u))
+                radial = rel - s * u
+
+                inRange = True
+                if limits is not None:
+                    minVal = limits.get('min', None)
+                    maxVal = limits.get('max', None)
+                    if minVal is not None and s < float(minVal):
+                        inRange = False
+                    if maxVal is not None and s > float(maxVal):
+                        inRange = False
+
+                if inRange:
+                    vv = origin + radial + (s * factor) * u
+
+            elif mode != '':
+                raise ValueError(
+                    f'Unsupported morph mode: {mode}. Supported modes: displacement, axis_scale, vector_stroke, vector_scale.'
+                )
+
+        if morphing_dict is not None and global_idx is not None and global_idx in morphing_dict:
+            vv = vv + np.array(morphing_dict[global_idx], dtype=np.float64)
+
+        vv = vv - p
+        if Rr is not None:
+            vv = Rr @ vv
+        if rx != 0.0:
+            vv = x_rotation(vv, math.radians(rx))
+        if ry != 0.0:
+            vv = y_rotation(vv, math.radians(ry))
+        if rz != 0.0:
+            vv = z_rotation(vv, math.radians(rz))
+        vv = vv + p
+        vv = vv + d
+        return vv
+
+    return transform_vertex
+
+
+def _write_pid_transform_log(logBasePath, logData):
+    jsonPath = f'{logBasePath}.json'
+    csvPath = f'{logBasePath}.csv'
+
+    outDir = os.path.dirname(jsonPath)
+    if outDir and not os.path.exists(outDir):
+        os.makedirs(outDir)
+
+    with open(jsonPath, 'w') as jf:
+        json.dump(logData, jf, indent=2)
+
+    with open(csvPath, 'w', newline='') as cf:
+        writer = csv.DictWriter(
+            cf,
+            fieldnames=['pid', 'regex', 'translation', 'rotation', 'morph', 'vertex_count', 'warnings']
+        )
+        writer.writeheader()
+        for row in logData['pid_rows']:
+            writer.writerow(row)
+
+
+def transformGeometryByPIDRegex(
+    inputFile,
+    outputFile,
+    pidTransformDict,
+    pivot,
+    requireAllPIDsMatched=True,
+    logBasePath=None
+):
+    '''
+    Unpack PID groups from OBJ or ASCII STL, transform by PID regex, and repack to the same
+    format/compression while preserving line ordering and indexing.
+
+    PID mapping:
+    - OBJ: current `g` or `o` name (most recent encountered name).
+    - ASCII STL: `solid <name>`.
+
+    Regex behavior is case-sensitive by design.
+
+    :param inputFile: Input geometry path (.obj, .obj.gz, .stl, .stl.gz)
+    :param outputFile: Output geometry path (must keep same format and compression as input)
+    :param pidTransformDict: Dict[regexPattern] -> {
+        'translation': [dx, dy, dz],
+        'rotation': {'x': deg, 'y': deg, 'z': deg},
+        'rotation_rvec': [rx, ry, rz] axis-angle rotation vector in radians (optional),
+        'morphing_dict': {globalVertexIndex: [dx, dy, dz]} (optional),
+        'morph': {
+            'mode': 'axis_scale' or 'displacement' or 'vector_stroke' or 'vector_scale',
+            # axis_scale:
+            'axis': 'x'/'y'/'z',
+            'factor': 1.0,
+            'origin': [x, y, z],
+            'limits': {'min': float, 'max': float} (optional),
+            # displacement:
+            'vector': [dx, dy, dz],
+            # vector_stroke:
+            'vector': [vx, vy, vz],
+            'distance': float,
+            'origin': [x, y, z],
+            'target_length': float (optional),
+            # vector_scale:
+            'vector': [vx, vy, vz],
+            'factor': float,
+            'origin': [x, y, z],
+            'limits': {'min': float, 'max': float} (optional)
+        } (optional)
+    }
+    :param pivot: [x, y, z] fixed pivot for extrinsic XYZ rotations
+    :param requireAllPIDsMatched: If True, error when any PID is not matched by regex map
+    :param logBasePath: Base path for JSON/CSV log output (without extension)
+    :return: Dict with output path and warning metadata
+    '''
+    if not isinstance(pidTransformDict, dict) or len(pidTransformDict) == 0:
+        raise ValueError('pidTransformDict must be a non-empty dictionary of regex -> transform config.')
+
+    if outputFile is None:
+        raise ValueError('outputFile must be provided.')
+
+    inLower = inputFile.lower()
+    outLower = outputFile.lower()
+
+    inFmt = 'obj' if '.obj' in inLower else ('stl' if '.stl' in inLower else None)
+    outFmt = 'obj' if '.obj' in outLower else ('stl' if '.stl' in outLower else None)
+    if inFmt is None or outFmt is None:
+        raise ValueError('Only OBJ/STL files are supported.')
+
+    inGz = inLower.endswith('.gz')
+    outGz = outLower.endswith('.gz')
+    if inFmt != outFmt or inGz != outGz:
+        raise ValueError('outputFile must preserve input format and compression exactly.')
+
+    if inFmt == 'stl' and not _is_ascii_stl_path(inputFile):
+        raise ValueError('Only ASCII STL is supported for PID-preserving regex transforms.')
+
+    warnings = []
+    timestamp = datetime.utcnow().isoformat() + 'Z'
+
+    if inFmt == 'obj':
+        with _open_text_file_maybe_gz(inputFile, 'rt') as f:
+            lines = f.readlines()
+
+        vertices = []
+        currentPid = '__DEFAULT__'
+        pidVertexRefs = {}
+        pidVertexRefs[currentPid] = set()
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('v '):
+                parts = stripped.split()
+                vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+            elif stripped.startswith('g ') or stripped.startswith('o '):
+                toks = stripped.split(maxsplit=1)
+                currentPid = toks[1] if len(toks) > 1 else '__EMPTY__'
+                if currentPid not in pidVertexRefs:
+                    pidVertexRefs[currentPid] = set()
+            elif stripped.startswith('f '):
+                pidVertexRefs.setdefault(currentPid, set())
+                refs = stripped.split()[1:]
+                for ref in refs:
+                    idxToken = ref.split('/')[0]
+                    idx = int(idxToken)
+                    if idx > 0:
+                        vIdx = idx - 1
+                    else:
+                        vIdx = len(vertices) + idx
+                    if vIdx >= 0:
+                        pidVertexRefs[currentPid].add(vIdx)
+
+        pidNames = [pid for pid, refs in pidVertexRefs.items() if len(refs) > 0]
+        pidToCfg, unmatched = _build_pid_regex_mapping(pidNames, pidTransformDict)
+        if requireAllPIDsMatched and len(unmatched) > 0:
+            raise ValueError(f'Unmatched OBJ PIDs: {unmatched}')
+        if len(unmatched) > 0:
+            warnings.append(f'Unmatched OBJ PIDs: {unmatched}')
+
+        vertexToSignature = {}
+        vertexToCfg = {}
+        for pid in pidNames:
+            cfg = pidToCfg.get(pid, None)
+            sig = _canonical_transform_signature(cfg)
+            for vIdx in pidVertexRefs[pid]:
+                if vIdx in vertexToSignature and vertexToSignature[vIdx] != sig:
+                    raise ValueError(
+                        f'Vertex {vIdx} is shared by multiple PIDs with different transforms. '
+                        'Cannot preserve original indexing without splitting vertices.'
+                    )
+                vertexToSignature[vIdx] = sig
+                vertexToCfg[vIdx] = cfg
+
+        transformed = [np.array(v, dtype=np.float64) for v in vertices]
+        for i in range(len(transformed)):
+            cfg = vertexToCfg.get(i, None)
+            fn = _build_vertex_transformer(cfg, pivot)
+            transformed[i] = fn(transformed[i], i)
+
+        outLines = []
+        vCounter = 0
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('v '):
+                vv = transformed[vCounter]
+                outLines.append(f'v {vv[0]:.6f} {vv[1]:.6f} {vv[2]:.6f}\n')
+                vCounter += 1
+            else:
+                outLines.append(line if line.endswith('\n') else line + '\n')
+
+        outDir = os.path.dirname(outputFile)
+        if outDir and not os.path.exists(outDir):
+            os.makedirs(outDir)
+        with _open_text_file_maybe_gz(outputFile, 'wt') as f:
+            f.writelines(outLines)
+
+        pidRows = []
+        for pid in pidNames:
+            matchedPattern = None
+            for pattern in pidTransformDict.keys():
+                if re.search(pattern, pid):
+                    matchedPattern = pattern
+                    break
+            cfg = pidToCfg.get(pid, {})
+            pidRows.append({
+                'pid': pid,
+                'regex': matchedPattern,
+                'translation': cfg.get('translation', [0.0, 0.0, 0.0]) if cfg else [0.0, 0.0, 0.0],
+                'rotation': cfg.get('rotation', {'x': 0.0, 'y': 0.0, 'z': 0.0}) if cfg else {'x': 0.0, 'y': 0.0, 'z': 0.0},
+                'morph': cfg.get('morph', None) if cfg else None,
+                'vertex_count': len(pidVertexRefs.get(pid, set())),
+                'warnings': '; '.join(warnings)
+            })
+
+    else:
+        with _open_text_file_maybe_gz(inputFile, 'rt') as f:
+            lines = f.readlines()
+
+        pidNames = []
+        currentPid = None
+        for line in lines:
+            stripped = line.strip()
+            low = stripped.lower()
+            if low.startswith('solid'):
+                toks = stripped.split(maxsplit=1)
+                currentPid = toks[1] if len(toks) > 1 else '__EMPTY__'
+                pidNames.append(currentPid)
+
+        pidToCfg, unmatched = _build_pid_regex_mapping(pidNames, pidTransformDict)
+        if requireAllPIDsMatched and len(unmatched) > 0:
+            raise ValueError(f'Unmatched STL PIDs: {unmatched}')
+        if len(unmatched) > 0:
+            warnings.append(f'Unmatched STL PIDs: {unmatched}')
+
+        outLines = []
+        currentPid = None
+        triBuffer = []
+        facetPlaceholderIdx = None
+        globalVertexIdx = 0
+        pidVertexCounter = {pid: 0 for pid in pidNames}
+
+        for line in lines:
+            stripped = line.strip()
+            low = stripped.lower()
+
+            if low.startswith('solid'):
+                toks = stripped.split(maxsplit=1)
+                currentPid = toks[1] if len(toks) > 1 else '__EMPTY__'
+                outLines.append(line if line.endswith('\n') else line + '\n')
+                continue
+
+            if low.startswith('facet normal'):
+                triBuffer = []
+                facetPlaceholderIdx = len(outLines)
+                outLines.append('__FACET_NORMAL_PLACEHOLDER__\n')
+                continue
+
+            if low.startswith('vertex'):
+                if currentPid is None:
+                    raise ValueError('Encountered STL vertex line outside of a solid block.')
+                parts = stripped.split()
+                v = np.array([float(parts[1]), float(parts[2]), float(parts[3])], dtype=np.float64)
+                cfg = pidToCfg.get(currentPid, None)
+                fn = _build_vertex_transformer(cfg, pivot)
+                vNew = fn(v, globalVertexIdx)
+                globalVertexIdx += 1
+                pidVertexCounter[currentPid] = pidVertexCounter.get(currentPid, 0) + 1
+                triBuffer.append(vNew)
+                outLines.append(f'      vertex {vNew[0]:.6e} {vNew[1]:.6e} {vNew[2]:.6e}\n')
+
+                if len(triBuffer) == 3 and facetPlaceholderIdx is not None:
+                    edge1 = triBuffer[1] - triBuffer[0]
+                    edge2 = triBuffer[2] - triBuffer[0]
+                    n = np.cross(edge1, edge2)
+                    nLen = np.linalg.norm(n)
+                    if nLen > 0:
+                        n = n / nLen
+                    else:
+                        n = np.array([0.0, 0.0, 0.0])
+                    outLines[facetPlaceholderIdx] = (
+                        f'  facet normal {n[0]:.6e} {n[1]:.6e} {n[2]:.6e}\n'
+                    )
+                continue
+
+            outLines.append(line if line.endswith('\n') else line + '\n')
+
+        outDir = os.path.dirname(outputFile)
+        if outDir and not os.path.exists(outDir):
+            os.makedirs(outDir)
+        with _open_text_file_maybe_gz(outputFile, 'wt') as f:
+            f.writelines(outLines)
+
+        pidRows = []
+        for pid in pidNames:
+            matchedPattern = None
+            for pattern in pidTransformDict.keys():
+                if re.search(pattern, pid):
+                    matchedPattern = pattern
+                    break
+            cfg = pidToCfg.get(pid, {})
+            pidRows.append({
+                'pid': pid,
+                'regex': matchedPattern,
+                'translation': cfg.get('translation', [0.0, 0.0, 0.0]) if cfg else [0.0, 0.0, 0.0],
+                'rotation': cfg.get('rotation', {'x': 0.0, 'y': 0.0, 'z': 0.0}) if cfg else {'x': 0.0, 'y': 0.0, 'z': 0.0},
+                'morph': cfg.get('morph', None) if cfg else None,
+                'vertex_count': pidVertexCounter.get(pid, 0),
+                'warnings': '; '.join(warnings)
+            })
+
+    if logBasePath is None:
+        logBasePath = outputFile + '.pid_transform_log'
+
+    matchedPidCount = sum(1 for row in pidRows if row.get('regex') is not None)
+
+    logData = {
+        'timestamp': timestamp,
+        'input_file': inputFile,
+        'output_file': outputFile,
+        'pivot': list(pivot) if pivot is not None else None,
+        'warnings': warnings,
+        'matched_pid_count': matchedPidCount,
+        'pid_rows': pidRows
+    }
+    _write_pid_transform_log(logBasePath, logData)
+
+    return {
+        'output_file': outputFile,
+        'warnings': warnings,
+        'matched_pid_count': matchedPidCount,
+        'log_json': f'{logBasePath}.json',
+        'log_csv': f'{logBasePath}.csv'
+    }
 
 def transformGeometry(inputFile, outputFile=None, rotation=None, translation=None, scale=None, morphing_dict=None):
     '''

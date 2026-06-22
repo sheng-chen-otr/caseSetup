@@ -1,6 +1,6 @@
 # Fdb version 4
-["pdflatex"] 1778181304.40036 "/Users/zchen147/Library/CloudStorage/OneDrive-azureford/researchMasc/caseSetup-dev/documentation/source/caseSetupTUG.tex" "caseSetupTUG.pdf" "caseSetupTUG" 1778181305.22755 0
-  "/Users/zchen147/Library/CloudStorage/OneDrive-azureford/researchMasc/caseSetup-dev/documentation/source/caseSetupTUG.tex" 1778181302.14536 2420 8b548c764ff3774d9ba922d2ff5a6f6f ""
+["pdflatex"] 1782155053.94464 "/Users/zchen147/Library/CloudStorage/OneDrive-azureford/researchMasc/caseSetup-dev/documentation/source/caseSetupTUG.tex" "caseSetupTUG.pdf" "caseSetupTUG" 1782155054.78217 0
+  "/Users/zchen147/Library/CloudStorage/OneDrive-azureford/researchMasc/caseSetup-dev/documentation/source/caseSetupTUG.tex" 1782153893.39995 2451 e99fd4fa4892f5ba3258ff2566bdd5e5 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/cm-super/cm-super-t1.enc" 1136849721 2971 def0b6c1f0b107b3b936def894055589 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/tex-gyre/q-ec.enc" 1529098226 2457 aaabbccba4df2a7f7371410ee4e075a3 ""
   "/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/tex-gyre/q-ts1.enc" 1529098226 3124 3813fd4c981d99822890a2861b0d274c ""
@@ -88,17 +88,19 @@
   "/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1739481943.22366 5467645 128b85b7cde5f5edc5cb7f1dd7ff8736 ""
   "/usr/local/texlive/2024/texmf-var/web2c/pdftex/pdflatex.fmt" 1739481895 8221425 1fe4bcd95c7f856e39a32a8ee3d81a59 ""
   "/usr/local/texlive/2024/texmf.cnf" 1710266656 577 e590dabc9e28c5b61546e15f63eebcdf ""
-  "caseSetupTUG.aux" 1778181305.14091 260 c9ed5d7ccffbf43ba456546290105907 "pdflatex"
-  "caseSetupTUG.out" 1778181305.14948 2901 7867cde8810501f30a0010cb24f6caab "pdflatex"
-  "caseSetupTUG.tex" 1778181302.14536 2420 8b548c764ff3774d9ba922d2ff5a6f6f ""
-  "caseSetupTUG.toc" 1778181305.15172 1547 2b14d6ca7e94ef7fc51e90baf16ec93b "pdflatex"
+  "caseSetupTUG.aux" 1782155054.68694 293 b63ae339e115f2310c6ff7f6f0ae75a8 "pdflatex"
+  "caseSetupTUG.out" 1782155054.69787 4466 68f3cc17bfce3d7e03b262b689c9135d "pdflatex"
+  "caseSetupTUG.tex" 1782153893.39995 2451 e99fd4fa4892f5ba3258ff2566bdd5e5 ""
+  "caseSetupTUG.toc" 1782155054.69968 2343 edcf2169f154d7dbf15f6e17962b75dd "pdflatex"
   "figures/otrLogo.png" 1776607250.5071 4038 d906f9132a5c436cbfb92112b6e37cbe ""
-  "sections/basicSetup.aux" 1778181305.09002 2444 f01c408e3cd66e9056ec8813a6b2859c "pdflatex"
+  "sections/basicSetup.aux" 1782155054.60747 2444 f01c408e3cd66e9056ec8813a6b2859c "pdflatex"
   "sections/basicSetup.tex" 1778181303.25006 24634 5861f6bcae9f6cd799868dc5a40bf326 ""
-  "sections/introduction.aux" 1778181304.99601 969 c417a1074d85da3fc01f8d07b39262e9 "pdflatex"
+  "sections/introduction.aux" 1782155054.52209 969 c417a1074d85da3fc01f8d07b39262e9 "pdflatex"
   "sections/introduction.tex" 1776607250.50735 4076 ccebec7b08d1332740b3b7267b08eef7 ""
-  "sections/prefix.aux" 1778181305.13915 1101 9459f7a095ee0a940d2352f6f4112464 "pdflatex"
+  "sections/prefix.aux" 1782155054.63344 1101 9459f7a095ee0a940d2352f6f4112464 "pdflatex"
   "sections/prefix.tex" 1776607250.50747 6186 61bf2b4b2bb951e4218c8cf3eb6b7d38 ""
+  "sections/rideHeight.aux" 1782155054.68668 1909 32b973bb80f517cb3613044074a8495a "pdflatex"
+  "sections/rideHeight.tex" 1782155053.81117 17192 db949498705bed924e4549573d6f8574 ""
   (generated)
   "caseSetupTUG.aux"
   "caseSetupTUG.log"
@@ -108,4 +110,5 @@
   "sections/basicSetup.aux"
   "sections/introduction.aux"
   "sections/prefix.aux"
+  "sections/rideHeight.aux"
   (rewritten before read)

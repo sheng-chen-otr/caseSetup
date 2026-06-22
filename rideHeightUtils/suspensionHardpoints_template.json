@@ -1,0 +1,88 @@
+{
+  "corners": {
+    "fl": {
+      "wheel_center_static": [1.45, 0.78, 0.31],
+      "uca_f_inner": [1.25, 0.45, 0.50],
+      "uca_r_inner": [1.10, 0.46, 0.50],
+      "lca_f_inner": [1.25, 0.40, 0.15],
+      "lca_r_inner": [1.10, 0.41, 0.15],
+      "tie_inner": [1.05, 0.52, 0.26],
+      "uca_outer_static": [1.42, 0.77, 0.47],
+      "lca_outer_static": [1.43, 0.79, 0.20],
+      "tie_outer_static": [1.40, 0.76, 0.27],
+      "pushrod_outer_static": [1.39, 0.75, 0.25],
+      "rocker": {
+        "pivot": [1.00, 0.35, 0.55],
+        "axis": [1.0, 0.0, 0.0],
+        "pushrod_joint_ref": [1.03, 0.44, 0.50],
+        "damper_joint_ref": [0.98, 0.29, 0.50],
+        "damper_chassis": [0.95, 0.20, 0.62]
+      },
+      "wheel_axis_local": [0.0, 1.0, 0.0],
+      "wheel_forward_local": [1.0, 0.0, 0.0]
+    },
+    "fr": {
+      "wheel_center_static": [1.45, -0.78, 0.31],
+      "uca_f_inner": [1.25, -0.45, 0.50],
+      "uca_r_inner": [1.10, -0.46, 0.50],
+      "lca_f_inner": [1.25, -0.40, 0.15],
+      "lca_r_inner": [1.10, -0.41, 0.15],
+      "tie_inner": [1.05, -0.52, 0.26],
+      "uca_outer_static": [1.42, -0.77, 0.47],
+      "lca_outer_static": [1.43, -0.79, 0.20],
+      "tie_outer_static": [1.40, -0.76, 0.27],
+      "pushrod_outer_static": [1.39, -0.75, 0.25],
+      "rocker": {
+        "pivot": [1.00, -0.35, 0.55],
+        "axis": [1.0, 0.0, 0.0],
+        "pushrod_joint_ref": [1.03, -0.44, 0.50],
+        "damper_joint_ref": [0.98, -0.29, 0.50],
+        "damper_chassis": [0.95, -0.20, 0.62]
+      },
+      "wheel_axis_local": [0.0, -1.0, 0.0],
+      "wheel_forward_local": [1.0, 0.0, 0.0]
+    },
+    "rl": {
+      "wheel_center_static": [0.00, 0.78, 0.31],
+      "uca_f_inner": [-0.20, 0.45, 0.50],
+      "uca_r_inner": [-0.35, 0.46, 0.50],
+      "lca_f_inner": [-0.20, 0.40, 0.15],
+      "lca_r_inner": [-0.35, 0.41, 0.15],
+      "tie_inner": [-0.40, 0.52, 0.26],
+      "uca_outer_static": [-0.03, 0.77, 0.47],
+      "lca_outer_static": [-0.02, 0.79, 0.20],
+      "tie_outer_static": [-0.05, 0.76, 0.27],
+      "pushrod_outer_static": [-0.06, 0.75, 0.25],
+      "rocker": {
+        "pivot": [-0.45, 0.35, 0.55],
+        "axis": [1.0, 0.0, 0.0],
+        "pushrod_joint_ref": [-0.42, 0.44, 0.50],
+        "damper_joint_ref": [-0.47, 0.29, 0.50],
+        "damper_chassis": [-0.50, 0.20, 0.62]
+      },
+      "wheel_axis_local": [0.0, 1.0, 0.0],
+      "wheel_forward_local": [1.0, 0.0, 0.0]
+    },
+    "rr": {
+      "wheel_center_static": [0.00, -0.78, 0.31],
+      "uca_f_inner": [-0.20, -0.45, 0.50],
+      "uca_r_inner": [-0.35, -0.46, 0.50],
+      "lca_f_inner": [-0.20, -0.40, 0.15],
+      "lca_r_inner": [-0.35, -0.41, 0.15],
+      "tie_inner": [-0.40, -0.52, 0.26],
+      "uca_outer_static": [-0.03, -0.77, 0.47],
+      "lca_outer_static": [-0.02, -0.79, 0.20],
+      "tie_outer_static": [-0.05, -0.76, 0.27],
+      "pushrod_outer_static": [-0.06, -0.75, 0.25],
+      "rocker": {
+        "pivot": [-0.45, -0.35, 0.55],
+        "axis": [1.0, 0.0, 0.0],
+        "pushrod_joint_ref": [-0.42, -0.44, 0.50],
+        "damper_joint_ref": [-0.47, -0.29, 0.50],
+        "damper_chassis": [-0.50, -0.20, 0.62]
+      },
+      "wheel_axis_local": [0.0, -1.0, 0.0],
+      "wheel_forward_local": [1.0, 0.0, 0.0]
+    }
+  }
+}

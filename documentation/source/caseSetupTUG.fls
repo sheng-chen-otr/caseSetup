@@ -148,6 +148,9 @@ INPUT sections/basicSetup.aux
 INPUT ./sections/prefix.aux
 INPUT ./sections/prefix.aux
 INPUT sections/prefix.aux
+INPUT ./sections/rideHeight.aux
+INPUT ./sections/rideHeight.aux
+INPUT sections/rideHeight.aux
 OUTPUT caseSetupTUG.aux
 INPUT ./caseSetupTUG.out
 INPUT ./caseSetupTUG.out
@@ -216,6 +219,12 @@ OUTPUT sections/prefix.aux
 INPUT ./sections/prefix.tex
 INPUT ./sections/prefix.tex
 INPUT sections/prefix.tex
+INPUT ./sections/rideHeight.tex
+INPUT ./sections/rideHeight.tex
+OUTPUT sections/rideHeight.aux
+INPUT ./sections/rideHeight.tex
+INPUT ./sections/rideHeight.tex
+INPUT sections/rideHeight.tex
 INPUT caseSetupTUG.aux
 INPUT ./sections/introduction.aux
 INPUT ./sections/introduction.aux
@@ -226,6 +235,9 @@ INPUT sections/basicSetup.aux
 INPUT ./sections/prefix.aux
 INPUT ./sections/prefix.aux
 INPUT sections/prefix.aux
+INPUT ./sections/rideHeight.aux
+INPUT ./sections/rideHeight.aux
+INPUT sections/rideHeight.aux
 INPUT ./caseSetupTUG.out
 INPUT ./caseSetupTUG.out
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb
