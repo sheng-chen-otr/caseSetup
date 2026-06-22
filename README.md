@@ -250,15 +250,16 @@ CASES/
 ### Ride-Height Input CSV
 
 ```csv
-point,fl,fr,rl,rr,yaw
-1,0.05,0.05,0.02,0.02,0.0
-2,0.10,0.10,0.05,0.05,0.0
-3,-0.05,-0.05,-0.02,-0.02,0.0
+point,fl,fr,rl,rr,yaw,steer
+1,0.05,0.05,0.02,0.02,0.0,0
+2,0.10,0.10,0.05,0.05,0.0,5
+3,-0.05,-0.05,-0.02,-0.02,0.0,0
 ```
 
 Where:
 - `fl, fr, rl, rr` = wheel vertical displacements (meters or mm depending on `RH_UNIT`)
 - `yaw` = vehicle yaw angle (degrees, 0 for straight)
+- `steer` = optional front road-wheel steering angle in degrees at the reference (front-left) wheel. The kinematic solver finds the rack travel that produces this angle at the front-left, then applies the same rack to the front-right so the Ackermann difference emerges. The tie-rod inner joint slides along the rack axis (`RACK_AXIS` in the hardpoint file, default lateral `0 1 0`) and the tie-rod length is preserved. Omit or set to `0` for no steer. Rear wheels are not steered.
 
 ---
 

@@ -557,7 +557,11 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                     try:
                         vertices, faces = readGeomFile(geom)
                         xcenter,ycenter,zcenter, xaxis,yaxis,zaxis = find_wheel_axis(vertices,faces)
-                        radius = zcenter - float(fullCaseSetupDict['BC_SETUP']['FRT_WH_CTR'][2]) #wheel contact patch intersection with ground
+                        #effective rolling radius = axle to the GROUND PLANE at the contact patch below the axle.
+                        #the tyre penetrates the floor and is cut at the ground by snappyHexMesh, so the rolling-wall
+                        #contact is at the ground plane (not the tyre geometry). calcLoadedRadius intersects the vertical
+                        #line through the axle with the heave-corrected, pitch/roll-tilted floor plane.
+                        radius = calcLoadedRadius(xcenter, ycenter, zcenter, fullCaseSetupDict) #axle to ground plane below axle
                         #bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBox(geom.replace('.gz',''))
                         
                     except Exception as error:
@@ -596,7 +600,7 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                         try:
                             vertices, faces = readGeomFile(geom)
                             xcenter,ycenter,zcenter, xaxis,yaxis,zaxis = find_wheel_axis(vertices,faces)
-                            radius = zcenter
+                            radius = calcLoadedRadius(xcenter, ycenter, zcenter, fullCaseSetupDict) #axle to ground plane below axle
                             #bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBox(geom.replace('.gz',''))
                         
                         except Exception as error:

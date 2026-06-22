@@ -22,6 +22,7 @@ class KinematicState:
     rvec: np.ndarray
     wheel_center: np.ndarray
     rocker_theta: float
+    rack_travel: float = 0.0
 
 
 def _as_vec3(v: ArrayLike, name: str) -> np.ndarray:
@@ -135,6 +136,14 @@ class DoubleWishbonePushrodSolver:
             "wheel_forward_local",
         )
 
+        # Tie-rod inner (rack end) static position and the rack travel direction.
+        # Steering displaces the inner joint along rack_axis by the rack-travel DOF.
+        self.tie_inner_static = self.inner["tie"]
+        self.rack_axis = _normalize(
+            _as_vec3(self.hp.get("rack_axis", [0.0, 1.0, 0.0]), "rack_axis"),
+            "rack_axis",
+        )
+
     def _build_static_lengths(self) -> None:
         o = self.outer0_global
         i = self.inner
@@ -168,71 +177,113 @@ class DoubleWishbonePushrodSolver:
         R = _rodrigues(rvec)
         return {k: (R @ v_local) + wheel_center for k, v_local in self.outer_local.items()}
 
-    def _residual(self, x: np.ndarray, target_wheel_z: float) -> np.ndarray:
+    def _toe_rad_from_rvec(self, rvec: np.ndarray) -> float:
+        R = _rodrigues(rvec)
+        fwd = R @ self.wheel_forward_local
+        return math.atan2(fwd[1], fwd[0] + 1e-15)
+
+    def _residual(
+        self,
+        x: np.ndarray,
+        target_wheel_z: float,
+        steer_target: float = 0.0,
+        steer_mode: str = "none",
+    ) -> np.ndarray:
         rvec = x[0:3]
         wc = x[3:6]
         theta = float(x[6])
+        d = float(x[7])
+
+        tie_inner = self.tie_inner_static + d * self.rack_axis
 
         pg = self._upright_global_points(rvec, wc)
         rk = self._rocker_points(theta)
 
-        res = np.zeros(7, dtype=np.float64)
+        res = np.zeros(8, dtype=np.float64)
         res[0] = _distance(pg["uca"], self.inner["uca_f"]) - self.lengths["uca_f"]
         res[1] = _distance(pg["uca"], self.inner["uca_r"]) - self.lengths["uca_r"]
         res[2] = _distance(pg["lca"], self.inner["lca_f"]) - self.lengths["lca_f"]
         res[3] = _distance(pg["lca"], self.inner["lca_r"]) - self.lengths["lca_r"]
-        res[4] = _distance(pg["tie"], self.inner["tie"]) - self.lengths["tie"]
+        res[4] = _distance(pg["tie"], tie_inner) - self.lengths["tie"]
         res[5] = _distance(pg["pushrod"], rk["pushrod"]) - self.lengths["pushrod"]
         res[6] = wc[2] - target_wheel_z
+
+        # 8th constraint closes the rack DOF: either prescribe rack travel directly,
+        # prescribe the road-wheel (toe) angle, or lock the rack at zero (passive).
+        if steer_mode == "rack":
+            res[7] = d - steer_target
+        elif steer_mode == "angle":
+            toe = self._toe_rad_from_rvec(rvec)
+            res[7] = self.lengths["tie"] * (toe - math.radians(steer_target))
+        else:
+            res[7] = d
         return res
 
-    def _numeric_jacobian(self, x: np.ndarray, target_wheel_z: float, eps: float = 1e-6) -> np.ndarray:
-        r0 = self._residual(x, target_wheel_z)
+    def _numeric_jacobian(
+        self,
+        x: np.ndarray,
+        target_wheel_z: float,
+        steer_target: float = 0.0,
+        steer_mode: str = "none",
+        eps: float = 1e-6,
+    ) -> np.ndarray:
+        r0 = self._residual(x, target_wheel_z, steer_target, steer_mode)
         J = np.zeros((r0.size, x.size), dtype=np.float64)
         for i in range(x.size):
             xp = x.copy()
             xm = x.copy()
             xp[i] += eps
             xm[i] -= eps
-            rp = self._residual(xp, target_wheel_z)
-            rm = self._residual(xm, target_wheel_z)
+            rp = self._residual(xp, target_wheel_z, steer_target, steer_mode)
+            rm = self._residual(xm, target_wheel_z, steer_target, steer_mode)
             J[:, i] = (rp - rm) / (2.0 * eps)
         return J
 
     def solve_for_wheel_travel(
         self,
         wheel_dz: float,
+        steer: float = 0.0,
+        steer_mode: str = "none",
         initial_state: Optional[KinematicState] = None,
         max_iter: int = 80,
         tol: float = 1e-9,
         damping: float = 1e-9,
     ) -> Dict[str, object]:
         """
-        Solve kinematics for target wheel center vertical travel.
+        Solve kinematics for target wheel center vertical travel, optionally with steer.
 
         :param wheel_dz: Desired wheel center z displacement from static (same units as hardpoints)
+        :param steer: Steer command. Interpreted per steer_mode.
+        :param steer_mode: One of:
+            - "none"  : rack locked at zero (passive ride-height only).
+            - "angle" : ``steer`` is the target road-wheel (toe) angle in degrees; the
+                        solver finds the rack travel that achieves it.
+            - "rack"  : ``steer`` is the rack travel directly (same length units as
+                        hardpoints), e.g. shared across an axle for Ackermann.
         :param initial_state: Optional warm-start state; use previous solution for sweep robustness
-        :return: Dict with solved points, rocker angle, damper length, and simple alignment metrics
+        :return: Dict with solved points, rocker angle, damper length, rack travel, and alignment metrics
         """
         target_z = self.wc0[2] + wheel_dz
 
         if initial_state is None:
-            x = np.zeros(7, dtype=np.float64)
+            x = np.zeros(8, dtype=np.float64)
             x[3:6] = self.wc0 + np.array([0.0, 0.0, wheel_dz], dtype=np.float64)
             x[6] = 0.0
+            x[7] = steer if steer_mode == "rack" else 0.0
         else:
-            x = np.zeros(7, dtype=np.float64)
+            x = np.zeros(8, dtype=np.float64)
             x[0:3] = initial_state.rvec
             x[3:6] = initial_state.wheel_center
             x[6] = initial_state.rocker_theta
+            x[7] = getattr(initial_state, "rack_travel", 0.0)
 
         for _ in range(max_iter):
-            r = self._residual(x, target_z)
+            r = self._residual(x, target_z, steer, steer_mode)
             err = float(np.linalg.norm(r))
             if err < tol:
                 break
 
-            J = self._numeric_jacobian(x, target_z)
+            J = self._numeric_jacobian(x, target_z, steer, steer_mode)
             JTJ = J.T @ J + damping * np.eye(x.size)
             step = np.linalg.solve(JTJ, -J.T @ r)
 
@@ -243,7 +294,7 @@ class DoubleWishbonePushrodSolver:
                 x_try = x + alpha * step
                 # Clamp rocker angle to physically reasonable bounds (±90°)
                 x_try[6] = np.clip(x_try[6], -np.pi/2, np.pi/2)
-                r_try = self._residual(x_try, target_z)
+                r_try = self._residual(x_try, target_z, steer, steer_mode)
                 if np.linalg.norm(r_try) < err:
                     x = x_try
                     accepted = True
@@ -258,6 +309,7 @@ class DoubleWishbonePushrodSolver:
         rvec = x[0:3]
         wheel_center = x[3:6]
         theta = float(x[6])
+        rack_travel = float(x[7])
 
         pg = self._upright_global_points(rvec, wheel_center)
         rk = self._rocker_points(theta)
@@ -270,10 +322,15 @@ class DoubleWishbonePushrodSolver:
         camber_deg = math.degrees(math.atan2(wheel_axis_global[2], abs(wheel_axis_global[1]) + 1e-15))
         toe_deg = math.degrees(math.atan2(wheel_forward_global[1], wheel_forward_global[0] + 1e-15))
 
-        residual = self._residual(x, target_z)
+        residual = self._residual(x, target_z, steer, steer_mode)
 
         return {
-            "state": KinematicState(rvec=rvec.copy(), wheel_center=wheel_center.copy(), rocker_theta=theta),
+            "state": KinematicState(
+                rvec=rvec.copy(),
+                wheel_center=wheel_center.copy(),
+                rocker_theta=theta,
+                rack_travel=rack_travel,
+            ),
             "wheel_center": wheel_center,
             "upright_points": pg,
             "rocker_points": rk,
@@ -283,6 +340,7 @@ class DoubleWishbonePushrodSolver:
             "damper_delta": damper_len - self.lengths["damper"],
             "camber_deg": camber_deg,
             "toe_deg": toe_deg,
+            "rack_travel": rack_travel,
             "residual_norm": float(np.linalg.norm(residual)),
             "residual": residual,
         }

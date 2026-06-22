@@ -127,6 +127,7 @@ def _load_suspension_hardpoints_cfg(hardpointPath):
         'pushrod_outer_static': 'PUSHROD_OUTER_STATIC',
         'wheel_axis_local': 'WHEEL_AXIS_LOCAL',
         'wheel_forward_local': 'WHEEL_FORWARD_LOCAL',
+        'rack_axis': 'RACK_AXIS',
     }
 
     rockerKeyMap = {
@@ -159,6 +160,11 @@ def _load_suspension_hardpoints_cfg(hardpointPath):
         for required in ['wheel_center_static','uca_f_inner','uca_r_inner','lca_f_inner','lca_r_inner','tie_inner','uca_outer_static','lca_outer_static','tie_outer_static','pushrod_outer_static']:
             if required not in c:
                 raise ValueError('Missing required key for %s: %s' % (sec, required))
+
+        # Rack travel direction for steering (tie-rod inner motion). Optional; defaults
+        # to vehicle-lateral so a single rack displaces the inner joint in y.
+        if 'rack_axis' not in c:
+            c['rack_axis'] = [0.0, 1.0, 0.0]
 
         corners[corner] = c
 
@@ -264,7 +270,39 @@ def _append_suspension_kinematics(rideHeights, fullCaseSetupDict):
         'rr': 'wheel_rr',
     }
 
-    for corner, travelCol in cornerToTravelCol.items():
+    nPoints = len(rideHeights)
+
+    # Optional front-axle steer input (road-wheel angle in degrees at the reference
+    # wheel, FL). FL and FR share a single rack, so the rack travel that achieves the
+    # commanded FL angle is reused for FR, letting the FR angle (Ackermann) emerge.
+    steerCol = None
+    for cand in ('steer', 'steer_deg', 'steer_angle'):
+        if cand in rideHeights.columns:
+            steerCol = cand
+            break
+    if steerCol is not None:
+        frontSteer = [float(x) for x in rideHeights[steerCol].values]
+        hasSteer = any(abs(s) > 1e-12 for s in frontSteer)
+    else:
+        frontSteer = [0.0] * nPoints
+        hasSteer = False
+
+    referenceCorner = 'fl'
+
+    def _solve_corner_series(solver, travelList, steerList, steerMode):
+        out = []
+        state = None
+        for dz, st in zip(travelList, steerList):
+            solved = solver.solve_for_wheel_travel(
+                dz, steer=st, steer_mode=steerMode, initial_state=state
+            )
+            out.append(solved)
+            state = solved['state']
+        return out
+
+    frontRackTravel = None  # rack travel per point determined from the reference wheel
+
+    for corner in ('fl', 'fr', 'rl', 'rr'):
         if corner not in setup['corners']:
             continue
 
@@ -274,9 +312,16 @@ def _append_suspension_kinematics(rideHeights, fullCaseSetupDict):
             print('\t\tWARNING! Failed to initialize kinematic solver for corner %s: %s' % (corner, e))
             continue
 
-        travel = [float(x) for x in rideHeights[travelCol].values]
+        travel = [float(x) for x in rideHeights[cornerToTravelCol[corner]].values]
+
         try:
-            solved = solver.sweep_wheel_travel(travel)
+            if corner == referenceCorner and hasSteer:
+                solved = _solve_corner_series(solver, travel, frontSteer, 'angle')
+                frontRackTravel = [row['rack_travel'] for row in solved]
+            elif corner == 'fr' and hasSteer and frontRackTravel is not None:
+                solved = _solve_corner_series(solver, travel, frontRackTravel, 'rack')
+            else:
+                solved = _solve_corner_series(solver, travel, [0.0] * nPoints, 'none')
         except Exception as e:
             print('\t\tWARNING! Failed to solve kinematics for corner %s: %s' % (corner, e))
             continue
@@ -286,6 +331,7 @@ def _append_suspension_kinematics(rideHeights, fullCaseSetupDict):
         rideHeights['%s_damper_delta' % (corner)] = [row['damper_delta'] for row in solved]
         rideHeights['%s_rocker_deg' % (corner)] = [row['rocker_theta_deg'] for row in solved]
         rideHeights['%s_kin_residual' % (corner)] = [row['residual_norm'] for row in solved]
+        rideHeights['%s_rack_travel' % (corner)] = [row['rack_travel'] for row in solved]
 
         rideHeights['%s_wc_x' % (corner)] = [row['wheel_center'][0] for row in solved]
         rideHeights['%s_wc_y' % (corner)] = [row['wheel_center'][1] for row in solved]
@@ -996,45 +1042,41 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
             'damper_morph_factor': morph_factor,
         }
     
-    # TIE: fixed at chassis (TIE_INNER), moves with wheel (TIE_OUTER_STATIC)
-    # Compute rotation from linkage geometry change
-    if 'tie_inner' in hardpoints and 'tie_outer_static' in hardpoints:
-        tieInner = np.array(hardpoints['tie_inner'], dtype=np.float64)
-        tieOuter = np.array(hardpoints['tie_outer_static'], dtype=np.float64)
-        
-        if 'WHEEL' in compTransforms:
-            wheelTrans = np.array(compTransforms['WHEEL']['translation'])
-            tieNew = tieOuter + wheelTrans
-            
-            # Compute rotation from linkage vector change
-            v_static = tieOuter - tieInner
-            v_current = tieNew - tieInner
-            
-            # Normalize vectors
-            v_static_norm = v_static / (np.linalg.norm(v_static) + 1e-15)
-            v_current_norm = v_current / (np.linalg.norm(v_current) + 1e-15)
-            
-            # Rotation axis
-            rot_axis = np.cross(v_static_norm, v_current_norm)
-            rot_axis_norm = np.linalg.norm(rot_axis)
-            
-            # Rotation angle
-            cos_angle = np.dot(v_static_norm, v_current_norm)
-            cos_angle = np.clip(cos_angle, -1.0, 1.0)
-            rot_angle = np.arccos(cos_angle)
-            
-            # Convert to rotation vector
-            if rot_axis_norm > 1e-15:
-                rvec = (rot_axis / rot_axis_norm) * rot_angle
-            else:
-                rvec = np.array([0.0, 0.0, 0.0])
-            
-            compTransforms['TIE'] = {
-                'translation': [0.0, 0.0, 0.0],
-                'rotation_rvec': rvec.tolist(),
-                'pivot': tieInner.tolist(),
-            }
-    
+    # TIE: inner (rack end) translates with rack travel; outer is rigid on the upright
+    # and follows the full wheel pose. With the rack-driven solver the tie length is
+    # preserved, so the link is reconstructed exactly as a rotation about the inner end.
+    if 'tie_inner' in hardpoints and 'tie_outer_static' in hardpoints and 'WHEEL' in compTransforms:
+        tieInnerStatic = np.array(hardpoints['tie_inner'], dtype=np.float64)
+        tieOuterStatic = np.array(hardpoints['tie_outer_static'], dtype=np.float64)
+
+        staticWC = np.array(compTransforms['WHEEL']['pivot'], dtype=np.float64)
+        wheelRvec = np.array(compTransforms['WHEEL']['rotation_rvec'], dtype=np.float64)
+        wheelTrans = np.array(compTransforms['WHEEL']['translation'], dtype=np.float64)
+
+        # Tie outer rigidly attached to the upright -> apply full wheel pose.
+        tieOuterCurrent = _rotate_point_about_pivot(tieOuterStatic, staticWC, wheelRvec) + wheelTrans
+
+        # Tie inner (rack end) slides along the rack axis by the solved rack travel.
+        rackAxis = np.array(hardpoints.get('rack_axis', [0.0, 1.0, 0.0]), dtype=np.float64)
+        rackNorm = np.linalg.norm(rackAxis)
+        if rackNorm > 1e-15:
+            rackAxis = rackAxis / rackNorm
+        else:
+            rackAxis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        rack_col = '%s_rack_travel' % corner
+        rackTravel = float(row[rack_col]) if rack_col in rideHeights.columns else 0.0
+        tieInnerCurrent = tieInnerStatic + rackTravel * rackAxis
+
+        v_static = tieOuterStatic - tieInnerStatic
+        v_current = tieOuterCurrent - tieInnerCurrent
+        rvec = _rvec_from_vectors(v_static, v_current)
+
+        compTransforms['TIE'] = {
+            'translation': (tieInnerCurrent - tieInnerStatic).tolist(),
+            'rotation_rvec': rvec.tolist(),
+            'pivot': tieInnerStatic.tolist(),
+        }
+
     return compTransforms
 
 
@@ -1143,13 +1185,17 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
                     continue
                 compTransforms = _compute_component_transforms(kinSetup, corner, row, rideHeights)
                 if 'WHEEL' in compTransforms:
-                    tVec = compTransforms['WHEEL']['translation']
+                    wheelTransform = compTransforms['WHEEL']
+                    tVec = wheelTransform['translation']
+                    wheelRvec = wheelTransform.get('rotation_rvec', None)
+                    wheelPivot = wheelTransform.get('pivot', None)
                     for geom in geomDict.keys():
                         if geom in transformedGeoms:
                             continue
                         geomFilePath = 'constant/triSurface/%s' % (geom)
                         if corner in geom.lower():
-                            transformParts(geom, geomFilePath, tVec, childName)
+                            transformParts(geom, geomFilePath, tVec, childName,
+                                           rotation_rvec=wheelRvec, pivot=wheelPivot)
                             transformedGeoms.add(geom)
 
         # copy all untouched files
@@ -1184,18 +1230,23 @@ def transformBlockMesh(fullCaseSetupDict):
     
    
 
-def transformParts(geom,geomFilePath, transformAmount,childCaseName):
+def transformParts(geom,geomFilePath, transformAmount,childCaseName, rotation_rvec=None, pivot=None):
     if isinstance(transformAmount, (list, tuple, np.ndarray)):
         tVec = [float(transformAmount[0]), float(transformAmount[1]), float(transformAmount[2])]
     else:
         tVec = [0.0, 0.0, float(transformAmount)]
 
-    print('\t\t\t\tMoving %s by translation [%s, %s, %s]' % (geom,tVec[0],tVec[1],tVec[2])) 
+    if rotation_rvec is not None and float(np.linalg.norm(rotation_rvec)) > 1e-15:
+        print('\t\t\t\tMoving %s by translation [%s, %s, %s] and rotation_rvec [%s, %s, %s]' %
+              (geom, tVec[0], tVec[1], tVec[2], rotation_rvec[0], rotation_rvec[1], rotation_rvec[2]))
+    else:
+        print('\t\t\t\tMoving %s by translation [%s, %s, %s]' % (geom,tVec[0],tVec[1],tVec[2]))
     # dummy transform
     try:
         outputPath = os.path.join(childCaseName,'constant','triSurface',geom)
         if not 'dummy' in geom:
-            transformGeometryPreservePID(geomFilePath,outputFile=outputPath,translation=tVec)
+            transformGeometryPreservePID(geomFilePath,outputFile=outputPath,translation=tVec,
+                                         rotation_rvec=rotation_rvec,pivot=pivot)
         else:
             print('')
         print('\t\t\t\t\ttransform OK!')
@@ -1205,7 +1256,7 @@ def transformParts(geom,geomFilePath, transformAmount,childCaseName):
 
     
     #copyWithMkdir(geomFilePath, outputPath) #copy the geometry to the new case directory with the same name, but transformed position
-def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translation=None, scale=None, morphing_dict=None):
+def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translation=None, scale=None, morphing_dict=None, rotation_rvec=None, pivot=None):
     '''
     Transform geometry files (OBJ or STL, with or without .gz compression) while preserving
     PID naming (groups in OBJ, solid names in STL).
@@ -1220,6 +1271,9 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
     :param translation: List/array [dx, dy, dz] for translation offsets
     :param scale: Scalar or [sx, sy, sz] for scaling
     :param morphing_dict: Dict mapping vertex indices to displacement vectors
+    :param rotation_rvec: Optional axis-angle rotation vector [rx, ry, rz] in radians,
+        applied about ``pivot`` before the euler ``rotation`` and ``translation``
+    :param pivot: Optional [px, py, pz] pivot point for ``rotation_rvec`` (defaults to origin)
     :return: Path to output file
     '''
     print(f'\tTransforming {inputFile} -> {outputFile} (preserving PIDs)...')
@@ -1249,6 +1303,12 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
     
     outIsGz = outputFile.lower().endswith('.gz')
     
+    # Precompute axis-angle rotation matrix and pivot for rotation_rvec support.
+    rvecMatrix = None
+    if rotation_rvec is not None and float(np.linalg.norm(rotation_rvec)) > 1e-15:
+        rvecMatrix = _rodrigues_matrix_from_rvec(rotation_rvec)
+    pivotArr = np.array(pivot, dtype=np.float64) if pivot is not None else None
+    
     # ---- Build transformation function for a vertex ----
     def transformVertex(v, idx=None):
         v = np.array(v, dtype=np.float64)
@@ -1259,6 +1319,11 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
                 v = v * scale
             else:
                 v = v * np.array(scale)
+        if rvecMatrix is not None:
+            if pivotArr is not None:
+                v = rvecMatrix @ (v - pivotArr) + pivotArr
+            else:
+                v = rvecMatrix @ v
         if rotation is not None:
             rx = rotation.get('x', 0)
             ry = rotation.get('y', 0)
@@ -2277,6 +2342,49 @@ def calcRotaVel(inletMag,radius):
     rotaVel = inletMag/radius
     
     return rotaVel
+
+def calcLoadedRadius(xcenter, ycenter, zcenter, fullCaseSetupDict):
+    '''
+    Effective rolling radius for the rotatingWallVelocity BC = vertical distance from the wheel center
+    (axle) down to the GROUND PLANE at the contact patch directly beneath the axle.
+
+    The radius is measured to the ground plane, not to the tyre geometry. The tyre mesh penetrates the
+    ground and is cut at the floor by snappyHexMesh, so the actual rolling-wall contact patch lies on the
+    ground plane (z_ground), not at the lowest tyre vertex (which sits below the road). The BC sets the
+    tyre surface velocity at that contact point to the road speed, so omega = V / R with R = z_axle -
+    z_ground. This correctly makes R shrink when the suspension compresses (axle drops, penetration
+    increases) and grow when it extends, so the effective rolling radius genuinely differs between
+    ride-height points.
+
+    The tunnel floor passes through REFCOR (heave-corrected per ride-height child case) and is rotated
+    about REFCOR by roll (about x) then pitch (about y), matching transformBlockmeshPoints. Its normal is
+        n = Ry(pitch) @ Rx(roll) @ (0,0,1) = (sin(pitch)cos(roll), -sin(roll), cos(pitch)cos(roll)).
+    The ground height under the axle is found by intersecting the vertical line through (xcenter, ycenter)
+    with that plane:
+        z_ground = REFCOR_z - (n_x*(xcenter-REFCOR_x) + n_y*(ycenter-REFCOR_y)) / n_z
+    which reduces to z_ground = REFCOR_z for zero pitch/roll.
+
+    :param xcenter, ycenter, zcenter: wheel center / axle coordinates (m)
+    :param fullCaseSetupDict: case setup dict providing BC_SETUP REFCOR, DOMAIN_PITCH, DOMAIN_ROLL
+    :return: effective rolling radius (m)
+    '''
+    refcor = fullCaseSetupDict['BC_SETUP']['REFCOR']
+    refX = float(refcor[0])
+    refY = float(refcor[1])
+    refZ = float(refcor[2])
+    pitch = math.radians(float(fullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'][0]))
+    roll = math.radians(float(fullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'][0]))
+
+    nx = math.sin(pitch) * math.cos(roll)
+    ny = -math.sin(roll)
+    nz = math.cos(pitch) * math.cos(roll)
+
+    #ground z directly below the axle (vertical line through xcenter, ycenter intersecting the floor plane)
+    groundZ = refZ - (nx * (xcenter - refX) + ny * (ycenter - refY)) / nz
+    radius = zcenter - groundZ
+
+    return radius
+
 def getBoundingBox(geomFile):
     command = 'surfaceCheck -outputThreshold 0 constant/triSurface/%s' % (geomFile)
     searchType = 'contains'

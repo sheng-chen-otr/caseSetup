@@ -56,12 +56,12 @@ To run a ride-height study, set \codeword{RUN_RIDE_HEIGHT} to \codeword{True} an
 \subsection{The Ride-Height File}
 The ride-height file is a comma separated table where each row is one suspension state. The corner columns are the vertical wheel displacements in the unit set by \codeword{RH_UNIT}.
 \begin{lstlisting}
-    point,fl,fr,rl,rr,yaw
-    1,0,0,0,0,0
-    2,-10,-10,0,0,0
-    3,-20,-20,0,0,0
-    4,0,-40,10,-30,0
-    5,-10,-10,-10,-10,0
+    point,fl,fr,rl,rr,yaw,steer
+    1,0,0,0,0,0,0
+    2,-10,-10,0,0,0,5
+    3,-20,-20,0,0,0,0
+    4,0,-40,10,-30,0,0
+    5,-10,-10,-10,-10,0,0
 \end{lstlisting}
 \begin{itemize}
     \item \codeword{point} [\codeword{int}] - unique index for the state, referenced by \codeword{RUN_RH_POINTS} and used to name the child case, for example \codeword{001\_2} (\codeword{int})
@@ -69,7 +69,18 @@ The ride-height file is a comma separated table where each row is one suspension
     \item \codeword{fl}, \codeword{fr}, \codeword{rl}, \codeword{rr} [[\codeword{float}]] - front-left, front-right, rear-left and rear-right wheel vertical displacements, negative values typically indicate compression (bump) and positive values rebound (droop) (\codeword{float})
 
     \item \codeword{yaw} [[\codeword{float,deg}]] - vehicle yaw angle for that state, \codeword{0} for straight-line (\codeword{float})
+
+    \item \codeword{steer} [[\codeword{float,deg}]] - optional front road-wheel steering angle for that state, see Section \codeword{Steering}, \codeword{0} or omitted for no steer (\codeword{float})
 \end{itemize}
+
+\subsection{Steering}
+When the kinematic solver is enabled, an optional \codeword{steer} column in the ride-height file drives the front suspension through its steering rack. The value is the road-wheel angle, in degrees, requested at the reference wheel (the front-left). \codeword{caseSetup} solves for the rack travel that produces that angle at the front-left, then applies the same rack travel to the front-right. Because both front wheels share one rack but sit at different ride heights, the front-right angle is solved from the geometry rather than copied, so the natural Ackermann difference between the two wheels appears automatically. The rear wheels are not steered.
+
+The steer is a true rack motion, not a rigid wheel rotation. The tie rod inner (rack) joint slides along the rack axis, the tie rod outer joint follows the upright, and the tie rod length is preserved. The wheel, upright and tie rod therefore move as a real linkage, and the resulting wheel pose feeds the same per-component transforms used for ride height.
+
+The rack pushes the tie rod inner joint along the lateral (\codeword{y}) direction by default. This can be overridden per corner with the optional \codeword{RACK_AXIS} key in the hardpoint file. If the \codeword{steer} column is absent or all zero, the solver behaves exactly as a passive ride-height study.
+
+\textbf{NOTE:} The \codeword{steer} value is the absolute road-wheel angle at the front-left, not an offset added to the static toe. A positive value steers the front-left wheel so its forward direction rotates toward \codeword{+y}, flip the sign in the ride-height file to steer the other way.
 
 \subsection{Suspension Hardpoint File}
 When the kinematic solver is enabled, the geometry of each corner's linkage is described in the hardpoint file pointed to by \codeword{HARDPOINT_FILE}. A template is provided at \codeword{rideHeightUtils/suspensionHardpoints_template.cfg}. It uses the same format as the \codeword{caseSetup} file, with one section per corner, \codeword{[SUSP_FL]}, \codeword{[SUSP_FR]}, \codeword{[SUSP_RL]} and \codeword{[SUSP_RR]}. Each corner section looks like this:
@@ -125,6 +136,8 @@ All coordinates are given in the global coordinate system, in the units implied 
     \item \codeword{ROCKER_DAMPER_CHASSIS} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - the chassis side damper mount (\codeword{x} \codeword{y} \codeword{z})
 
     \item \codeword{WHEEL_AXIS_LOCAL}, \codeword{WHEEL_FORWARD_LOCAL} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - local spin axis and forward direction of the wheel, used to resolve camber and toe (\codeword{x} \codeword{y} \codeword{z})
+
+    \item \codeword{RACK_AXIS} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - optional steering rack travel direction, the tie rod inner joint slides along this axis when a \codeword{steer} angle is requested, defaults to lateral \codeword{0 1 0} if omitted (\codeword{x} \codeword{y} \codeword{z})
 \end{itemize}
 
 \subsection{Component PID Keywords}
@@ -194,7 +207,7 @@ For each ride-height point and corner the solver produces a transform for every 
 
     \item \codeword{DAMPER} - inherits the motion of the rocker and stretches by the damper stroke, about the rocker pivot
 
-    \item \codeword{TIE} - rotates as its outer end follows the wheel, about the tie rod inner mount
+    \item \codeword{TIE} - rotates as its outer end follows the wheel, about the tie rod inner mount, and when steering the inner end slides along the rack axis
 \end{itemize}
 For every transformed geometry a log is written next to the output file, \codeword{*.susp\_pid\_transform.json} and \codeword{*.susp\_pid\_transform.csv}, listing each part, the keyword it matched, and the applied translation and rotation. Inspect these to confirm the expected parts were moved.
 
