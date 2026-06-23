@@ -440,9 +440,9 @@ point,fl,fr,rl,rr,yaw
 3,0.00,-0.08,0.08,0.00,5.0       # Right turn + roll
 ```
 
-Run with `--rideHeightMode`:
+Run with `--rideHeightMode` (only for use by caseSetup itself internally!):
 ```bash
-python caseSetup.py -s otr --rideHeightMode
+python caseSetup.py --rideHeightMode
 ```
 
 Creates child cases for each point with automatically deformed suspension geometry.
