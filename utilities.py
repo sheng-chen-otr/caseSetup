@@ -895,7 +895,37 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
             + k * np.dot(k, v) * (1.0 - np.cos(theta))
         )
         return pivot + v_rot
-    
+
+    def _rvec_about_axis_to_target(axisPoint, axisDir, p_from, p_to):
+        '''
+        Rotation vector about a fixed hinge LINE (passing through ``axisPoint`` with
+        direction ``axisDir``) that swings ``p_from`` to best align with ``p_to``.
+        Positions are measured relative to ``axisPoint`` (a point ON the line) and only
+        their components perpendicular to the line participate, so every point on the
+        line (e.g. the chassis bushings of an A-arm) stays exactly fixed and the swept
+        angle is the true hinge angle.
+        '''
+        axis = np.asarray(axisDir, dtype=np.float64)
+        n = np.linalg.norm(axis)
+        if n <= 1e-15:
+            return np.array([0.0, 0.0, 0.0])
+        axis = axis / n
+        ap0 = np.asarray(axisPoint, dtype=np.float64)
+        a = np.asarray(p_from, dtype=np.float64) - ap0
+        b = np.asarray(p_to, dtype=np.float64) - ap0
+        a_perp = a - np.dot(a, axis) * axis
+        b_perp = b - np.dot(b, axis) * axis
+        na = np.linalg.norm(a_perp)
+        nb = np.linalg.norm(b_perp)
+        if na <= 1e-15 or nb <= 1e-15:
+            return np.array([0.0, 0.0, 0.0])
+        a_hat = a_perp / na
+        b_hat = b_perp / nb
+        cos_t = np.clip(np.dot(a_hat, b_hat), -1.0, 1.0)
+        sin_t = np.dot(np.cross(a_hat, b_hat), axis)
+        theta = math.atan2(sin_t, cos_t)
+        return axis * theta
+
     # Wheel: follows wheel center and rotates with camber/toe from kinematic solver
     wcx, wcy, wcz = '%s_wc_x' % corner, '%s_wc_y' % corner, '%s_wc_z' % corner
     if all(k in rideHeights.columns for k in [wcx, wcy, wcz]):
@@ -916,8 +946,11 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
             'pivot': staticWC.tolist(),
         }
     
-    # UCA & LCA: both constrained at chassis (fixed) and wheel (moves with wheel center)
-    # Compute rotation from linkage geometry change
+    # UCA & LCA: rigid A-arms hinged on the line through their two chassis bushings.
+    # They can ONLY rotate about that hinge line, so the bushings stay fixed and the
+    # outer ball joint swings to follow the wheel/upright. The target outer position is
+    # taken from the FULL wheel pose (rotation about the static wheel center + wheel
+    # translation) so the arm stays connected to the upright under camber and steer.
     for compType in ['UCA', 'LCA']:
         inner_f_key = '%s_f_inner' % compType.lower()
         inner_r_key = '%s_r_inner' % compType.lower()
@@ -929,29 +962,26 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
             innerR = np.array(hardpoints[inner_r_key], dtype=np.float64)
             outerStatic = np.array(hardpoints[outer_key], dtype=np.float64)
             
-            # Compute chassis mounting point as midpoint of F and R inner points
-            innerCenter = (innerF + innerR) / 2.0
-            
-            # New outer position: move with wheel
+            # New outer ball-joint position from the full wheel pose (consistent with
+            # how the upright/WHEEL transform moves the same joint).
             if 'WHEEL' in compTransforms:
-                wheelTrans = np.array(compTransforms['WHEEL']['translation'])
-                outerNew = outerStatic + wheelTrans
+                wheelPivot = np.array(compTransforms['WHEEL']['pivot'], dtype=np.float64)
+                wheelRvecArr = np.array(compTransforms['WHEEL']['rotation_rvec'], dtype=np.float64)
+                wheelTrans = np.array(compTransforms['WHEEL']['translation'], dtype=np.float64)
+                outerNew = _rotate_point_about_pivot(outerStatic, wheelPivot, wheelRvecArr) + wheelTrans
             else:
                 outerNew = outerStatic
             
-            # Compute rotation from linkage vector change
-            # Static linkage vector: from chassis point to wheel attachment
-            v_static = outerStatic - innerCenter
-            # Current linkage vector after wheel moves
-            v_current = outerNew - innerCenter
+            # Hinge axis is the line through the two chassis bushings; rotate about it by
+            # the angle that best carries the outer joint from its static to new position.
+            hingeAxis = innerR - innerF
+            rvec = _rvec_about_axis_to_target(innerF, hingeAxis, outerStatic, outerNew)
             
-            rvec = _rvec_from_vectors(v_static, v_current)
-            
-            # Use inner center (chassis point) as pivot for rotation
+            # Pivot is a real point on the hinge axis (a bushing), so both bushings stay fixed.
             compTransforms[compType] = {
                 'translation': [0.0, 0.0, 0.0],
                 'rotation_rvec': rvec.tolist(),
-                'pivot': innerCenter.tolist(),
+                'pivot': innerF.tolist(),
             }
     
     # ROCKER: rotates about ROCKER_PIVOT
@@ -986,8 +1016,20 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
         rockerTrans = np.array(compTransforms['ROCKER']['translation'], dtype=np.float64)
         pushrodInnerCurrent = _rotate_point_about_pivot(pushrodInnerStatic, rockerPivot, rockerRvec) + rockerTrans
 
-        wheelTrans = np.array(compTransforms['WHEEL']['translation'], dtype=np.float64)
-        pushrodOuterCurrent = pushrodOuterStatic + wheelTrans
+        # Pushrod outer end is rigidly attached to the UPPER CONTROL ARM, so it follows
+        # the UCA's rigid hinge motion (rotation about its chassis-bushing line) and NOT
+        # the upright. Using the upright/wheel pose would inject the steer (kingpin)
+        # rotation into the outer end, producing a spurious fore/aft (x) shift.
+        if 'UCA' in compTransforms:
+            ucaPivot = np.array(compTransforms['UCA']['pivot'], dtype=np.float64)
+            ucaRvec = np.array(compTransforms['UCA']['rotation_rvec'], dtype=np.float64)
+            ucaTrans = np.array(compTransforms['UCA']['translation'], dtype=np.float64)
+            pushrodOuterCurrent = _rotate_point_about_pivot(pushrodOuterStatic, ucaPivot, ucaRvec) + ucaTrans
+        else:
+            wheelPivot = np.array(compTransforms['WHEEL']['pivot'], dtype=np.float64)
+            wheelRvec = np.array(compTransforms['WHEEL']['rotation_rvec'], dtype=np.float64)
+            wheelTrans = np.array(compTransforms['WHEEL']['translation'], dtype=np.float64)
+            pushrodOuterCurrent = _rotate_point_about_pivot(pushrodOuterStatic, wheelPivot, wheelRvec) + wheelTrans
 
         v_static = pushrodOuterStatic - pushrodInnerStatic
         v_current = pushrodOuterCurrent - pushrodInnerCurrent
@@ -1564,6 +1606,10 @@ def _build_vertex_transformer(cfg, pivot):
     
     # Use pivot from config if present, otherwise use parameter (allows per-regex pivot override)
     pivot = cfg.get('pivot', pivot)
+    # A None pivot (e.g. static/unmatched PID with no override) must default to the origin,
+    # otherwise np.array(None, dtype=float64) is NaN and corrupts the whole block.
+    if pivot is None:
+        pivot = [0.0, 0.0, 0.0]
 
     tx, ty, tz = translation
     rx = float(rotation.get('x', 0.0))
@@ -1710,6 +1756,8 @@ def _build_block_rigid_transform(cfg, pivot):
     rotation = cfg.get('rotation', {'x': 0.0, 'y': 0.0, 'z': 0.0})
     rotationRvec = cfg.get('rotation_rvec', None)
     pivot = cfg.get('pivot', pivot)
+    if pivot is None:
+        pivot = [0.0, 0.0, 0.0]
 
     rx = math.radians(float(rotation.get('x', 0.0)))
     ry = math.radians(float(rotation.get('y', 0.0)))
@@ -1896,6 +1944,11 @@ def transformGeometryByPIDRegex(
         vertexToPid = {}
         for pid in pidNames:
             cfg = pidToCfg.get(pid, None)
+            # Unmatched PIDs (no transform config) are static: leave their vertices as
+            # identity. Assigning them a signature would route them through the rigid
+            # transform with pivot=None -> NaN, corrupting static parts (arb, bc, ...).
+            if cfg is None:
+                continue
             sig = _canonical_transform_signature(cfg)
             for vIdx in pidVertexRefs[pid]:
                 if vIdx in vertexToSignature and vertexToSignature[vIdx] != sig:
