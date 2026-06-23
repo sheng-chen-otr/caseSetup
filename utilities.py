@@ -1691,6 +1691,64 @@ def _build_vertex_transformer(cfg, pivot):
     return transform_vertex
 
 
+def _build_block_rigid_transform(cfg, pivot):
+    '''
+    Build the (R, pivot, translation) for a pure rigid transform (rotation about pivot + translation),
+    matching the per-vertex composition order in _build_vertex_transformer:
+        v' = Rz @ Ry @ Rx @ Rrvec @ (v - pivot) + pivot + translation.
+    Returns (R, p, d) as numpy arrays. Only valid when cfg has no morph / morphing_dict.
+    '''
+    if cfg is None:
+        cfg = {}
+
+    translation = cfg.get('translation', [0.0, 0.0, 0.0])
+    rotation = cfg.get('rotation', {'x': 0.0, 'y': 0.0, 'z': 0.0})
+    rotationRvec = cfg.get('rotation_rvec', None)
+    pivot = cfg.get('pivot', pivot)
+
+    rx = math.radians(float(rotation.get('x', 0.0)))
+    ry = math.radians(float(rotation.get('y', 0.0)))
+    rz = math.radians(float(rotation.get('z', 0.0)))
+
+    R = np.eye(3)
+    if rotationRvec is not None:
+        R = _rodrigues_matrix_from_rvec(rotationRvec) @ R
+    if rx != 0.0:
+        cx, sx = math.cos(rx), math.sin(rx)
+        R = np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]]) @ R
+    if ry != 0.0:
+        cy, sy = math.cos(ry), math.sin(ry)
+        R = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]]) @ R
+    if rz != 0.0:
+        cz, sz = math.cos(rz), math.sin(rz)
+        R = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]]) @ R
+
+    p = np.array(pivot, dtype=np.float64)
+    tx, ty, tz = translation
+    d = np.array([tx, ty, tz], dtype=np.float64)
+    return R, p, d
+
+
+def _transform_vertex_block(cfg, pivot, block, globalIndices):
+    '''
+    Transform an (M, 3) block of vertices that all share the same transform config.
+
+    For pure rigid transforms (no morph / morphing_dict) the whole block is transformed with a single
+    vectorized matrix multiply. When per-vertex morphing is present, falls back to the per-vertex
+    transformer (built once for the block) so morph/morphing_dict semantics are preserved exactly.
+    '''
+    hasMorph = cfg is not None and (cfg.get('morph', None) is not None or cfg.get('morphing_dict', None) is not None)
+    if not hasMorph:
+        R, p, d = _build_block_rigid_transform(cfg, pivot)
+        return (block - p) @ R.T + p + d
+
+    fn = _build_vertex_transformer(cfg, pivot)
+    out = np.empty_like(block)
+    for k in range(block.shape[0]):
+        out[k] = fn(block[k], int(globalIndices[k]))
+    return out
+
+
 def _write_pid_transform_log(logBasePath, logData):
     jsonPath = f'{logBasePath}.json'
     csvPath = f'{logBasePath}.csv'
@@ -1829,30 +1887,43 @@ def transformGeometryByPIDRegex(
 
         vertexToSignature = {}
         vertexToCfg = {}
+        vertexToPid = {}
         for pid in pidNames:
             cfg = pidToCfg.get(pid, None)
             sig = _canonical_transform_signature(cfg)
             for vIdx in pidVertexRefs[pid]:
                 if vIdx in vertexToSignature and vertexToSignature[vIdx] != sig:
+                    prevPid = vertexToPid.get(vIdx, '<unknown>')
                     raise ValueError(
                         f'Vertex {vIdx} is shared by multiple PIDs with different transforms. '
-                        'Cannot preserve original indexing without splitting vertices.'
+                        'Cannot preserve original indexing without splitting vertices. '
+                        f'Offending PID pair: "{prevPid}" [transform={vertexToSignature[vIdx]}] '
+                        f'vs "{pid}" [transform={sig}].'
                     )
                 vertexToSignature[vIdx] = sig
                 vertexToCfg[vIdx] = cfg
+                vertexToPid[vIdx] = pid
 
-        transformed = [np.array(v, dtype=np.float64) for v in vertices]
-        for i in range(len(transformed)):
-            cfg = vertexToCfg.get(i, None)
-            fn = _build_vertex_transformer(cfg, pivot)
-            transformed[i] = fn(transformed[i], i)
+        # Vectorized transform: group vertices by transform signature and apply each transform to the
+        # whole block at once (single numpy matrix multiply per group) instead of building a closure and
+        # calling it per vertex. Unreferenced vertices (no signature) keep identity.
+        transformedArr = np.array(vertices, dtype=np.float64) if len(vertices) > 0 else np.zeros((0, 3), dtype=np.float64)
+
+        sigToIndices = {}
+        for vIdx, sig in vertexToSignature.items():
+            sigToIndices.setdefault(sig, []).append(vIdx)
+
+        for sig, idxList in sigToIndices.items():
+            idxArr = np.array(idxList, dtype=np.int64)
+            cfg = vertexToCfg[idxList[0]]
+            transformedArr[idxArr] = _transform_vertex_block(cfg, pivot, transformedArr[idxArr], idxArr)
 
         outLines = []
         vCounter = 0
         for line in lines:
             stripped = line.strip()
             if stripped.startswith('v '):
-                vv = transformed[vCounter]
+                vv = transformedArr[vCounter]
                 outLines.append(f'v {vv[0]:.6f} {vv[1]:.6f} {vv[2]:.6f}\n')
                 vCounter += 1
             else:
@@ -1908,6 +1979,8 @@ def transformGeometryByPIDRegex(
         facetPlaceholderIdx = None
         globalVertexIdx = 0
         pidVertexCounter = {pid: 0 for pid in pidNames}
+        # Cache one transformer per PID instead of rebuilding the closure for every vertex.
+        pidTransformerCache = {}
 
         for line in lines:
             stripped = line.strip()
@@ -1930,8 +2003,10 @@ def transformGeometryByPIDRegex(
                     raise ValueError('Encountered STL vertex line outside of a solid block.')
                 parts = stripped.split()
                 v = np.array([float(parts[1]), float(parts[2]), float(parts[3])], dtype=np.float64)
-                cfg = pidToCfg.get(currentPid, None)
-                fn = _build_vertex_transformer(cfg, pivot)
+                fn = pidTransformerCache.get(currentPid)
+                if fn is None:
+                    fn = _build_vertex_transformer(pidToCfg.get(currentPid, None), pivot)
+                    pidTransformerCache[currentPid] = fn
                 vNew = fn(v, globalVertexIdx)
                 globalVertexIdx += 1
                 pidVertexCounter[currentPid] = pidVertexCounter.get(currentPid, 0) + 1
