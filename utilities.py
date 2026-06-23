@@ -484,6 +484,32 @@ def createRideHeightCases(rideHeights, fullCaseSetupDict):
     #baseREFCOR = float(fullCaseSetupDict['BC_SETUP']['REFCOR'][0])
     currentREFCOR = fullCaseSetupDict['BC_SETUP']['REFCOR']
     SIM_SYM = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM']
+
+    # SRF cornering: when enabled, the ride-height map drives the corner radius (and optionally the
+    # turn direction) per point, so each ride-height attitude is paired with its matching corner. The
+    # radius/direction are taken from optional ride-height columns; missing/invalid values fall back to
+    # the base [CORNERING_SETUP] values. Detected once here (mirrors the optional 'steer' column).
+    runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
+                    fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
+    cornerRadiusCol = None
+    cornerDirCol = None
+    if runCornering:
+        for cand in ('corner_radius', 'cornerradius', 'corner_r', 'radius'):
+            if cand in rideHeights.columns:
+                cornerRadiusCol = cand
+                break
+        for cand in ('corner_dir', 'cornerdir', 'turn_dir', 'direction'):
+            if cand in rideHeights.columns:
+                cornerDirCol = cand
+                break
+        if cornerRadiusCol is None:
+            print("\t\tWARNING! RUN_CORNERING is True but no corner radius column (corner_radius) was "
+                  "found in the ride height file; all ride-height cases will use the base "
+                  "CORNER_RADIUS = %s." % (fullCaseSetupDict['CORNERING_SETUP']['CORNER_RADIUS'][0]))
+        else:
+            print("\t\tCornering enabled: per-point corner radius taken from ride height column '%s'."
+                  % (cornerRadiusCol))
+
     for idx, row in rideHeights.iterrows():
         
         if fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RH_POINTS'][0] == '':
@@ -509,7 +535,31 @@ def createRideHeightCases(rideHeights, fullCaseSetupDict):
         updatedFullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'] = baseTunnelRoll + float(row['tunnel_roll'])
         
         updatedFullCaseSetupDict['BC_SETUP']['REFCOR'] = [currentREFCOR[0], currentREFCOR[1], str(float(currentREFCOR[2]) + row['tunnel_heave'])]
-        
+
+        #per-point corner radius / direction from the ride-height map (cornering only)
+        if runCornering:
+            if cornerRadiusCol is not None:
+                rawRadius = row[cornerRadiusCol]
+                try:
+                    radiusVal = float(rawRadius)
+                    if radiusVal <= 0:
+                        raise ValueError('corner radius must be positive')
+                    updatedFullCaseSetupDict['CORNERING_SETUP']['CORNER_RADIUS'] = [str(radiusVal)]
+                except Exception:
+                    print('\t\t\tWARNING! Point %s has invalid corner radius %r; using base '
+                          'CORNER_RADIUS = %s.' % (int(row['point']), rawRadius,
+                          fullCaseSetupDict['CORNERING_SETUP']['CORNER_RADIUS'][0]))
+            if cornerDirCol is not None:
+                rawDir = str(row[cornerDirCol]).strip().lower()
+                if rawDir in ('left', 'right'):
+                    updatedFullCaseSetupDict['CORNERING_SETUP']['CORNER_DIR'] = [rawDir]
+                elif rawDir not in ('', 'nan'):
+                    print('\t\t\tWARNING! Point %s has invalid corner direction %r; using base '
+                          'CORNER_DIR = %s.' % (int(row['point']), rawDir,
+                          fullCaseSetupDict['CORNERING_SETUP']['CORNER_DIR'][0]))
+            #fail fast with a clear per-point message if the resolved radius is too small for the box
+            checkCorneringDomain(updatedFullCaseSetupDict)
+
         writeToRHCaseSetup(updatedFullCaseSetupDict,newCaseSetupPath)
         rideHeights.loc[idx, 'caseName'] = newCaseName
         updatedRideHeights = pd.concat([updatedRideHeights, rideHeights.loc[idx].to_frame().T], ignore_index=True)
@@ -2517,6 +2567,110 @@ def calcLoadedRadius(xcenter, ycenter, zcenter, fullCaseSetupDict):
     radius = zcenter - groundZ
 
     return radius
+
+def corneringAxis(fullCaseSetupDict):
+    '''
+    Vertical (tilted) rotation axis for SRF cornering, identical to the ride-height ground normal so the
+    single rotating frame stays aligned with the floor when the domain is pitched/rolled:
+        n = Ry(pitch) @ Rx(roll) @ (0,0,1) = (sin(pitch)cos(roll), -sin(roll), cos(pitch)cos(roll))
+
+    :param fullCaseSetupDict: case setup dict providing BC_SETUP DOMAIN_PITCH, DOMAIN_ROLL
+    :return: unit numpy axis vector
+    '''
+    pitch = math.radians(float(fullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'][0]))
+    roll = math.radians(float(fullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'][0]))
+    axis = np.array([math.sin(pitch) * math.cos(roll),
+                     -math.sin(roll),
+                     math.cos(pitch) * math.cos(roll)])
+    return axis / np.linalg.norm(axis)
+
+def corneringFrame(fullCaseSetupDict):
+    '''
+    Single-rotating-frame (SRF) parameters for a steady curved-path (cornering) simulation. The whole
+    domain is solved in a frame rotating at omega about a vertical axis through the corner centre, so the
+    car follows a circular path of radius CORNER_RADIUS at speed INLET_MAG:
+
+        |omega| = INLET_MAG / CORNER_RADIUS                     (rad/s)
+
+    Sign convention (car nose points toward the inlet at -x, freestream travels +x; up is +z):
+        CORNER_DIR = left  -> centre on the car's left  (-y), yaw about +axis -> positive omega
+        CORNER_DIR = right -> centre on the car's right (+y), yaw about +axis -> negative omega
+
+    The corner centre is measured from REFCOR (the reference centre of rotation at the wheelbase centre,
+    y=0, projected to ground) with a lateral +/- CORNER_RADIUS offset in y (the dominant lateral term;
+    pitch/roll tilt of the lateral offset is neglected as those angles are small). CORNER_CENTER may be
+    set explicitly (three floats) to override the derived centre. The rotation axis follows the tilted
+    ground normal (see corneringAxis) so SRF stays aligned with ride-height attitude.
+
+    :param fullCaseSetupDict: case setup dict (BC_SETUP, CORNERING_SETUP)
+    :return: (omegaSigned [rad/s], axis [unit numpy], centre [numpy x y z])
+    '''
+    inletMag = float(fullCaseSetupDict['BC_SETUP']['INLET_MAG'][0])
+    radius = float(fullCaseSetupDict['CORNERING_SETUP']['CORNER_RADIUS'][0])
+    cornerDir = str(fullCaseSetupDict['CORNERING_SETUP']['CORNER_DIR'][0]).strip().lower()
+
+    if radius <= 0:
+        sys.exit('ERROR! [CORNERING_SETUP] -> CORNER_RADIUS must be a positive number when RUN_CORNERING is True!')
+
+    omegaMag = inletMag / radius
+
+    if cornerDir == 'left':
+        sign = 1.0
+        lateral = -1.0
+    elif cornerDir == 'right':
+        sign = -1.0
+        lateral = 1.0
+    else:
+        sys.exit("ERROR! [CORNERING_SETUP] -> CORNER_DIR must be 'left' or 'right'!")
+
+    omegaSigned = sign * omegaMag
+    axis = corneringAxis(fullCaseSetupDict)
+
+    cornerCenter = fullCaseSetupDict['CORNERING_SETUP']['CORNER_CENTER']
+    if str(cornerCenter[0]).strip().lower() != 'default':
+        try:
+            centre = np.array([float(cornerCenter[0]), float(cornerCenter[1]), float(cornerCenter[2])])
+        except Exception as error:
+            print("\t\tWARNING! [CORNERING_SETUP] -> CORNER_CENTER is not three valid floats, using derived centre instead.")
+            print('\t\t%s' % (error))
+            cornerCenter = ['default']
+    if str(cornerCenter[0]).strip().lower() == 'default':
+        refCor = fullCaseSetupDict['BC_SETUP']['REFCOR']
+        centre = np.array([float(refCor[0]),
+                           float(refCor[1]) + lateral * radius,
+                           float(refCor[2])])
+
+    return omegaSigned, axis, centre
+
+def checkCorneringDomain(fullCaseSetupDict):
+    '''
+    Validity guard for SRF cornering. The rectangular box approximates an annular sector only when the
+    domain's lateral half-width is small relative to the turn radius; otherwise inner/outer walls span
+    very different path radii and the box is a poor model of the curved tunnel.
+
+        require  CORNER_RADIUS >= CORNER_CLEARANCE_FACTOR * (DOMAIN_SIZE_y / 2)
+
+    Never auto-resizes; on failure reports the minimum admissible radius and exits.
+
+    :param fullCaseSetupDict: case setup dict (BC_SETUP, CORNERING_SETUP)
+    :return: minimum admissible radius (m)
+    '''
+    try:
+        radius = float(fullCaseSetupDict['CORNERING_SETUP']['CORNER_RADIUS'][0])
+    except (ValueError, IndexError):
+        sys.exit('ERROR! [CORNERING_SETUP] -> CORNER_RADIUS must be a positive number when '
+                 'RUN_CORNERING is True (set it directly, or provide a per-point corner_radius '
+                 'column in the ride height file).')
+    factor = float(fullCaseSetupDict['CORNERING_SETUP']['CORNER_CLEARANCE_FACTOR'][0])
+    ydom = float(fullCaseSetupDict['BC_SETUP']['DOMAIN_SIZE'][1])
+    halfWidth = ydom / 2.0
+    rMin = factor * halfWidth
+    if radius < rMin:
+        sys.exit('ERROR! [CORNERING_SETUP] -> CORNER_RADIUS=%1.3fm is too small for this domain '
+                 '(lateral half-width=%1.3fm, clearance factor=%1.2f). Minimum admissible radius is '
+                 '%1.3fm. Increase CORNER_RADIUS, reduce DOMAIN_SIZE y, or lower CORNER_CLEARANCE_FACTOR.'
+                 % (radius, halfWidth, factor, rMin))
+    return rMin
 
 def getBoundingBox(geomFile):
     command = 'surfaceCheck -outputThreshold 0 constant/triSurface/%s' % (geomFile)

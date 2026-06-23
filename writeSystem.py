@@ -444,6 +444,13 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                           'walls':'walls{category wall; type slip; patches (".*z-max.*" ".*y-min.*"); values {$:initialConditions;}}',
                           'symmetry':'symmetry{category symmetry; type symmetry; patches (".*y-max.*");}'
                           }
+    #SRF cornering: whole domain rotates with the car. All vertical (x/y) walls become self-selecting
+    #SRFFreestream patches, the ground becomes an SRFVelocity moving wall, and the roof stays slip. No
+    #symmetry plane (the cornering flow field is not laterally symmetric, so the case must be run full).
+    domainWallDictCorner = {'inlet':'inlet{category inlet; type freestream; patches (".*x-min.*" ".*x-max.*" ".*y-min.*" ".*y-max.*"); options {flowSpecification srfFreestream;} values {$:initialConditions;}}',
+                            'ground':'ground{category wall; type noSlip; patches (".*z-min.*"); options {wallFunction highReynolds; motion srf;} values {$:initialConditions;}}',
+                            'walls':'walls{category wall; type slip; patches (".*z-max.*"); values {$:initialConditions;}}'
+                            }
     internalDomainDict = {'inlet':'NAME{category inlet; type subSonic; patches (PATCHNAME); options {flowSpecification fixedVelocity;} values {INITIAL_CONDITIONS}}',
                           'movingwall':'NAME{category wall; type noSlip; patches PATCHNAME); options {wallFunction highReynolds; motion moving;} values {INITIAL_CONDITIONS}}',
                           'outlet':'NAME{category outlet; type subSonic; patches (PATCHNAME); options {returnFlow default;} values {$:initialConditions;}}',
@@ -455,9 +462,13 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
     for geom in geomDict.keys():
         if 'IDOM' in geom:
             internalDomain = True
+    runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
+                    fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     caseSetupStringArray  = []    
     if internalDomain == False:
-        if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0].lower() == 'half':
+        if runCornering:
+            domainWallDict = domainWallDictCorner
+        elif fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0].lower() == 'half':
             domainWallDict = domainWallDictHalf
 
         else:
@@ -613,7 +624,19 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                 print('\t\t\t\tWheel Center: %s' % (whOrig))
                 print('\t\t\t\tWheel Axis: %s' % (whAxis))
                 if fullCaseSetupDict[geom.split('.')[0]]['ROT_WH'][0].lower() == 'true':
-                    rotaVel = calcRotaVel(float(inletMag[0]),radius)
+                    if runCornering:
+                        #cornering: local ground speed differs per wheel. In the rotating frame the wheel
+                        #rolls at V_local = |omega_corner| * (horizontal distance from the corner axis to the
+                        #wheel centre), so inner wheels spin slower and outer wheels faster than INLET_MAG.
+                        omegaSigned, cAxis, cCentre = corneringFrame(fullCaseSetupDict)
+                        whOrigParts = whOrig.split()
+                        dx = float(whOrigParts[0]) - cCentre[0]
+                        dy = float(whOrigParts[1]) - cCentre[1]
+                        localSpeed = abs(omegaSigned) * math.sqrt(dx * dx + dy * dy)
+                        print('\t\t\t\tCornering Local Ground Speed: %1.4f m/s' % (localSpeed))
+                        rotaVel = calcRotaVel(localSpeed,radius)
+                    else:
+                        rotaVel = calcRotaVel(float(inletMag[0]),radius)
                 elif fullCaseSetupDict[geom.split('.')[0]]['ROT_WH'][0].lower() == 'false':
                     rotaVel = 0
                 else:

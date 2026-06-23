@@ -48,4 +48,41 @@ subSonic
 }
 
 
+freestream
+{
+    nut
+    {
+        type        calculated;
+        value       ${:VALUE.nut};
+    }
+    k
+    {
+        type        inletOutlet;
+        inletValue  ${:VALUE.k};
+        value       ${:VALUE.k};
+    }
+    epsilon
+    {
+        type        inletOutlet;
+        inletValue  ${:VALUE.epsilon};
+        value       ${:VALUE.epsilon};
+    }
+    omega
+    {
+        type        inletOutlet;
+        inletValue  ${:VALUE.omega};
+        value       ${:VALUE.omega};
+    }
+
+    nuTilda
+    {
+        type        inletOutlet;
+        inletValue  ${:VALUE.nuTilda};
+        value       ${:VALUE.nuTilda};
+    }
+
+    OPTIONS         (flowSpecification);
+}
+
+
 // ************************************************************************* //

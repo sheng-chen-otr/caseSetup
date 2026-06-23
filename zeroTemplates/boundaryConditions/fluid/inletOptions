@@ -42,6 +42,22 @@ flowSpecification
             type        zeroGradient;
         }
     }
+    srfFreestream
+    {
+        U
+        {
+            type        SRFFreestreamVelocity;
+            UInf        ${:VALUE.U};
+            relative    false;
+            value       ${:VALUE.U};
+        }
+        p
+        {
+            type        freestreamPressure;
+            freestreamValue ${:VALUE.p};
+            value       ${:VALUE.p};
+        }
+    }
 }
 
 // ************************************************************************* //

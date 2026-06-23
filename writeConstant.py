@@ -128,6 +128,37 @@ def writeMRFG(templateLoc, geomDict,fullCaseSetupDict):
     mrfList = ''.join(mrfList)
     
     search_and_replace(localMRFPropertiesPath,'<MRF_ZONES>',mrfList)
+
+def writeSRFProperties(templateLoc, fullCaseSetupDict):
+    '''
+    Writes constant/SRFProperties for a single-rotating-frame cornering case (SRFSimpleFoam). The whole
+    domain rotates at omega about a vertical axis through the corner centre so the car follows a steady
+    circular path of radius CORNER_RADIUS at speed INLET_MAG. Axis/origin/omega are derived by
+    corneringFrame() so they track the ride-height domain attitude. The rpm model is used, so omega
+    (rad/s) is converted to rpm = omega*60/(2*pi); the sign carries the turn direction.
+    '''
+    if fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() != 'true':
+        return
+
+    print('\tWriting SRFProperties...')
+    SRFPropertiesPath = '%s/defaultDicts/constant/SRFProperties' % (templateLoc)
+    localSRFPropertiesPath = 'constant/SRFProperties'
+    copyTemplateToCase(SRFPropertiesPath,localSRFPropertiesPath)
+
+    omegaSigned, axis, centre = corneringFrame(fullCaseSetupDict)
+    rpm = omegaSigned * 60.0 / (2.0 * math.pi)
+
+    originStr = '%1.6f %1.6f %1.6f' % (centre[0], centre[1], centre[2])
+    axisStr = '%1.6f %1.6f %1.6f' % (axis[0], axis[1], axis[2])
+    rpmStr = '%1.6f' % (rpm)
+
+    print('\t\t\t\tCorner Centre: %s' % (originStr))
+    print('\t\t\t\tCorner Axis: %s' % (axisStr))
+    print('\t\t\t\tFrame Angular Velocity: %1.4f rad/s (%1.3f rpm)' % (omegaSigned, rpm))
+
+    search_and_replace(localSRFPropertiesPath,'<SRF_ORIGIN>',originStr)
+    search_and_replace(localSRFPropertiesPath,'<SRF_AXIS>',axisStr)
+    search_and_replace(localSRFPropertiesPath,'<SRF_RPM>',rpmStr)
     
     
 def writeTransportProperties(templateLoc, fullCaseSetupDict):

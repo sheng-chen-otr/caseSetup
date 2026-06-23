@@ -82,6 +82,18 @@ def main():
         writeNewCaseSetup(defaultDict)
     else:
         caseSetupDict,writeCaseSetupDict,fullCaseSetupDict = getCaseSetup(defaultDict)
+
+        #SRF cornering: validate domain and force a full (non-symmetric) model before any consumer runs.
+        #Override is in-memory only (fullCaseSetupDict) so the user's caseSetup SIM_SYM is left untouched.
+        if 'CORNERING_SETUP' in fullCaseSetupDict and \
+           fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true':
+            print('\tCornering (SRF) enabled: validating domain and simulation symmetry...')
+            checkCorneringDomain(fullCaseSetupDict)
+            if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0].lower() == 'half':
+                print('\t\tWARNING! SIM_SYM=half is invalid for cornering (the flow field is not '
+                      'laterally symmetric). Forcing SIM_SYM=full for this run.')
+                fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'] = ['full']
+
         writeCaseSetupDict,geomDict,fullCaseSetupDict = getGeometry(fullCaseSetupDict,writeCaseSetupDict) 
         
         cleanUpCaseSetup(geomDict,writeCaseSetupDict,fullCaseSetupDict,defaultDict)
@@ -107,6 +119,7 @@ def main():
         writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict)
         writeOptions(templateLoc,geomDict,fullCaseSetupDict)
         writeMRFG(templateLoc,geomDict,fullCaseSetupDict)
+        writeSRFProperties(templateLoc,fullCaseSetupDict)
         writeSurfaces(templateLoc, geomDict,fullCaseSetupDict)
         writeTransportProperties(templateLoc, fullCaseSetupDict)
         writeTurbulenceProperties(templateLoc, fullCaseSetupDict)

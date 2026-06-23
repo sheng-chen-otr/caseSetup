@@ -81,8 +81,16 @@ def makeScripts(templateLoc,fullCaseSetupDict):
             meshingScriptArray.append(clusterDict['snappyHexMesh'][line])
     meshingScript = '\n'.join(meshingScriptArray)
 
+    #SRF cornering is solved directly in the rotating frame with CORNER_SOLVER (default SRFSimpleFoam).
+    #The standard initialisers (potentialFoam / simpleFoam) run in the absolute frame and would seed an
+    #inconsistent field for an SRF solve, so initialisation is skipped entirely when cornering.
+    runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
+                    fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
+
     for line in clusterDict['solve'].keys():
         if 'initialize' in line:
+            if runCornering:
+                continue
             if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0] == 'potential':
                 solveScriptArray.append(clusterDict['solve']['initialize']['initializePotential'])
             elif fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0] == 'steady':
@@ -96,6 +104,10 @@ def makeScripts(templateLoc,fullCaseSetupDict):
         else:
             solveScriptArray.append(clusterDict['solve'][line])
     solveScript = '\n'.join(solveScriptArray)
+    if runCornering:
+        solverApp = fullCaseSetupDict['CORNERING_SETUP']['CORNER_SOLVER'][0]
+        solveScript = solveScript.replace('foamExec simpleFoam -parallel >> log.simpleFoam',
+                                          'foamExec %s -parallel >> log.simpleFoam' % (solverApp))
 
     for line in clusterDict['export'].keys():
         exportScriptArray.append(clusterDict['export'][line])

@@ -1,0 +1,89 @@
+\section{Cornering (Single Reference Frame)}
+\codeword{caseSetup} can set up a steady curved-path (cornering) case using a Single Reference Frame (SRF). Instead of meshing a curved tunnel, the existing rectangular domain is solved in a frame that rotates at a constant angular velocity about a vertical axis through the corner centre. In that rotating frame the car follows a circular path of radius \codeword{CORNER_RADIUS} at the freestream speed \codeword{INLET_MAG}, and the steady flow field represents a mid-corner condition. The solver is \codeword{SRFSimpleFoam}.
+
+\subsection{Cornering Setup}
+Deleting the module \codeword{defaultCornering} will expose the following block:
+\begin{lstlisting}
+    [CORNERING_SETUP]
+    RUN_CORNERING = False
+    CORNER_RADIUS =
+    CORNER_DIR = left
+    CORNER_CENTER = default
+    CORNER_CLEARANCE_FACTOR = 3
+    CORNER_SOLVER = SRFSimpleFoam
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{RUN_CORNERING} [\codeword{bool}] - master switch, when \codeword{True} the case is built as an SRF cornering case (\codeword{True}, \codeword{False})
+
+    \item \codeword{CORNER_RADIUS} [[\codeword{float,m}]] - radius of the corner the car is negotiating, measured from the corner centre to the reference centre of rotation, the frame angular velocity is \codeword{INLET_MAG}\,/\,\codeword{CORNER_RADIUS} (\codeword{float})
+
+    \item \codeword{CORNER_DIR} [\codeword{str}] - direction of the turn, \codeword{left} places the corner centre on the car's left (\codeword{-y}) and \codeword{right} on the car's right (\codeword{+y}) (\codeword{left}, \codeword{right})
+
+    \item \codeword{CORNER_CENTER} [\codeword{str} or [\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - corner centre location, \codeword{default} derives it from the reference centre of rotation with a lateral offset of \codeword{CORNER_RADIUS}, or supply three floats to set it explicitly (\codeword{default}, or \codeword{x} \codeword{y} \codeword{z})
+
+    \item \codeword{CORNER_CLEARANCE_FACTOR} [\codeword{float}] - minimum ratio of \codeword{CORNER_RADIUS} to the domain lateral half-width, guards against a turn so tight that the rectangular box is a poor model of the curved tunnel (\codeword{float})
+
+    \item \codeword{CORNER_SOLVER} [\codeword{str}] - the OpenFOAM solver used for the cornering run (\codeword{SRFSimpleFoam})
+\end{itemize}
+To run a cornering case, set \codeword{RUN_CORNERING} to \codeword{True}, provide a valid \codeword{CORNER_RADIUS} and \codeword{CORNER_DIR}, and run \codeword{caseSetup} as normal.
+
+\textbf{NOTE:} The cornering flow field is not laterally symmetric, so the case is always built full width. If the case is configured for half symmetry, \codeword{caseSetup} automatically promotes it to a full domain when \codeword{RUN_CORNERING} is \codeword{True}.
+
+\subsection{The Corner Centre}
+With \codeword{CORNER_CENTER} set to \codeword{default}, the corner centre is derived from the reference centre of rotation \codeword{REFCOR} (the wheelbase centre, at \codeword{y}\,=\,\codeword{0}, projected to the ground). The centre is placed a lateral distance of \codeword{CORNER_RADIUS} to the side set by \codeword{CORNER_DIR}:
+\begin{itemize}
+    \item \codeword{CORNER_DIR}\,=\,\codeword{left} - centre at \codeword{REFCOR} with \codeword{y}\,=\,\codeword{REFCOR_y}\,-\,\codeword{CORNER_RADIUS}
+
+    \item \codeword{CORNER_DIR}\,=\,\codeword{right} - centre at \codeword{REFCOR} with \codeword{y}\,=\,\codeword{REFCOR_y}\,+\,\codeword{CORNER_RADIUS}
+\end{itemize}
+Deriving the centre from \codeword{REFCOR} makes the car pivot about its wheelbase centre rather than the front axle. The rotation axis is the tilted ground normal, the same normal used by the ride-height attitude, so the rotating frame stays aligned with the floor when the domain is pitched or rolled. Set \codeword{CORNER_CENTER} to three explicit floats to override the derived centre entirely.
+
+\subsection{Wheel Rotation in a Corner}
+In the rotating frame each wheel sits at a different distance from the corner axis, so the inner wheels travel a shorter path than the outer wheels. \codeword{caseSetup} sets each wheel's rotating-wall speed to the local ground speed at that wheel, equal to the frame angular velocity multiplied by the horizontal distance from the corner axis to the wheel centre. Inner wheels therefore spin slower and outer wheels faster than they would in a straight-line run at \codeword{INLET_MAG}.
+
+\subsection{Cornering Driven by the Ride-Height Map}
+Cornering can be combined with a ride-height study so that each ride-height point runs at the corner that physically matches its attitude. When both \codeword{RUN_RIDE_HEIGHT} and \codeword{RUN_CORNERING} are \codeword{True}, \codeword{caseSetup} looks for two optional columns in the ride-height file and applies them per point:
+\begin{itemize}
+    \item \codeword{corner_radius} [[\codeword{float,m}]] - per-point corner radius, overrides \codeword{CORNER_RADIUS} for that child case, also accepted as \codeword{cornerradius}, \codeword{corner_r} or \codeword{radius} (\codeword{float})
+
+    \item \codeword{corner_dir} [\codeword{str}] - per-point turn direction, overrides \codeword{CORNER_DIR} for that child case, also accepted as \codeword{cornerdir}, \codeword{turn_dir} or \codeword{direction} (\codeword{left}, \codeword{right})
+\end{itemize}
+An example ride-height file pairing each attitude with its corner is shown below.
+\begin{lstlisting}
+    point,fl,fr,rl,rr,yaw,steer,corner_radius,corner_dir
+    1,0,0,0,0,0,0,100,left
+    2,-10,-10,0,0,0,-5,100,left
+    3,-20,-20,0,0,0,-5,80,right
+\end{lstlisting}
+Each child case is generated with its own corner radius and direction, so it produces the matching corner centre, frame angular velocity and per-wheel rotation. If the \codeword{corner_radius} column is absent, every point falls back to the base \codeword{CORNER_RADIUS}, and likewise for \codeword{corner_dir}. A value that cannot be parsed, or a direction that is not \codeword{left} or \codeword{right}, is reported as a warning and falls back to the base setting for that point.
+
+\textbf{NOTE:} A valid base \codeword{CORNER_RADIUS} is still required even when a \codeword{corner_radius} column is provided. The base value is validated before the child cases are generated and is used as the default for any point that does not supply its own radius.
+
+\subsection{Domain Validity}
+A rectangular box only approximates a curved tunnel when the turn radius is large relative to the box width. \codeword{caseSetup} enforces
+\begin{lstlisting}
+    CORNER_RADIUS >= CORNER_CLEARANCE_FACTOR * (DOMAIN_SIZE_y / 2)
+\end{lstlisting}
+and stops with an error reporting the minimum admissible radius if the check fails. The domain is never resized automatically. If a radius is rejected, increase \codeword{CORNER_RADIUS}, reduce the lateral domain size \codeword{DOMAIN_SIZE} \codeword{y}, or lower \codeword{CORNER_CLEARANCE_FACTOR}. When cornering is driven by the ride-height map, this check is applied to every point so an unsuitable per-point radius is caught early.
+
+\subsection{Workflow Summary}
+\begin{itemize}
+    \item Set \codeword{RUN_CORNERING} to \codeword{True}, and provide \codeword{CORNER_RADIUS} and \codeword{CORNER_DIR}.
+
+    \item Leave \codeword{CORNER_CENTER} as \codeword{default} to pivot about the wheelbase centre, or set three floats to place the centre explicitly.
+
+    \item To sweep attitudes and corners together, also set \codeword{RUN_RIDE_HEIGHT} to \codeword{True} and add \codeword{corner_radius} and \codeword{corner_dir} columns to the ride-height file.
+
+    \item Run \codeword{caseSetup} as normal. The case is built full width, the SRF rotation is written, the wheels are set to their local corner speeds, and the run uses \codeword{CORNER_SOLVER}.
+\end{itemize}
+
+\subsection{Troubleshooting}
+\begin{itemize}
+    \item \codeword{CORNER_RADIUS too small for this domain} - the clearance check failed. Increase \codeword{CORNER_RADIUS}, reduce \codeword{DOMAIN_SIZE} \codeword{y}, or lower \codeword{CORNER_CLEARANCE_FACTOR} to at least the reported minimum radius.
+
+    \item \codeword{CORNER_RADIUS must be a positive number} - \codeword{RUN_CORNERING} is \codeword{True} but no valid base radius was given. Set \codeword{CORNER_RADIUS} directly, or provide a \codeword{corner_radius} column in the ride-height file together with a base value.
+
+    \item \codeword{CORNER_DIR must be left or right} - the turn direction was not recognised. Use \codeword{left} or \codeword{right}, or correct the \codeword{corner_dir} column in the ride-height file.
+
+    \item \codeword{Per-point corner value ignored} - a \codeword{corner_radius} or \codeword{corner_dir} entry could not be parsed and the base setting was used for that point. Check the column values in the ride-height file.
+\end{itemize}

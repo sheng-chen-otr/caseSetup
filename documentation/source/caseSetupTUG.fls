@@ -2,7 +2,7 @@ PWD /Users/zchen147/Library/CloudStorage/OneDrive-azureford/researchMasc/caseSet
 INPUT /usr/local/texlive/2024/texmf.cnf
 INPUT /usr/local/texlive/2024/texmf-dist/web2c/texmf.cnf
 INPUT /usr/local/texlive/2024/texmf-var/web2c/pdftex/pdflatex.fmt
-INPUT /Users/zchen147/Library/CloudStorage/OneDrive-azureford/researchMasc/caseSetup-dev/documentation/source/caseSetupTUG.tex
+INPUT caseSetupTUG.tex
 OUTPUT caseSetupTUG.log
 INPUT /usr/local/texlive/2024/texmf-dist/tex/latex/base/article.cls
 INPUT /usr/local/texlive/2024/texmf-dist/tex/latex/base/article.cls
@@ -151,6 +151,9 @@ INPUT sections/prefix.aux
 INPUT ./sections/rideHeight.aux
 INPUT ./sections/rideHeight.aux
 INPUT sections/rideHeight.aux
+INPUT ./sections/cornering.aux
+INPUT ./sections/cornering.aux
+INPUT sections/cornering.aux
 OUTPUT caseSetupTUG.aux
 INPUT ./caseSetupTUG.out
 INPUT ./caseSetupTUG.out
@@ -225,6 +228,12 @@ OUTPUT sections/rideHeight.aux
 INPUT ./sections/rideHeight.tex
 INPUT ./sections/rideHeight.tex
 INPUT sections/rideHeight.tex
+INPUT ./sections/cornering.tex
+INPUT ./sections/cornering.tex
+OUTPUT sections/cornering.aux
+INPUT ./sections/cornering.tex
+INPUT ./sections/cornering.tex
+INPUT sections/cornering.tex
 INPUT caseSetupTUG.aux
 INPUT ./sections/introduction.aux
 INPUT ./sections/introduction.aux
@@ -238,6 +247,9 @@ INPUT sections/prefix.aux
 INPUT ./sections/rideHeight.aux
 INPUT ./sections/rideHeight.aux
 INPUT sections/rideHeight.aux
+INPUT ./sections/cornering.aux
+INPUT ./sections/cornering.aux
+INPUT sections/cornering.aux
 INPUT ./caseSetupTUG.out
 INPUT ./caseSetupTUG.out
 INPUT /usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb
