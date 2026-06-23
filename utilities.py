@@ -1492,8 +1492,13 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
             return outputFile
 
 
-def _open_text_file_maybe_gz(path, mode='rt'):
+def _open_text_file_maybe_gz(path, mode='rt', compresslevel=1):
     if path.lower().endswith('.gz'):
+        # compresslevel=1 (fastest) is used for writes: these .obj.gz/.stl.gz outputs are
+        # intermediate meshing inputs, so write speed matters far more than file size.
+        # Level 1 is ~5-8x faster than the gzip default (9). Reads ignore compresslevel.
+        if 'w' in mode or 'a' in mode or 'x' in mode:
+            return gzip.open(path, mode, compresslevel=compresslevel)
         return gzip.open(path, mode)
     return open(path, mode)
 
@@ -1855,28 +1860,29 @@ def transformGeometryByPIDRegex(
         pidVertexRefs = {}
         pidVertexRefs[currentPid] = set()
 
+        # Hot loop over (potentially millions of) lines: operate on the raw line and cache the current
+        # group's vertex-ref set to avoid per-line strip() and per-face setdefault() dict lookups.
+        currentRefSet = pidVertexRefs[currentPid]
         for line in lines:
-            stripped = line.strip()
-            if stripped.startswith('v '):
-                parts = stripped.split()
+            if line.startswith('v '):
+                parts = line.split()
                 vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
-            elif stripped.startswith('g ') or stripped.startswith('o '):
-                toks = stripped.split(maxsplit=1)
-                currentPid = toks[1] if len(toks) > 1 else '__EMPTY__'
-                if currentPid not in pidVertexRefs:
-                    pidVertexRefs[currentPid] = set()
-            elif stripped.startswith('f '):
-                pidVertexRefs.setdefault(currentPid, set())
-                refs = stripped.split()[1:]
-                for ref in refs:
-                    idxToken = ref.split('/')[0]
-                    idx = int(idxToken)
-                    if idx > 0:
-                        vIdx = idx - 1
-                    else:
-                        vIdx = len(vertices) + idx
+            elif line.startswith('f '):
+                nVerts = len(vertices)
+                for ref in line.split()[1:]:
+                    if '/' in ref:
+                        ref = ref.split('/', 1)[0]
+                    idx = int(ref)
+                    vIdx = idx - 1 if idx > 0 else nVerts + idx
                     if vIdx >= 0:
-                        pidVertexRefs[currentPid].add(vIdx)
+                        currentRefSet.add(vIdx)
+            elif line.startswith('g ') or line.startswith('o '):
+                toks = line.split(maxsplit=1)
+                currentPid = toks[1].strip() if len(toks) > 1 else '__EMPTY__'
+                currentRefSet = pidVertexRefs.get(currentPid)
+                if currentRefSet is None:
+                    currentRefSet = set()
+                    pidVertexRefs[currentPid] = currentRefSet
 
         pidNames = [pid for pid, refs in pidVertexRefs.items() if len(refs) > 0]
         pidToCfg, unmatched = _build_pid_regex_mapping(pidNames, pidTransformDict)
@@ -1921,8 +1927,7 @@ def transformGeometryByPIDRegex(
         outLines = []
         vCounter = 0
         for line in lines:
-            stripped = line.strip()
-            if stripped.startswith('v '):
+            if line.startswith('v '):
                 vv = transformedArr[vCounter]
                 outLines.append(f'v {vv[0]:.6f} {vv[1]:.6f} {vv[2]:.6f}\n')
                 vCounter += 1
