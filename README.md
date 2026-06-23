@@ -107,7 +107,7 @@ Command-line interface for case setup. Orchestrates geometry linkage, mesh confi
 **Usage**:
 ```bash
 # Standard case setup
-python caseSetup.py -s otr
+python caseSetup.py 
 
 # Create new caseSetup template
 python caseSetup.py --new
@@ -115,7 +115,7 @@ python caseSetup.py --new
 # Ride-height study: set RUN_RIDE_HEIGHT = True in caseSetup, then run normally.
 # caseSetup builds the child cases and re-invokes itself with --rideHeightMode
 # internally (do not pass --rideHeightMode yourself).
-python caseSetup.py -s otr
+python caseSetup.py
 
 # Options:
 #  -s, --setup            Setup template type (default: 'default')
