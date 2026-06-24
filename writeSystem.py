@@ -20,11 +20,14 @@ controlDictDict = {'steady':'controlDictSimple',
 exportDict = {'steady':'controlDictSimpleExport',
               'transient':'controlDictPisoExport'}
 
-#SRF cornering controlDicts. Only steady (SRFSimpleFoam) is currently supported; transient SRF
-#(SRFPimpleFoam) is not wired yet, so a transient cornering case is rejected in writeControlDict.
-controlDictCornerDict = {'steady':'controlDictSRFSimple'}
+#SRF cornering controlDicts. steady -> SRFSimpleFoam, transient -> SRFPimpleFoam. createZeroDirectory
+#picks the field-creation template from the controlDict `application`, so these drive both the solver
+#and the Urel field creation.
+controlDictCornerDict = {'steady':'controlDictSRFSimple',
+                         'transient':'controlDictSRFPiso'}
 
-exportCornerDict = {'steady':'controlDictSRFSimpleExport'}
+exportCornerDict = {'steady':'controlDictSRFSimpleExport',
+                    'transient':'controlDictSRFPisoExport'}
 
 dictDict = {'solverType':{'steady':steadyTurb,'transient':transientTurb},
             'initType': initDict,
@@ -81,8 +84,8 @@ def writeControlDict(templateLoc, fullCaseSetupDict):
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     if runCornering and simType not in dictDict['controlDictCornerType'].keys():
-        print('\n\tERROR: SRF cornering is only supported for SIM_TYPE = steady (SRFSimpleFoam).')
-        print('\tSet [GLOBAL_SIM_CONTROL] -> SIM_TYPE = steady for cornering cases.')
+        print('\n\tERROR: SRF cornering is not supported for SIM_TYPE = %s.' % (simType))
+        print('\tSupported cornering sim types are: %s' % (list(dictDict['controlDictCornerType'].keys())))
         sys.exit()
     if simType in dictDict['solverType'].keys():
         #sets up the controlDict for initialization run
@@ -351,16 +354,22 @@ def writeSolution(templateLoc, fullCaseSetupDict):
     templatePathPiso = '%s/defaultDicts/system/fvSolutionPiso' % (templateLoc) 
     templatePathSimple = '%s/defaultDicts/system/fvSolutionSimple' % (templateLoc)
     templatePathSRFSimple = '%s/defaultDicts/system/fvSolutionSRFSimple' % (templateLoc)
+    templatePathSRFPiso = '%s/defaultDicts/system/fvSolutionSRFPiso' % (templateLoc)
     templatePathPotential = '%s/defaultDicts/system/fvSolutionPotential' % (templateLoc) 
     copyTemplateToCase(templatePathRefLims, 'system/refsAndLimitsIncludeDict')
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     if runCornering:
         #cornering solves Urel in the rotating frame; the SRF fvSolution adds the Urel solver and
-        #relaxation entries. Initialisation is skipped, so no init fvSolution is written.
+        #relaxation entries. Initialisation is skipped, so no init fvSolution is written. Transient
+        #cornering uses the PIMPLE-based SRF variant, steady uses the SIMPLE-based one.
         print('\t\tCornering case:')
-        print('\t\t\tCopying fvSolutionSRFSimple')
-        copyTemplateToCase(templatePathSRFSimple, 'system/fvSolutionSRFSimple')
+        if simType.lower() == 'transient':
+            print('\t\t\tCopying fvSolutionSRFPiso')
+            copyTemplateToCase(templatePathSRFPiso, 'system/fvSolutionSRFPiso')
+        else:
+            print('\t\t\tCopying fvSolutionSRFSimple')
+            copyTemplateToCase(templatePathSRFSimple, 'system/fvSolutionSRFSimple')
         return
     
     if simType.lower() == 'transient':
@@ -395,13 +404,19 @@ def writeSchemes(templateLoc, fullCaseSetupDict):
     templatePathPiso = '%s/defaultDicts/system/fvSchemesPiso' % (templateLoc) 
     templatePathSimple = '%s/defaultDicts/system/fvSchemesSimple' % (templateLoc) 
     templatePathSRFSimple = '%s/defaultDicts/system/fvSchemesSRFSimple' % (templateLoc) 
+    templatePathSRFPiso = '%s/defaultDicts/system/fvSchemesSRFPiso' % (templateLoc) 
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     if runCornering:
         #cornering needs Urel momentum schemes (div(phi,Urel), laplacian(nuEff,Urel), grad(Urel)).
+        #Transient cornering uses the backward-ddt PIMPLE variant, steady the steadyState SIMPLE one.
         print('\t\tCornering case:')
-        print('\t\t\tCopying fvSchemesSRFSimple')
-        copyTemplateToCase(templatePathSRFSimple, 'system/fvSchemesSRFSimple')
+        if simType.lower() == 'transient':
+            print('\t\t\tCopying fvSchemesSRFPiso')
+            copyTemplateToCase(templatePathSRFPiso, 'system/fvSchemesSRFPiso')
+        else:
+            print('\t\t\tCopying fvSchemesSRFSimple')
+            copyTemplateToCase(templatePathSRFSimple, 'system/fvSchemesSRFSimple')
         return
     
     if simType.lower() == 'transient':

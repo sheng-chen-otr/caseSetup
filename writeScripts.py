@@ -106,18 +106,34 @@ def makeScripts(templateLoc,fullCaseSetupDict):
     solveScript = '\n'.join(solveScriptArray)
     if runCornering:
         solverApp = fullCaseSetupDict['CORNERING_SETUP']['CORNER_SOLVER'][0]
-        #cornering swaps the steady "Simple" dictionaries for their SRF counterparts so that meshing
-        #(getControlDict / getFvDict) and the solve step copy the SRF controlDict/fvSolution/fvSchemes,
-        #and createZeroDirectory reads application = SRFSimpleFoam and emits the Urel field. The trailing
-        #space anchors the filename so controlDictSimpleExport / controlDictSimpleInit are not matched.
-        fileSwaps = [('system/controlDictSimple ', 'system/controlDictSRFSimple '),
-                     ('system/fvSolutionSimple ',  'system/fvSolutionSRFSimple '),
-                     ('system/fvSchemesSimple ',   'system/fvSchemesSRFSimple ')]
+        simTypeLower = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0].lower()
+        if simTypeLower == 'transient':
+            #transient cornering runs SRFPimpleFoam. CORNER_SOLVER defaults to the steady solver name
+            #(SRFSimpleFoam), so auto-upgrade it to the transient SRF solver when left at that default.
+            if solverApp == 'SRFSimpleFoam':
+                solverApp = 'SRFPimpleFoam'
+            #bare (un-anchored) swaps so both the `[ -f system/controlDictPiso ]` guards and the
+            #`cp system/controlDictPiso ...` lines flip to the SRF variant. Safe because the meshing and
+            #solve scripts never reference controlDictPisoExport / fvSolutionPisoExport.
+            fileSwaps = [('system/controlDictPiso', 'system/controlDictSRFPiso'),
+                         ('system/fvSolutionPiso',  'system/fvSolutionSRFPiso'),
+                         ('system/fvSchemesPiso',   'system/fvSchemesSRFPiso')]
+            execOld = 'foamExec pisoFoam -parallel >> log.pisoFoam'
+            execNew = 'foamExec %s -parallel >> log.pisoFoam' % (solverApp)
+        else:
+            #cornering swaps the steady "Simple" dictionaries for their SRF counterparts so that meshing
+            #(getControlDict / getFvDict) and the solve step copy the SRF controlDict/fvSolution/fvSchemes,
+            #and createZeroDirectory reads application = SRFSimpleFoam and emits the Urel field. The trailing
+            #space anchors the filename so controlDictSimpleExport / controlDictSimpleInit are not matched.
+            fileSwaps = [('system/controlDictSimple ', 'system/controlDictSRFSimple '),
+                         ('system/fvSolutionSimple ',  'system/fvSolutionSRFSimple '),
+                         ('system/fvSchemesSimple ',   'system/fvSchemesSRFSimple ')]
+            execOld = 'foamExec simpleFoam -parallel >> log.simpleFoam'
+            execNew = 'foamExec %s -parallel >> log.simpleFoam' % (solverApp)
         for src, dst in fileSwaps:
             meshingScript = meshingScript.replace(src, dst)
             solveScript = solveScript.replace(src, dst)
-        solveScript = solveScript.replace('foamExec simpleFoam -parallel >> log.simpleFoam',
-                                          'foamExec %s -parallel >> log.simpleFoam' % (solverApp))
+        solveScript = solveScript.replace(execOld, execNew)
 
     for line in clusterDict['export'].keys():
         exportScriptArray.append(clusterDict['export'][line])
