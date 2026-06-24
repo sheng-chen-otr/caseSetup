@@ -19,6 +19,7 @@ limitU
 {
 	type limitVelocity;
 	active yes;
+	U <LIMIT_FIELD>;
 	max 200;
 	selectionMode all;
 }

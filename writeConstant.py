@@ -37,6 +37,13 @@ def writeOptions(templateLoc, geomDict,fullCaseSetupDict):
     optionList = ''.join(optionList)
     
     search_and_replace(localFvOptionPath,'<OPTION_MEDIA>',optionList)
+    #The limitVelocity fvOption targets one field, defaulting to U. SRF cornering solvers solve Urel (U is
+    #only reconstructed as Urel + SRF->U() each iteration and never corrected by fvOptions), so the limiter
+    #must point at Urel to have any effect. Non-cornering cases keep limiting U.
+    runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
+                    fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
+    limitField = 'Urel' if runCornering else 'U'
+    search_and_replace(localFvOptionPath,'<LIMIT_FIELD>',limitField)
 
 def writeMRFG(templateLoc, geomDict,fullCaseSetupDict):
     print('\tWriting MRF Regions...')
