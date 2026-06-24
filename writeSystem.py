@@ -479,6 +479,11 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
     if runCornering:
         urelString = 'Urel uniform (%s);' % (inletVec[0])
         initStringArray.append(urelString)
+        #SRFFreestreamVelocity reads UInf as a single vector keyword (no 'uniform' prefix), unlike the
+        #'value'/internalField fields which are uniform Fields. Expose a bare-vector UInf in initialConditions
+        #so the srfFreestream boundary template can reference ${:VALUE.UInf} without a 'uniform' token.
+        uInfString = 'UInf (%s);' % (inletVec[0])
+        initStringArray.append(uInfString)
     
     
     for key in initDict.keys():
