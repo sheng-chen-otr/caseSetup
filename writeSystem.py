@@ -486,7 +486,12 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
         #SRFFreestreamVelocity reads UInf as a single vector keyword (no 'uniform' prefix), unlike the
         #'value'/internalField fields which are uniform Fields. Expose a bare-vector UInf in initialConditions
         #so the srfFreestream boundary template can reference ${:VALUE.UInf} without a 'uniform' token.
-        uInfString = 'UInf (%s);' % (inletVec[0])
+        #UInf is the freestream in the INERTIAL frame: SRFFreestreamVelocity imposes a patch value of
+        #(UInf rotated into the frame) - omega x r. A car cornering through still air has zero inertial-frame
+        #freestream; all of its relative wind comes from the rotation (omega x r, which equals INLET_MAG at the
+        #car's radius). Seeding UInf with the INLET_MAG vector double-counts the speed (~2x velocity, ~4x forces)
+        #and piles the velocity/pressure maxima onto the car, so UInf must be the zero vector for cornering.
+        uInfString = 'UInf (0 0 0);'
         initStringArray.append(uInfString)
     
     
