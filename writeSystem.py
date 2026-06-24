@@ -212,6 +212,10 @@ def writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict):
                     else:
                         print('\t\t\tusing user input: %s' % (forceVec))
                         forceVec = ' '.join(forceVec)
+                if isinstance(forceVec, list):
+                    #forceType not in forceVecDict (e.g. a *_VEC key with an unrecognised prefix): forceVec
+                    #is still the raw token list. search_and_replace needs a string, so join it here.
+                    forceVec = ' '.join(forceVec)
                 search_and_replace("system/forceCoeffsExport", "<%s>" % (key),forceVec) 
                 search_and_replace("system/forceCoeffSetup", "<%s>" % (key),forceVec) 
             elif 'COR' in key:
