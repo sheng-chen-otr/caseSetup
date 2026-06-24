@@ -61,6 +61,13 @@ flowSpecification
         p
         {
             type        freestreamPressure;
+            // freestreamPressure sets the in/out split from (U & nf)/mag(U). In SRFSimpleFoam the
+            // absolute U is constructed (U = Urel + omega x r) and on the srfFreestream inflow faces
+            // it is exactly zero (still air: -omega x r cancels omega x r). The single-precision ESI
+            // build divides by mag(U) without a vSmall guard -> 0/0 sigFpe once U is reconstructed
+            // (~iteration 2). Key off Urel instead: it is ~INLET_MAG (never zero) at the boundary and
+            // is the field that actually defines the rotating-frame flux direction.
+            U           Urel;
             freestreamValue ${:VALUE.p};
             value       ${:VALUE.p};
         }
