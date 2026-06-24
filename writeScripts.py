@@ -134,6 +134,14 @@ def makeScripts(templateLoc,fullCaseSetupDict):
             meshingScript = meshingScript.replace(src, dst)
             solveScript = solveScript.replace(src, dst)
         solveScript = solveScript.replace(execOld, execNew)
+        #The solve preamble copies controlDictPotential->controlDict (absolute-frame potential init) right
+        #before createZeroDirectory reads the application. Cornering never writes controlDictPotential, but a
+        #stale file from an earlier run would clobber the SRF controlDict and make createZeroDirectory emit U
+        #instead of Urel, so drop that copy entirely for cornering cases.
+        potentialPreamble = (" if [[ -f 'system/controlDictPotential' ]]; then "
+                             "cp system/controlDictPotential system/controlDict; "
+                             "cp system/fvSolutionPotential system/fvSolution; fi;")
+        solveScript = solveScript.replace(potentialPreamble, '')
 
     for line in clusterDict['export'].keys():
         exportScriptArray.append(clusterDict['export'][line])
