@@ -469,6 +469,16 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
         inletVec = velVector(float(inletMag[0]),float(yaw[0]),pitch)
     velString = 'U uniform (%s);' % (inletVec[0])
     initStringArray.append(velString)   
+    #SRF cornering solves the relative velocity Urel, which createZeroDirectory generates as a field.
+    #createZeroDirectory sets each field's internalField to ${:initialConditions.<fieldName>}, so the
+    #initialConditions block must contain a Urel entry or 0/Urel generation aborts. Seed Urel with the
+    #same freestream vector as U (a reasonable initial guess; the SRFFreestream/SRFVelocity BCs and the
+    #solver correct it for the rotating frame).
+    runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
+                    fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
+    if runCornering:
+        urelString = 'Urel uniform (%s);' % (inletVec[0])
+        initStringArray.append(urelString)
     
     
     for key in initDict.keys():
