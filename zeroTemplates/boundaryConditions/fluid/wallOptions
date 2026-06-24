@@ -151,6 +151,13 @@ motion
 
     srf
     {
+        Urel
+        {
+            type        SRFVelocity;
+            inletValue  uniform (0 0 0);
+            relative    false;
+            value       uniform (0 0 0);
+        }
         U
         {
             type        SRFVelocity;

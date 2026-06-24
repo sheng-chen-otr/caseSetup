@@ -11,67 +11,31 @@ FoamFile
     format      ascii;
     class       dictionary;
     location    "templates";
-    object      wall;
+    object      SRFSimpleFoam;
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-noSlip
+solverType  incompressible;
+
+multiRegion no;
+
+fluidModels
 {
-    p
-    {
-        type        zeroGradient;
-    }
-    nut
-    {
-        type        calculated;
-        value       ${:VALUE.nut};
-    }
-    
-    
-    OPTIONS         (wallFunction motion);
+    turbulenceModel  turbulenceModel;
 }
 
-
-slip
+fluidFields
 {
     Urel
     {
-        type        slip;
-    }
-    U
-    {
-        type        slip;
+        type        vector;
+        dimensions  [0 1 -1 0 0];
     }
     p
     {
-        type        zeroGradient;
-    }
-    nut
-    {
-        type        calculated;
-        value       ${:VALUE.nut};
-    }
-    
-    nuTilda
-    {
-        type        zeroGradient;
-    }
-    
-    k
-    {
-        type        zeroGradient;
-    }
-    epsilon
-    {
-        type        zeroGradient;
-    }
-    omega
-    {
-        type        zeroGradient;
+        type        scalar;
+        dimensions  [0 2 -2 0 0];
     }
 }
-
-
-
 
 // ************************************************************************* //

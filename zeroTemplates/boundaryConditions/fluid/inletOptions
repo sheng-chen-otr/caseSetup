@@ -44,6 +44,13 @@ flowSpecification
     }
     srfFreestream
     {
+        Urel
+        {
+            type        SRFFreestreamVelocity;
+            UInf        ${:VALUE.U};
+            relative    false;
+            value       ${:VALUE.U};
+        }
         U
         {
             type        SRFFreestreamVelocity;

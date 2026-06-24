@@ -106,6 +106,16 @@ def makeScripts(templateLoc,fullCaseSetupDict):
     solveScript = '\n'.join(solveScriptArray)
     if runCornering:
         solverApp = fullCaseSetupDict['CORNERING_SETUP']['CORNER_SOLVER'][0]
+        #cornering swaps the steady "Simple" dictionaries for their SRF counterparts so that meshing
+        #(getControlDict / getFvDict) and the solve step copy the SRF controlDict/fvSolution/fvSchemes,
+        #and createZeroDirectory reads application = SRFSimpleFoam and emits the Urel field. The trailing
+        #space anchors the filename so controlDictSimpleExport / controlDictSimpleInit are not matched.
+        fileSwaps = [('system/controlDictSimple ', 'system/controlDictSRFSimple '),
+                     ('system/fvSolutionSimple ',  'system/fvSolutionSRFSimple '),
+                     ('system/fvSchemesSimple ',   'system/fvSchemesSRFSimple ')]
+        for src, dst in fileSwaps:
+            meshingScript = meshingScript.replace(src, dst)
+            solveScript = solveScript.replace(src, dst)
         solveScript = solveScript.replace('foamExec simpleFoam -parallel >> log.simpleFoam',
                                           'foamExec %s -parallel >> log.simpleFoam' % (solverApp))
 

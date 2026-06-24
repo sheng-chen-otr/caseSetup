@@ -20,10 +20,18 @@ controlDictDict = {'steady':'controlDictSimple',
 exportDict = {'steady':'controlDictSimpleExport',
               'transient':'controlDictPisoExport'}
 
+#SRF cornering controlDicts. Only steady (SRFSimpleFoam) is currently supported; transient SRF
+#(SRFPimpleFoam) is not wired yet, so a transient cornering case is rejected in writeControlDict.
+controlDictCornerDict = {'steady':'controlDictSRFSimple'}
+
+exportCornerDict = {'steady':'controlDictSRFSimpleExport'}
+
 dictDict = {'solverType':{'steady':steadyTurb,'transient':transientTurb},
             'initType': initDict,
             'controlDictType':controlDictDict,
-            'exportDictType':exportDict}
+            'exportDictType':exportDict,
+            'controlDictCornerType':controlDictCornerDict,
+            'exportCornerType':exportCornerDict}
 
 foList = ['averageFieldsDict','cptMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
 coeffList = ['forceCoeffs','forceCoeffsExport','forceCoeffSetup']
@@ -67,12 +75,26 @@ def writeControlDict(templateLoc, fullCaseSetupDict):
     simType = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0].lower()
     simInit = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0].lower()
     simTurb = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['TURB_MODEL'][0].lower()
+    #SRF cornering is solved in the rotating frame: the relative velocity Urel is the primary field
+    #and createZeroDirectory must emit it. A dedicated controlDict (application SRFSimpleFoam) drives
+    #both the solver and the field creation, so cornering selects the SRF controlDict templates below.
+    runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
+                    fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
+    if runCornering and simType not in dictDict['controlDictCornerType'].keys():
+        print('\n\tERROR: SRF cornering is only supported for SIM_TYPE = steady (SRFSimpleFoam).')
+        print('\tSet [GLOBAL_SIM_CONTROL] -> SIM_TYPE = steady for cornering cases.')
+        sys.exit()
     if simType in dictDict['solverType'].keys():
         #sets up the controlDict for initialization run
         possibleInit = dictDict['initType'][simType].keys()
         
         #writes out controlDict for initialization method
-        if simInit in possibleInit:
+        if runCornering:
+            #cornering skips the absolute-frame initialisation entirely; writing controlDictPotential or
+            #controlDictSimpleInit here would let the solve preamble swap controlDict and mislead
+            #createZeroDirectory about the application, so no initialisation controlDict is written.
+            print('\t\tCornering case: skipping initialisation controlDict')
+        elif simInit in possibleInit:
             controlDictTemplate = dictDict['initType'][simType][simInit]
             initTemplatePath = '%s/%s' % (controlDictTemplatePath,controlDictTemplate)
             if controlDictTemplate != '':
@@ -91,8 +113,12 @@ def writeControlDict(templateLoc, fullCaseSetupDict):
             sys.exit()
         #sets up the controlDict for actual run
         print('\t\tWriting controlDict for solver: %s' % (simType))
-        controlDictTemplate = dictDict['controlDictType'][simType]
-        exportDictTemplate = dictDict['exportDictType'][simType]
+        if runCornering:
+            controlDictTemplate = dictDict['controlDictCornerType'][simType]
+            exportDictTemplate = dictDict['exportCornerType'][simType]
+        else:
+            controlDictTemplate = dictDict['controlDictType'][simType]
+            exportDictTemplate = dictDict['exportDictType'][simType]
         solverPath = '%s/%s' % (controlDictTemplatePath,controlDictTemplate)
         exportPath = '%s/%s' % (controlDictTemplatePath,exportDictTemplate)
         localControlDictPath = 'system/%s' % (controlDictTemplate)
@@ -324,8 +350,18 @@ def writeSolution(templateLoc, fullCaseSetupDict):
     templatePathRefLims = '%s/defaultDicts/system/refsAndLimitsIncludeDict' % (templateLoc) 
     templatePathPiso = '%s/defaultDicts/system/fvSolutionPiso' % (templateLoc) 
     templatePathSimple = '%s/defaultDicts/system/fvSolutionSimple' % (templateLoc)
+    templatePathSRFSimple = '%s/defaultDicts/system/fvSolutionSRFSimple' % (templateLoc)
     templatePathPotential = '%s/defaultDicts/system/fvSolutionPotential' % (templateLoc) 
     copyTemplateToCase(templatePathRefLims, 'system/refsAndLimitsIncludeDict')
+    runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
+                    fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
+    if runCornering:
+        #cornering solves Urel in the rotating frame; the SRF fvSolution adds the Urel solver and
+        #relaxation entries. Initialisation is skipped, so no init fvSolution is written.
+        print('\t\tCornering case:')
+        print('\t\t\tCopying fvSolutionSRFSimple')
+        copyTemplateToCase(templatePathSRFSimple, 'system/fvSolutionSRFSimple')
+        return
     
     if simType.lower() == 'transient':
         #copying over the fvSchemesPiso
@@ -358,6 +394,15 @@ def writeSchemes(templateLoc, fullCaseSetupDict):
     simType = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0]
     templatePathPiso = '%s/defaultDicts/system/fvSchemesPiso' % (templateLoc) 
     templatePathSimple = '%s/defaultDicts/system/fvSchemesSimple' % (templateLoc) 
+    templatePathSRFSimple = '%s/defaultDicts/system/fvSchemesSRFSimple' % (templateLoc) 
+    runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
+                    fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
+    if runCornering:
+        #cornering needs Urel momentum schemes (div(phi,Urel), laplacian(nuEff,Urel), grad(Urel)).
+        print('\t\tCornering case:')
+        print('\t\t\tCopying fvSchemesSRFSimple')
+        copyTemplateToCase(templatePathSRFSimple, 'system/fvSchemesSRFSimple')
+        return
     
     if simType.lower() == 'transient':
         #copying over the fvSchemesPiso
