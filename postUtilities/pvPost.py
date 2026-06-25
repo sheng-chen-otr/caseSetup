@@ -159,6 +159,22 @@ def main():
     elif args.meshOnly:
         print('\t\tMESH ONLY: Using Predefined Variable List! ')
         reader.CellArrays = PRE_DEF_MESH_LIST
+    else:
+        #only load the fields actually referenced by the loaded variable equations (plus the LIC input
+        #vector). Everything else is dropped before the cell-to-point conversion and slicing, which is
+        #the bulk of the runtime. Intersecting with the arrays the reader provides guarantees we never
+        #request a missing field; if detection yields nothing we fall back to loading all.
+        availableCellArrays = list(reader.CellArrays)
+        requiredFields = getRequiredFields(varDict, extraFields=[UMEAN_FIELD])
+        loadFields = [array for array in availableCellArrays if array in requiredFields]
+        if loadFields:
+            print('\t\tLoading only required fields: %s' % (loadFields))
+            droppedFields = [array for array in availableCellArrays if array not in requiredFields]
+            if droppedFields:
+                print('\t\tSkipping unused fields: %s' % (droppedFields))
+            reader.CellArrays = loadFields
+        else:
+            print('\t\tWARNING! Could not determine required fields from variables, loading all.')
 
     print('\tCell Arrays set, updating pipeline')
     reader.UpdatePipeline()
@@ -247,6 +263,31 @@ def swapMeanVelocityField(varDict, replacement):
             equation = varDict[category][variable].get('equation')
             if equation and 'UMean' in equation:
                 varDict[category][variable]['equation'] = equation.replace('UMean', replacement)
+
+
+def getRequiredFields(varDict, extraFields=None):
+    '''
+        Scans every variable equation in varDict and returns the set of base OpenFOAM field names they
+        reference. Only these fields need to be loaded from the EnSight reader; loading the rest (phi,
+        k, omega, nut, the Prime2Mean tensors, etc.) just wastes time in the cell-to-point conversion
+        and slicing. Component accessors (e.g. UMean_X) are reduced to their base field (UMean).
+        Reference values (UREF/LREF/WREF) have already been substituted to numbers by getVariableDicts,
+        and any non-field tokens (function names like sqrt, stray identifiers) are harmlessly filtered
+        out by the caller intersecting this set with the arrays the reader actually provides.
+        extraFields force-includes names not present in any equation (e.g. the LIC input vector).
+    '''
+    fields = set()
+    tokenRegex = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+    componentSuffix = re.compile(r'_[XYZ]$')
+    for category in varDict:
+        for variable in varDict[category]:
+            equation = varDict[category][variable].get('equation', '')
+            for token in tokenRegex.findall(equation):
+                fields.add(componentSuffix.sub('', token))
+    if extraFields:
+        for f in extraFields:
+            fields.add(componentSuffix.sub('', f))
+    return fields
 
 
 def getVariableDicts(variablePaths, viewsPath):
@@ -476,22 +517,28 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
         sliceRange = np.array(sliceRange.replace('[','').replace(']','').split(',')).astype('float')
         sliceArray = np.round(np.linspace(sliceRange[0],sliceRange[1],int(nslices)),3)
 
+        # create one Slice filter per normal; only the Origin moves per coordinate
+        slice1           = Slice(Input=volumeSource, SliceType="Plane" )
+        slice1.SliceOffsetValues = 0
+        slice1.Triangulatetheslice = 0
+        if normal == 'X':
+            slice1.SliceType.Normal  = [1,0,0]
+        elif normal == 'Y':
+            slice1.SliceType.Normal  = [0,1,0]
+        elif normal == 'Z':
+            slice1.SliceType.Normal  = [0,0,1]
+
+        # one Calculator reused for every coordinate/variable on this normal
+        calculator = Calculator(registrationName='calculator', Input=slice1)
+
         n = 0 # start counter
         for coord in sliceArray:
-            slice1           = Slice(Input=volumeSource, SliceType="Plane" )
-            slice1.SliceOffsetValues = 0
             if normal == 'X':
-                slice1.SliceType.Normal  = [1,0,0]
                 slice1.SliceType.Origin  = [coord,0,0]
             elif normal == 'Y':
-                slice1.SliceType.Normal  = [0,1,0]
                 slice1.SliceType.Origin  = [0,coord,0]
             elif normal == 'Z':
-                slice1.SliceType.Normal  = [0,0,1]
                 slice1.SliceType.Origin  = [0,0,coord]
-            
-            slice1.SliceType         = "Plane"
-            slice1.Triangulatetheslice = 0
             #start looping through variables
             for variable in sliceVars:
                 #if vorticity in internal volume do not mirror vectors
@@ -502,7 +549,6 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
                     continue
 
                 #calculating variable using variable equation
-                calculator = Calculator(registrationName='calculator', Input=slice1)
                 calculator.Function = str(varDict['sliceVariables'][variable]['equation'])
                 calculator.ResultArrayName = variable
                 
@@ -570,9 +616,14 @@ def generateSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
                     print('')
                 Hide(sliceSourceDisplay,renderView)
                 Delete(sliceSourceDisplay)
-                Delete(calculator)
 
             n = n + 1
+
+        # done with this normal; release the reused filters before the next plane
+        Delete(calculator)
+        del calculator
+        Delete(slice1)
+        del slice1
     return time.time()-begin_slice
 
 
@@ -739,22 +790,28 @@ def generateLICSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
         sliceRange = np.array(sliceRange.replace('[','').replace(']','').split(',')).astype('float')
         sliceArray = np.round(np.linspace(sliceRange[0],sliceRange[1],int(nslices)),3)
 
+        # create one Slice filter per normal; only the Origin moves per coordinate
+        slice1           = Slice(Input=volumeSource, SliceType="Plane" )
+        slice1.SliceOffsetValues = 0
+        slice1.Triangulatetheslice = 0
+        if normal == 'X':
+            slice1.SliceType.Normal  = [1,0,0]
+        elif normal == 'Y':
+            slice1.SliceType.Normal  = [0,1,0]
+        elif normal == 'Z':
+            slice1.SliceType.Normal  = [0,0,1]
+
+        # one Calculator reused for every coordinate/variable on this normal
+        calculator = Calculator(registrationName='calculator', Input=slice1)
+
         n = 0 # start counter
         for coord in sliceArray:
-            slice1           = Slice(Input=volumeSource, SliceType="Plane" )
-            slice1.SliceOffsetValues = 0
             if normal == 'X':
-                slice1.SliceType.Normal  = [1,0,0]
                 slice1.SliceType.Origin  = [coord,0,0]
             elif normal == 'Y':
-                slice1.SliceType.Normal  = [0,1,0]
                 slice1.SliceType.Origin  = [0,coord,0]
             elif normal == 'Z':
-                slice1.SliceType.Normal  = [0,0,1]
                 slice1.SliceType.Origin  = [0,0,coord]
-            
-            slice1.SliceType         = "Plane"
-            slice1.Triangulatetheslice = 0
             #start looping through variables
             for variable in sliceLICVars:
                 #if vorticity in internal volume do not mirror vectors
@@ -765,7 +822,6 @@ def generateLICSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
                     continue
 
                 #calculating variable using variable equation
-                calculator = Calculator(registrationName='calculator', Input=slice1)
                 calculator.Function = str(varDict['sliceVariables'][variable]['equation'])
                 calculator.ResultArrayName = variable
                 
@@ -836,9 +892,14 @@ def generateLICSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
                     print('')
                 Hide(sliceSourceDisplay,renderView)
                 Delete(sliceSourceDisplay)
-                Delete(calculator)
 
             n = n + 1
+
+        # done with this normal; release the reused filters before the next plane
+        Delete(calculator)
+        del calculator
+        Delete(slice1)
+        del slice1
     #renderView.ViewSize = RESOLUTION # default
     print('\tLIC Slice Generation Time (s): ' + str(round(time.time()-LIC_START_TIME,3)) + '\n\n')
     return time.time()-begin_slice
