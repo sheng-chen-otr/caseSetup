@@ -74,11 +74,11 @@ def makeScripts(templateLoc,fullCaseSetupDict):
     postMeshScriptArray = []
     
     if 'ansa' in fullCaseSetupDict['GLOBAL_REFINEMENT']['TEMPLATE_TYPE'][0].lower():
-        for line in clusterDict['ansaMesh'].keys():
-            meshingScriptArray.append(clusterDict['ansaMesh'][line])
+        meshKey = 'ansaMesh'
     else:
-        for line in clusterDict['snappyHexMesh'].keys():
-            meshingScriptArray.append(clusterDict['snappyHexMesh'][line])
+        meshKey = 'snappyHexMesh'
+    for line in clusterDict[meshKey].keys():
+        meshingScriptArray.append(clusterDict[meshKey][line])
     meshingScript = '\n'.join(meshingScriptArray)
 
     #SRF cornering is solved directly in the rotating frame with CORNER_SOLVER (default SRFSimpleFoam).
@@ -130,6 +130,17 @@ def makeScripts(templateLoc,fullCaseSetupDict):
                          ('system/fvSchemesSimple ',   'system/fvSchemesSRFSimple ')]
             execOld = 'foamExec simpleFoam -parallel >> log.simpleFoam'
             execNew = 'foamExec %s -parallel >> log.simpleFoam' % (solverApp)
+        #Meshing's getControlDict selects the controlDict by existence and falls back to
+        #controlDictPotential. For cornering only the SRF controlDict is ever written, and relying on the
+        #substring swaps below to flip that chain is fragile: if it misses, meshing leaves controlDict as
+        #controlDictPotential and the solve's createZeroDirectory then reads application = potentialFoam
+        #instead of the SRF solver. Replace the whole getControlDict chain with an explicit copy of the SRF
+        #controlDict so it can never fall back to controlDictPotential. Done before the swap loop so the
+        #exact original string still matches; the SRF replacement contains no swap-target substrings.
+        srfControlDict = 'controlDictSRFPiso' if simTypeLower == 'transient' else 'controlDictSRFSimple'
+        corneringGetControlDict = ('if [ -f system/%s ]; then cp system/%s system/controlDict; '
+                                   'else exit 1; fi') % (srfControlDict, srfControlDict)
+        meshingScript = meshingScript.replace(clusterDict[meshKey]['getControlDict'], corneringGetControlDict)
         for src, dst in fileSwaps:
             meshingScript = meshingScript.replace(src, dst)
             solveScript = solveScript.replace(src, dst)
