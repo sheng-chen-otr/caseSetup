@@ -1,0 +1,159 @@
+\section{Post-Processing Images (pvPost)}
+\codeword{pvPost} is the automated ParaView image generator. It reads the converged solution, builds the standard set of geometry, surface-contour, slice, line-integral-convolution (LIC) and iso-surface images, and writes them to \codeword{postProcessing/images}. It runs head-less through \codeword{pvbatch} and is driven entirely by the \codeword{pvPostSetup} file copied into each case, so no manual ParaView session is required.
+
+\subsection{Inputs and Outputs}
+\codeword{pvPost} expects the solution to have been exported to EnSight format. It reads
+\begin{lstlisting}
+    EnSight/<caseName>.case
+\end{lstlisting}
+and uses the latest available time step. Iso-surface images additionally read the \codeword{iso*.vtp} files written under \codeword{postProcessing/surfaces/<latestTime>}. All images are written as \codeword{.jpeg} into
+\begin{lstlisting}
+    postProcessing/images/<variable>_<imageType>/
+\end{lstlisting}
+one sub-folder per variable and image type. Slice images include the slice normal, position and an index in the file name so they sort in sweep order.
+
+\subsection{Running pvPost}
+\codeword{pvPost} is a ParaView script and must be launched with \codeword{pvbatch} (or \codeword{pvpython}), not the system \codeword{python}, so that the \codeword{paraview.simple} modules are available. From inside the case directory:
+\begin{lstlisting}
+    cd <caseName>
+    pvbatch --mpi /path/to/postUtilities/pvPost.py >> log.pvpost
+\end{lstlisting}
+On the cluster this is wired into the post-processing job through \codeword{clusterDict} and runs automatically after the solve. There is one optional flag:
+\begin{itemize}
+    \item \codeword{--meshOnly} - generates only the mesh slice images and skips all field images. Use this to inspect the mesh before a solution exists.
+\end{itemize}
+\begin{lstlisting}
+    pvbatch --mpi /path/to/postUtilities/pvPost.py --meshOnly >> log.pvpostMesh
+\end{lstlisting}
+
+\subsection{The pvPostSetup File}
+\codeword{caseSetup} copies a \codeword{pvPostSetup} file into every case. Edit it to choose which image sets are produced and how the slices are taken. The default file is shown below.
+\begin{lstlisting}
+    [PV_POST_MAIN]
+    CASE_NAME = default
+    CAMERA_VIEWS = default
+    VARIABLE_DICT = default
+    WHEEL_BASE = default
+    BACKGROUND_COLOR = default
+    RESOLUTION = default
+    GEOM_IMG = True
+    SURFACE_IMG = True
+    SLICE_IMG = True
+    SLICE_LIC_IMG = True
+    ISO_SURFACE_IMG = True
+    CREATE_SCALAR_BAR = True
+
+    [GEOM]
+    VIEWS = default
+
+    [SURFACE]
+    VIEWS = default
+    VARIABLES = default
+
+    [SLICE]
+    VIEWS = default
+    NORMALS = default
+    NSLICES = default
+    SLICE_RANGE = default
+    VARIABLES = default
+    LIC_VARIABLES = default
+
+    [ISO_SURFACE]
+    VIEWS = default
+    VARIABLES = default
+    ISO_VALUES = default
+
+    [VARIABLES]
+    SURFACE_VARIABLES = default
+    SLICE_VARIABLES = default
+    ISO_VARIABLES = default
+\end{lstlisting}
+
+\subsubsection{[PV\_POST\_MAIN]}
+\begin{itemize}
+    \item \codeword{CASE_NAME} [\codeword{str}] - case name used in image titles and file names, \codeword{default} uses the case directory name (\codeword{default}, or \codeword{str})
+
+    \item \codeword{CAMERA_VIEWS} [\codeword{str}] - path to a camera-views file, \codeword{default} uses the bundled view definitions (\codeword{default}, or a file path)
+
+    \item \codeword{VARIABLE_DICT} [\codeword{str}] - path to the variable dictionary that defines the plotted variables, their equations, labels, ranges and colour maps, \codeword{default} uses \codeword{postUtilities/default/defaultVariables} (\codeword{default}, or a file path)
+
+    \item \codeword{RESOLUTION} [\codeword{str}] - working render resolution, \codeword{default} uses the built-in 16:9 setting (\codeword{default})
+
+    \item \codeword{GEOM_IMG}, \codeword{SURFACE_IMG}, \codeword{SLICE_IMG}, \codeword{SLICE_LIC_IMG}, \codeword{ISO_SURFACE_IMG} [\codeword{bool}] - master switches for each image set, set to \codeword{False} to skip that set (\codeword{True}, \codeword{False})
+
+    \item \codeword{CREATE_SCALAR_BAR} [\codeword{bool}] - draw the colour-bar legend on field images (\codeword{True}, \codeword{False})
+\end{itemize}
+
+\subsubsection{[SLICE]}
+The slice block controls both the field slices and the LIC slices. Each of \codeword{VIEWS}, \codeword{NORMALS}, \codeword{NSLICES} and \codeword{SLICE_RANGE} is a list, and the lists must all be the same length: entry $i$ defines one slice plane sweep.
+\begin{itemize}
+    \item \codeword{VIEWS} [\codeword{str}] - camera view used to render each plane (\codeword{default} = \codeword{Front Left LeftForward LeftBack Top})
+
+    \item \codeword{NORMALS} [\codeword{str}] - slice plane normal for each sweep (\codeword{default} = \codeword{X Y Y Y Z})
+
+    \item \codeword{NSLICES} [\codeword{int}] - number of evenly spaced slices in each sweep, \codeword{default} adapts to the symmetry of the case
+
+    \item \codeword{SLICE_RANGE} [[\codeword{float,m}] [\codeword{float,m}]] - start and end coordinate of each sweep as \codeword{[min,max]}, \codeword{default} derives sensible ranges from the front-axle reference and the reference dimensions
+
+    \item \codeword{VARIABLES} [\codeword{str}] - field-slice variables to plot, \codeword{default} plots the standard pressure, velocity and vorticity set
+
+    \item \codeword{LIC_VARIABLES} [\codeword{str}] - variables coloured underneath the LIC streamlines, \codeword{default} uses the standard set
+\end{itemize}
+A variable requested here that is not defined in the variable dictionary, or not present in the solution, is reported and skipped rather than stopping the run.
+
+\subsubsection{[SURFACE] and [ISO\_SURFACE]}
+\begin{itemize}
+    \item \codeword{[SURFACE]} \codeword{VIEWS} / \codeword{VARIABLES} - camera views and surface-contour variables painted on the car body (e.g. \codeword{CpMean}, wall shear).
+
+    \item \codeword{[ISO_SURFACE]} \codeword{VIEWS} / \codeword{VARIABLES} / \codeword{ISO_VALUES} - camera views for the iso-surface renders. The iso-surfaces themselves (\codeword{isoQ}, \codeword{isoCtp}, ...) are produced by the solver's surface function objects and read from \codeword{postProcessing/surfaces}; \codeword{pvPost} renders whatever \codeword{iso*.vtp} files it finds.
+\end{itemize}
+
+\subsection{Variables and Camera Views}
+The variable dictionary defines every plottable variable as an equation over the OpenFOAM fields, together with a display label, a value range and a ParaView colour preset. The tokens \codeword{UREF}, \codeword{LREF} and \codeword{WREF} in the equations are substituted with the case reference values before evaluation, so coefficients such as \codeword{CpMean} and \codeword{CptMean} are normalised consistently with the rest of the case. To use a custom set, point \codeword{VARIABLE_DICT} (and, if needed, \codeword{CAMERA_VIEWS}) at your own file.
+
+\subsection{Half-Symmetry Cases}
+When the case is built on half symmetry (\codeword{SIM_SYM}\,=\,\codeword{half}), \codeword{pvPost} automatically reflects the body surface, the internal volume and the iso-surfaces about the symmetry plane so the rendered images show the full car.
+
+\subsection{Cornering (SRF) Cases}
+For an SRF cornering case the time-averaged velocity stored in the solution is the rotating-frame relative velocity \codeword{UrelMean}, not the absolute \codeword{UMean}. \codeword{pvPost} detects a cornering case automatically from \codeword{CORNERING_SETUP} -> \codeword{RUN_CORNERING} and, when it is \codeword{True}:
+\begin{itemize}
+    \item rewrites every variable equation that references \codeword{UMean} (including its components \codeword{UMean_X/Y/Z} and the \codeword{UMean^2} term in \codeword{CptMean}) to read \codeword{UrelMean} instead, and
+
+    \item uses \codeword{UrelMean} as the vector field for the LIC streamlines.
+\end{itemize}
+Variable names, labels and ranges are unchanged, so the same \codeword{pvPostSetup} works for both straight-line and cornering runs and the image file names stay consistent. A line is printed to \codeword{log.pvpost} confirming the substitution:
+\begin{lstlisting}
+    Cornering (SRF) case detected: using UrelMean in place of UMean.
+\end{lstlisting}
+\textbf{NOTE:} This requires \codeword{UrelMean} to be present in the solution. The cornering setup averages both \codeword{U} and \codeword{Urel}, so \codeword{UrelMean} is available; if it is missing, those variables are reported as unavailable and skipped.
+
+\subsection{Performance}
+For speed, \codeword{pvPost} loads only the fields actually referenced by the active variable equations (plus the LIC vector) from the EnSight reader, dropping unused fields such as \codeword{phi}, \codeword{k}, \codeword{omega}, \codeword{nut} and the \codeword{Prime2Mean} tensors before the cell-to-point conversion and slicing. It also reuses a single slice filter and calculator per slice normal, updating only the slice position as it sweeps, rather than rebuilding the pipeline for every slice. These changes reduce runtime and memory with no change to the images produced. The console reports which fields were loaded and which were skipped:
+\begin{lstlisting}
+    Loading only required fields: ['pMean', 'UMean', ...]
+    Skipping unused fields: ['phi', 'k', 'omega', ...]
+\end{lstlisting}
+
+\subsection{Workflow Summary}
+\begin{itemize}
+    \item Export the converged solution to EnSight (\codeword{EnSight/<caseName>.case}).
+
+    \item Edit \codeword{pvPostSetup} to choose the image sets (\codeword{GEOM_IMG}, \codeword{SURFACE_IMG}, \codeword{SLICE_IMG}, \codeword{SLICE_LIC_IMG}, \codeword{ISO_SURFACE_IMG}) and, if needed, the slice \codeword{NORMALS}, \codeword{NSLICES} and \codeword{SLICE_RANGE}.
+
+    \item Run \codeword{pvPost} with \codeword{pvbatch} from the case directory (automatic on the cluster). Add \codeword{--meshOnly} to render only the mesh.
+
+    \item Collect the images from \codeword{postProcessing/images}. Cornering cases are handled automatically; no setup change is required.
+\end{itemize}
+
+\subsection{Troubleshooting}
+\begin{itemize}
+    \item \codeword{ERROR! Unable to find EnSight File!} - no \codeword{EnSight/<caseName>.case} was found. Export the solution to EnSight before running \codeword{pvPost}.
+
+    \item \codeword{The inputs in pvPostSetup is not correct for [SLICE]} - the \codeword{VIEWS}, \codeword{NORMALS}, \codeword{NSLICES} and \codeword{SLICE_RANGE} lists are not all the same length. Make every \codeword{[SLICE]} list have one entry per sweep.
+
+    \item \codeword{<variable> not available, skipping} - the variable is not defined in the variable dictionary or not present in the solution. Check the spelling in \codeword{pvPostSetup} and confirm the field was written by the solver.
+
+    \item \codeword{Could not determine required fields from variables, loading all} - field detection found nothing to load and fell back to loading every field. The run still completes; check that the variable dictionary equations reference real field names.
+
+    \item \codeword{No iso-surface files found, skipping} - no \codeword{iso*.vtp} files exist under \codeword{postProcessing/surfaces}. Enable the iso-surface function objects in the solver setup if iso images are required.
+\end{itemize}
