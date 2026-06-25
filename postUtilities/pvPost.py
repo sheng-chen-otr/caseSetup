@@ -57,11 +57,17 @@ LIC_LABEL_FONT_SIZE = 50
 USE_PRE_DEF_VARS = False #using only predefined variables in list PRE_DEF_VAR_LIST, for dev purposes
 PRE_DEF_VAR_LIST = ['UnwMean','pMean']
 
+#SRF cornering: the time-averaged velocity solved/averaged in the rotating frame is the relative
+#velocity UrelMean, not the absolute UMean. For corner cases all post-processing that would read
+#UMean must read UrelMean instead. Detected in main() from the case setup; default is the
+#straight-line field name.
+UMEAN_FIELD = 'UMean'
+
 
 #main function
 def main():
     #global renderView, caseName, availableCellArrays
-    global UREF,LREF,CREF,FREF,WREF,fullCaseSetupDict,renderView,pvPostSetupDict,RESOLUTION
+    global UREF,LREF,CREF,FREF,WREF,fullCaseSetupDict,renderView,pvPostSetupDict,RESOLUTION,UMEAN_FIELD
     
 
     print('''\n\t####\t\tEZ-CFD PARAVIEW POST-PROCESSING V1.0\t\t ####\n\n''')
@@ -74,7 +80,15 @@ def main():
     
     #Getting reference values and geometries
     UREF,LREF,WREF,CREF,FREF,fullCaseSetupDict = getRef()
-    
+
+    #Detect an SRF cornering case. When cornering is on the averaged velocity field is UrelMean
+    #(rotating-frame relative velocity); use it everywhere UMean would be used.
+    if isCornering(fullCaseSetupDict):
+        UMEAN_FIELD = 'UrelMean'
+        print('\n\tCornering (SRF) case detected: using %s in place of UMean.' % (UMEAN_FIELD))
+    else:
+        UMEAN_FIELD = 'UMean'
+
     #Getting pvPostSetup file
     pvPostSetupDict = getPVSetup(templateLoc)
 
@@ -82,6 +96,12 @@ def main():
         varDict,viewsDict = getVariableDicts('%s/default/defaultVariables'% (templateLoc),pvPostSetupDict['PV_POST_MAIN']['CAMERA_VIEWS'])
     else:
         varDict,viewsDict = getVariableDicts(pvPostSetupDict['PV_POST_MAIN']['VARIABLE_DICT'],pvPostSetupDict['PV_POST_MAIN']['CAMERA_VIEWS'])
+
+    #For cornering, rewrite every variable equation that references UMean to read UrelMean instead
+    #(covers UMean, its components UMean_X/Y/Z, and CptMean's UMean^2). Variable keys and labels are
+    #left unchanged so the existing variable lists still resolve.
+    if UMEAN_FIELD != 'UMean':
+        swapMeanVelocityField(varDict,UMEAN_FIELD)
     
     
     #getting the boundaries
@@ -204,6 +224,31 @@ def main():
 
     print('\tTotal PV Post-Processing Time (s): ' + str(round(time.time()-begin,3)) + '\n\n')
         
+def isCornering(fullCaseSetupDict):
+    '''
+        Returns True if the case is an SRF cornering run (CORNERING_SETUP -> RUN_CORNERING is true).
+        Non-cornering cases have no CORNERING_SETUP section, so guard for it.
+    '''
+    if not fullCaseSetupDict.has_section('CORNERING_SETUP'):
+        return False
+    return fullCaseSetupDict['CORNERING_SETUP'].get('RUN_CORNERING','False').strip().lower() == 'true'
+
+
+def swapMeanVelocityField(varDict, replacement):
+    '''
+        For SRF cornering cases the time-averaged velocity is stored as UrelMean (the rotating-frame
+        relative velocity) rather than UMean. Rewrite every variable equation that references UMean so
+        post-processing reads the available UrelMean field instead. This covers UMean, its components
+        UMean_X/UMean_Y/UMean_Z, and CptMean's UMean^2. Only equation strings are modified; variable
+        keys and labels are left unchanged so the existing variable lists still resolve.
+    '''
+    for category in varDict:
+        for variable in varDict[category]:
+            equation = varDict[category][variable].get('equation')
+            if equation and 'UMean' in equation:
+                varDict[category][variable]['equation'] = equation.replace('UMean', replacement)
+
+
 def getVariableDicts(variablePaths, viewsPath):
     
     #getting default variables
@@ -726,7 +771,7 @@ def generateLICSlices(volumeSource,renderView,sliceDict,varDict,viewsDict):
                 
                 sliceSourceDisplay = Show(calculator,renderView,'UnstructuredGridRepresentation')
                 sliceSourceDisplay.Representation = 'Surface LIC'
-                sliceSourceDisplay.SelectInputVectors = ['POINTS', 'UMean']
+                sliceSourceDisplay.SelectInputVectors = ['POINTS', UMEAN_FIELD]
                 sliceSourceDisplay.ColorMode = 'Multiply'
                 sliceSourceDisplay.EnhanceContrast = 'LIC and Color'
                 
@@ -924,23 +969,10 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
 
 
     #checking if required folders exists
-    if os.path.isdir('postProcessing'):
-        if os.path.isdir('postProcessing/images'):
-            if not os.path.isdir('postProcessing/images/%s' % (dirName)):
-                print('\t\tDirectory for %s not found, creating...' % (dirName))
-                os.system('mkdir postProcessing/images/%s' % (dirName))
-        else:
-            print('\t\tDirectory for images not found, creating...')
-            os.system('mkdir postProcessing/images')
-            print('\t\tDirectory for %s not found, creating...' % (dirName))
-            os.system('mkdir postProcessing/images/%s' % (dirName))
-    else:
-        print('\t\tpostProcessing directory not found, creating...')
-        os.system('mkdir postProcessing')
-        print('\t\tDirectory for images not found, creating...')
-        os.system('mkdir postProcessing/images')
-        print('\t\tDirectory for %s not found, creating...' % (dirName))
-        os.system('mkdir postProcessing/images/%s' % (dirName))
+    #os.makedirs builds the full postProcessing/images/<dirName> tree in one call (no-op if it
+    #already exists). This replaces several os.system('mkdir ...') shell spawns that previously ran
+    #on every saved image (~1400+ times in a default slice run).
+    os.makedirs('postProcessing/images/%s' % (dirName), exist_ok=True)
 
     titleText = Text(registrationName="TitleText")
     if 'slice' in imageType.lower():
