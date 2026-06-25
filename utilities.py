@@ -2316,7 +2316,7 @@ def writeToRHCaseSetup(writeCaseSetupDict,newCasePath):
                 
 
 def calculateRollAngles(dl,dr,bw):
-    alpha = math.degrees(math.asin((dl-dr)/bw))
+    alpha = math.degrees(math.asin((dr-dl)/bw))
     d_center = (dl+dr)/2
     return round(alpha,3), round(d_center,4)
 
