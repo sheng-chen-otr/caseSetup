@@ -121,6 +121,7 @@ def main():
         writeMRFG(templateLoc,geomDict,fullCaseSetupDict)
         writeSRFProperties(templateLoc,fullCaseSetupDict)
         writeSurfaces(templateLoc, geomDict,fullCaseSetupDict)
+        writeCorneringRelativeFields(fullCaseSetupDict)
         writeTransportProperties(templateLoc, fullCaseSetupDict)
         writeTurbulenceProperties(templateLoc, fullCaseSetupDict)
         writeToCaseSetup(fullCaseSetupDict,'fullCaseSetupDict')
