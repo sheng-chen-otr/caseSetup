@@ -87,7 +87,7 @@
 
 "post":{"header":"#!/bin/bash\n#SBATCH --nodes=1\n#SBATCH --ntasks-per-node=8\n#SBATCH --nodelist=cfd08\n#SBATCH --partition=solve2\n#SBATCH --output=04_%x_postPro_%j.out\n#SBATCH --job-name=TS_PP035_half",
 
-         "forces":"echo 'doing post run forces and summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup-dev/postUtilities/postRun.py --forces -s --summary >> log.postRun",
+         "forces":"echo 'doing post run forces and summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch ~/openFoam/scripts/caseSetup/caseSetup-dev/postUtilities/postRun.py --forces -s --summary >> log.postRun",
          
          "gsheetExport":"echo 'exporting to gsheet...';/home/openfoam/openFoam/scripts/caseSetup/caseSetup/.venvs/bin/python3 ~/openFoam/scripts/caseSetup/caseSetup-dev/postUtilities/gsheetExport.py >> log.gsheetExport",
          

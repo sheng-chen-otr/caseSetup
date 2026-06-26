@@ -8,6 +8,7 @@ import argparse
 import matplotlib.pyplot as plt
 import scipy.stats as st
 import glob
+from collections import OrderedDict
 #from plotForces import *
 from summary import *
 #from estimateStatisticalError import *
@@ -68,7 +69,85 @@ def main():
         casePathDict = getCaseData(casePathDict)
         casePathDict = makePandasArrays(args,casePathDict)
         plotData(args,caseLoc,casePathDict)
-        
+
+
+def isCaseComplete(casePath):
+    #A ride-height child is "complete" when its OpenFOAM solver finished, which the solver signals by
+    #printing a standalone "End" line at the very end of its log. Checking that marker (rather than
+    #comparing the latest time against controlDict endTime) is robust to convergence-based early stops
+    #(residualControl), where a steady case legitimately ends before endTime. SRF cornering solves still
+    #write log.simpleFoam (steady) / log.pisoFoam (transient), so the same log names cover cornering.
+    for logName in ('log.simpleFoam', 'log.pisoFoam'):
+        logPath = os.path.join(casePath, logName)
+        if not os.path.isfile(logPath):
+            continue
+        try:
+            with open(logPath, 'r') as solveLog:
+                for line in solveLog:
+                    if line.strip() == 'End':
+                        return True
+        except Exception:
+            return False
+        #log exists but never reached the End marker -> still running or crashed
+        return False
+    return False
+
+
+def getCorneringInfo(fullCaseSetupDict, casePath, case):
+    #Returns the cornering / per-corner descriptors for a single case as an ordered dict of
+    #column-name -> value, ready to extend the summary rowNames/data.
+    #  - Cornering flag, corner radius and direction come from THIS case's own caseSetup
+    #    (createRideHeightCases injects the per-point CORNER_RADIUS / CORNER_DIR into each child).
+    #  - The per-corner ride-height change and steer angle come from the parent's
+    #    rideHeights_updated.csv (written by createRideHeightCases, one row per point keyed by
+    #    'caseName'), which lives one directory above the child case.
+    #Standalone / non-cornering cases fall back to N/A so the column set stays consistent.
+    info = OrderedDict([
+        ('Cornering', 'False'),
+        ('Corner Radius (m)', 'N/A'),
+        ('Corner Direction', 'N/A'),
+        ('Steer Angle (deg)', 'N/A'),
+        ('RH_FL', 'N/A'),
+        ('RH_FR', 'N/A'),
+        ('RH_RL', 'N/A'),
+        ('RH_RR', 'N/A'),
+    ])
+
+    if fullCaseSetupDict.has_section('CORNERING_SETUP'):
+        runCornering = fullCaseSetupDict['CORNERING_SETUP'].get('RUN_CORNERING', 'False').strip().lower() == 'true'
+        info['Cornering'] = str(runCornering)
+        if runCornering:
+            info['Corner Radius (m)'] = fullCaseSetupDict['CORNERING_SETUP'].get('CORNER_RADIUS', '').strip() or 'N/A'
+            info['Corner Direction'] = fullCaseSetupDict['CORNERING_SETUP'].get('CORNER_DIR', '').strip() or 'N/A'
+
+    #per-corner ride-height change + steer from the parent rideHeights_updated.csv
+    rhCsvPath = os.path.join(os.path.dirname(casePath), 'rideHeights_updated.csv')
+    if os.path.isfile(rhCsvPath):
+        try:
+            rhMap = pd.read_csv(rhCsvPath)
+            if 'caseName' in rhMap.columns:
+                rowMatch = rhMap[rhMap['caseName'].astype(str) == case]
+                if len(rowMatch) > 0:
+                    row = rowMatch.iloc[0]
+                    cornerCols = OrderedDict([
+                        ('Ride Height Change FL', 'wheel_fl'),
+                        ('Ride Height Change FR', 'wheel_fr'),
+                        ('Ride Height Change RL', 'wheel_rl'),
+                        ('Ride Height Change RR', 'wheel_rr'),
+                    ])
+                    for label, col in cornerCols.items():
+                        if col in rhMap.columns:
+                            info[label] = round(float(row[col]), 3)
+                    for steerCand in ('steer', 'steer_deg', 'steer_angle'):
+                        if steerCand in rhMap.columns:
+                            info['Steer Angle (deg)'] = round(float(row[steerCand]), 3)
+                            break
+        except Exception as e:
+            print('\tUnable to read cornering/ride-height info from %s: %s' % (rhCsvPath, e))
+
+    return info
+
+
 def generate_summary():
         
     caseSetupPath="%s/caseSetup" % (casePath)
@@ -90,8 +169,16 @@ def generate_summary():
             if point == ' ':
                 continue
             rideHeightDir = "%s_%s" % (caseName,point)
-            if os.path.isdir(rideHeightDir):
-                rhCases.append(rideHeightDir)
+            if not os.path.isdir(rideHeightDir):
+                print('\tWARNING! Ride height point %s not found (%s), skipping from average.' % (point, rideHeightDir))
+                continue
+            if not isCaseComplete(os.path.join(os.getcwd(), rideHeightDir)):
+                print('\tWARNING! Ride height point %s (%s) is not complete (no "End" in solve log), skipping from average.' % (point, rideHeightDir))
+                continue
+            rhCases.append(rideHeightDir)
+        if len(rhCases) < 1:
+            print('\tNo complete ride height points to average; skipping parent summary.')
+            return
         porousDict = {}
         partsDict = {}
         for case in rhCases:
@@ -192,6 +279,11 @@ def generate_summary():
         #default datas
         rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
         data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
+        #cornering + per-corner ride-height / steer descriptors for this case
+        corneringInfo = getCorneringInfo(fullCaseSetupDict, casePath, case)
+        for label, value in corneringInfo.items():
+            rowNames.append(label)
+            data.append(value)
         for part in partsDict.keys():
             partVarDict = {'CL':'cl',
                            'CD':'cd'}
