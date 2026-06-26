@@ -154,34 +154,30 @@ def copyFunctionObjects(templateLoc,foList,geomDict,fullCaseSetupDict):
         
 
 def writeCorneringRelativeFields(fullCaseSetupDict):
-    #SRF cornering solves the relative velocity Urel in the rotating frame. U is the absolute velocity
-    #(Urel + omega x r) and is dominated by the solid-body rotation away from the rotation centre, so it
-    #is not a meaningful field for post-processing a cornering case. Repoint every function object that
-    #reads the absolute velocity / mean velocity at its relative-frame equivalent so all derived fields
-    #(vorticity, Q, wall shear, yPlus, Cp/Cpt, surface samples, force coefficients) are computed from Urel.
-    #Only the *input* velocity field references are swapped; result/output names (QMean, vorticityMean,
-    #UnwMean, cpMean, ...) are kept so downstream sampling, pvPost and the report tooling are unaffected.
-    #averageFieldsDict is deliberately left alone: it averages both U and Urel, so UrelMean/UrelPrime2Mean
-    #already exist for these function objects to consume.
+    #SRF cornering writes BOTH the absolute (U/UMean) and the rotating-frame relative (Urel/UrelMean)
+    #velocity to disk. The absolute mean is dominated by the solid-body term omega x r away from the
+    #rotation centre, so deriving cpt/Cp/wall-shear/iso shapes from UMean is physically wrong (the cpt
+    #iso-surfaces come out distorted). Repoint the *mean* velocity references in the shared function
+    #object dicts at UrelMean so all post-processed mean quantities are computed in the rotating frame.
+    #Only the MEAN references are swapped (UMean->UrelMean, UPrime2Mean->UrelPrime2Mean,
+    #UMeanNear->UrelMeanNear). The `U` dictionary KEYWORD and the instantaneous `U`/`field U` references
+    #are left untouched: export post-processing only consumes the mean fields, and not touching bare U
+    #keeps the keyword `U  UrelMean;` form valid. Result/output names (cpMean, QMean, vorticityMean,
+    #UnwMean, ...) are preserved so pvPost and the report tooling still resolve. averageFieldsDict is
+    #excluded: it already averages both U and Urel, so UrelMean/UrelPrime2Mean exist for these to read.
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     if not runCornering:
         return
-    print('\n\tCornering case: repointing velocity-dependent function objects to Urel/UrelMean...')
-    #UMean and the other derived velocity fields are never used as dictionary keywords, so they can be
-    #swapped wherever they appear (input field references and sampled-field lists alike). Order longest
-    #first so UMeanNear/UPrime2Mean are not partially matched by the bare UMean rule.
+    print('\n\tCornering case: repointing mean-velocity function objects to UrelMean...')
+    #longest-first so UMeanNear / UPrime2Mean are not partially matched by the bare UMean rule.
     meanSwaps = [(r'\bUPrime2Mean\b', 'UrelPrime2Mean'),
                  (r'\bUMeanNear\b', 'UrelMeanNear'),
                  (r'\bUMean\b', 'UrelMean')]
-    #bare U is also used as a dictionary KEYWORD (e.g. the pressure / forceCoeffs `U  UMean;` entry), so
-    #only swap bare U -> Urel in files where it appears purely as a field VALUE. The word-boundary regex
-    #leaves Urel, UMean, UnwMean, UInf, magUInf untouched.
-    valueFiles = ['controlDictSRFSimple', 'controlDictSRFPiso',
-                  'vorticityDict', 'QCriterionDict', 'wallShearStressDict', 'yPlusDict',
-                  'nearWallFieldsDict', 'surfaceFieldAverage', 'surfaces']
-    keywordFiles = ['cptMeanDict', 'forceCoeffsExport']
-    for fo in valueFiles + keywordFiles:
+    foFiles = ['cptMeanDict', 'cpMeanDict', 'forceCoeffsExport',
+               'wallShearStressDict', 'yPlusDict', 'vorticityDict', 'QCriterionDict',
+               'nearWallFieldsDict', 'surfaceFieldAverage', 'surfaces']
+    for fo in foFiles:
         localPath = 'system/%s' % (fo)
         if not os.path.exists(localPath):
             continue
@@ -189,8 +185,6 @@ def writeCorneringRelativeFields(fullCaseSetupDict):
             content = f.read()
         for pattern, repl in meanSwaps:
             content = re.sub(pattern, repl, content)
-        if fo in valueFiles:
-            content = re.sub(r'\bU\b', 'Urel', content)
         with open(localPath, 'w') as f:
             f.write(content)
         print('\t\t%s' % (fo))

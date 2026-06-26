@@ -158,6 +158,21 @@ def makeScripts(templateLoc,fullCaseSetupDict):
         exportScriptArray.append(clusterDict['export'][line])
     exportScript = '\n'.join(exportScriptArray)
 
+    if runCornering:
+        #The export step template runs `pisoFoam -postProcess -latestTime -fields "(pMean UMean)"`. Two
+        #coordinated changes are required for cornering:
+        # 1. pisoFoam runs in the absolute frame and does not know about the SRF rotation, so it cannot
+        #    relate the rotating-frame fields. The export must run the same SRF solver used for the solve
+        #    (SRFSimpleFoam / SRFPimpleFoam, held in solverApp) so -postProcess understands the frame.
+        # 2. The -fields list is the ONLY thing read into the objectRegistry, and the cornering function
+        #    objects read both the absolute means (UMean) and the rotating-frame fields (UrelMean, Urel).
+        #    Unless every consumed field is preloaded the FOs fail with e.g. "failed lookup of UrelMean
+        #    (objectRegistry region0)", even though U/UMean and Urel/UrelMean all exist on disk. Preload all
+        #    four (pMean UMean UrelMean Urel) so every lookup resolves regardless of frame.
+        exportScript = exportScript.replace('foamExec pisoFoam -postProcess',
+                                            'foamExec %s -postProcess' % (solverApp))
+        exportScript = exportScript.replace('(pMean UMean)', '(pMean UMean UrelMean Urel)')
+
     for line in clusterDict['post'].keys():
         postScriptArray.append(clusterDict['post'][line])
     postScript = '\n'.join(postScriptArray)
