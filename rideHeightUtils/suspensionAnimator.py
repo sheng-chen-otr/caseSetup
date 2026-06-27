@@ -1,0 +1,516 @@
+#!/usr/bin/env python3
+'''
+suspensionAnimator.py
+
+Standalone visualisation tool that animates the motion of the suspension
+components across the ride-height map using the SAME kinematic pipeline as the
+case generator (utilities.calculateRideHeights ->
+utilities._compute_component_transforms). It loads the actual triSurface STL/OBJ
+geometry, keeps only the suspension components (matched by the per-corner PID
+keywords from the hardpoint CFG), and rigidly moves each component in-memory for
+every ride-height point.
+
+Output is a single animated GIF with three views:
+    - Front view : looking in the +X direction
+    - Side view  : looking in the +Y direction
+    - Top view   : looking in the -Z direction
+
+This is intended to be invoked by caseSetup.py only when the --animateSuspension
+flag is supplied, but it can also be run standalone:
+
+    python rideHeightUtils/suspensionAnimator.py -c <caseDir>
+
+It reuses utilities for the kinematics so the animation matches exactly what the
+ride-height case generator produces. No extra third-party dependencies are
+required beyond numpy/matplotlib (Pillow ships the GIF writer).
+'''
+
+import os
+import sys
+import re
+import gzip
+import argparse
+
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # headless: we only ever save a GIF, never show a window
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, PillowWriter
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+# Make the repo root importable so we can reuse the kinematics in utilities.py.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+import utilities  # noqa: E402
+
+
+# Colour per component type so the GIF is readable.
+_COMPONENT_COLORS = {
+    'WHEEL': '#222222',
+    'UCA': '#d62728',
+    'LCA': '#1f77b4',
+    'ROCKER': '#2ca02c',
+    'PUSHROD': '#9467bd',
+    'DAMPER': '#8c564b',
+    'TIE': '#ff7f0e',
+}
+_DEFAULT_COLOR = '#7f7f7f'
+
+# Cap triangles per component so a heavy mesh does not make the GIF render crawl.
+# Faces are strided (decimated), not removed, so the silhouette is preserved.
+_MAX_FACES_PER_COMPONENT = 6000
+
+
+# --------------------------------------------------------------------------- #
+# caseSetup loading (standalone use)
+# --------------------------------------------------------------------------- #
+def loadCaseSetup(caseDir):
+    '''
+    Read a case's ``caseSetup`` file into the same list-valued dict structure that
+    caseSetup.getCaseSetup produces: ``{SECTION: {KEY: [tokens...]}}``.
+    '''
+    import configparser
+
+    caseSetupPath = os.path.join(caseDir, 'caseSetup')
+    if not os.path.isfile(caseSetupPath):
+        raise FileNotFoundError('No caseSetup file found at: %s' % caseSetupPath)
+
+    config = configparser.ConfigParser()
+    config.optionxform = str
+    with open(caseSetupPath) as fh:
+        config.read_file(fh)
+
+    fullCaseSetupDict = {}
+    for section in config.sections():
+        fullCaseSetupDict[section] = {}
+        for key, value in config.items(section):
+            fullCaseSetupDict[section][key] = value.split(' ')
+    return fullCaseSetupDict
+
+
+# --------------------------------------------------------------------------- #
+# Geometry parsing (mirrors transformGeometryByPIDRegex conventions)
+# --------------------------------------------------------------------------- #
+def _open_maybe_gz(path, mode='rt'):
+    if path.lower().endswith('.gz'):
+        return gzip.open(path, mode)
+    return open(path, mode)
+
+
+def _parse_obj_groups(path):
+    '''
+    Parse an OBJ file into per-PID triangle groups.
+
+    PID = current ``g``/``o`` group name (matching transformGeometryByPIDRegex).
+    Returns dict: pid -> {'verts': (N,3) float array, 'faces': (M,3) int array}
+    where faces index into the local per-PID vertex array.
+    '''
+    vertices = []
+    currentPid = '__DEFAULT__'
+    pidGlobalFaces = {currentPid: []}
+
+    with _open_maybe_gz(path, 'rt') as fh:
+        for line in fh:
+            if line.startswith('v '):
+                parts = line.split()
+                vertices.append((float(parts[1]), float(parts[2]), float(parts[3])))
+            elif line.startswith('f '):
+                nVerts = len(vertices)
+                refs = []
+                for ref in line.split()[1:]:
+                    if '/' in ref:
+                        ref = ref.split('/', 1)[0]
+                    idx = int(ref)
+                    refs.append(idx - 1 if idx > 0 else nVerts + idx)
+                # fan-triangulate any polygon into triangles
+                for i in range(1, len(refs) - 1):
+                    pidGlobalFaces[currentPid].append((refs[0], refs[i], refs[i + 1]))
+            elif line.startswith('g ') or line.startswith('o '):
+                toks = line.split(maxsplit=1)
+                currentPid = toks[1].strip() if len(toks) > 1 else '__EMPTY__'
+                if currentPid not in pidGlobalFaces:
+                    pidGlobalFaces[currentPid] = []
+
+    vertices = np.asarray(vertices, dtype=np.float64) if vertices else np.zeros((0, 3))
+    return _localise_groups(vertices, pidGlobalFaces)
+
+
+def _localise_groups(vertices, pidGlobalFaces):
+    groups = {}
+    for pid, faces in pidGlobalFaces.items():
+        if len(faces) == 0:
+            continue
+        facesArr = np.asarray(faces, dtype=np.int64)
+        used = np.unique(facesArr)
+        remap = {g: l for l, g in enumerate(used)}
+        localVerts = vertices[used]
+        localFaces = np.vectorize(remap.get)(facesArr)
+        groups[pid] = {'verts': localVerts, 'faces': localFaces.reshape(-1, 3)}
+    return groups
+
+
+def _parse_ascii_stl_groups(path):
+    '''
+    Parse an ASCII STL into per-PID triangle groups. PID = ``solid <name>``.
+    Returns dict: pid -> {'verts': (N,3) array, 'faces': (M,3) int array}.
+    '''
+    groups = {}
+    currentPid = None
+    verts = []
+    faces = []
+    pending = []
+
+    def _flush(pid):
+        if pid is None or len(faces) == 0:
+            return
+        groups[pid] = {
+            'verts': np.asarray(verts, dtype=np.float64),
+            'faces': np.asarray(faces, dtype=np.int64).reshape(-1, 3),
+        }
+
+    with _open_maybe_gz(path, 'rt') as fh:
+        for raw in fh:
+            line = raw.strip()
+            if line.startswith('solid'):
+                currentPid = line[5:].strip() or '__EMPTY__'
+                verts = []
+                faces = []
+                pending = []
+            elif line.startswith('endsolid'):
+                _flush(currentPid)
+                currentPid = None
+            elif line.startswith('vertex'):
+                parts = line.split()
+                pending.append((float(parts[1]), float(parts[2]), float(parts[3])))
+                if len(pending) == 3:
+                    base = len(verts)
+                    verts.extend(pending)
+                    faces.append((base, base + 1, base + 2))
+                    pending = []
+    # handle files with a single unterminated solid
+    if currentPid is not None:
+        _flush(currentPid)
+    return groups
+
+
+def _load_pid_groups(path):
+    lower = path.lower()
+    if '.obj' in lower:
+        return _parse_obj_groups(path)
+    if '.stl' in lower:
+        if not utilities._is_ascii_stl_path(path):
+            raise ValueError('Binary STL not supported for animation: %s' % path)
+        return _parse_ascii_stl_groups(path)
+    raise ValueError('Unsupported geometry format (need OBJ/STL): %s' % path)
+
+
+# --------------------------------------------------------------------------- #
+# PID -> component matching and rigid transform application
+# --------------------------------------------------------------------------- #
+def _match_pid_to_component(pidName, categorizedKeywords):
+    '''
+    Find the (corner, compType) that owns ``pidName`` by case-sensitive regex
+    search of the escaped keywords (same matching basis as the generator).
+    Returns (corner, compType) or None.
+    '''
+    for corner, compMap in categorizedKeywords.items():
+        for compType, keywords in compMap.items():
+            for kw in keywords:
+                if re.search(re.escape(kw), pidName):
+                    return corner, compType
+    return None
+
+
+def _apply_rigid_transform(verts, transform):
+    '''
+    Apply ``v' = R(rvec) . (v - pivot) + pivot + translation`` to an (N,3) array,
+    matching utilities.transformGeometryByPIDRegex's rigid convention.
+    '''
+    rvec = np.asarray(transform.get('rotation_rvec', [0.0, 0.0, 0.0]), dtype=np.float64)
+    translation = np.asarray(transform.get('translation', [0.0, 0.0, 0.0]), dtype=np.float64)
+    pivot = transform.get('pivot', None)
+
+    out = verts
+    if float(np.linalg.norm(rvec)) > 1e-15:
+        R = utilities._rodrigues_matrix_from_rvec(rvec)
+        if pivot is not None:
+            piv = np.asarray(pivot, dtype=np.float64)
+            out = (verts - piv) @ R.T + piv
+        else:
+            out = verts @ R.T
+    return out + translation
+
+
+def _interpolate_row(rowA, rowB, alpha):
+    '''
+    Linearly blend the numeric columns of two ride-height rows.
+
+    Every kinematic-solver column read by ``_compute_component_transforms``
+    (``*_wc_x/y/z``, ``*_rvec_x/y/z``, ``*_rocker_deg``, ``*_damper_delta``,
+    ``*_rack_travel`` ...) is numeric, so a per-column lerp produces a
+    kinematically-consistent in-between pose. Non-numeric columns (caseName,
+    steer mode, ...) are carried through from ``rowA`` unchanged.
+    '''
+    out = rowA.copy()
+    for col in rowA.index:
+        try:
+            fa = float(rowA[col])
+            fb = float(rowB[col])
+        except (TypeError, ValueError):
+            continue
+        out[col] = fa + (fb - fa) * float(alpha)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Main animation builder
+# --------------------------------------------------------------------------- #
+def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None,
+                                intervalMs=80, transitionFrames=12, holdFrames=6):
+    '''
+    Build the suspension-motion GIF for ``caseDir`` (defaults to cwd).
+
+    The animation holds ``holdFrames`` frames at each ride-height point and inserts
+    ``transitionFrames`` interpolated poses between consecutive points so the motion is
+    smooth. ``intervalMs`` is the per-frame delay (GIF fps = 1000 / intervalMs).
+
+    Returns the output GIF path, or None if it could not be generated.
+    '''
+    if caseDir is None:
+        caseDir = os.getcwd()
+    caseDir = os.path.abspath(caseDir)
+
+    kinSetup = utilities._load_suspension_kinematics_setup(fullCaseSetupDict)
+    if kinSetup is None:
+        print('\tSuspension animation skipped: kinematic solver is not enabled '
+              '(set [RIDE_HEIGHT_SETUP] USE_KINEMATIC_SOLVER true and HARDPOINT_FILE).')
+        return None
+
+    # Per-corner keyword lists -> per-corner/per-component keyword map.
+    cornerPidKeywords = {'fl': [], 'fr': [], 'rl': [], 'rr': []}
+    for corner in cornerPidKeywords:
+        cornerPidKeywords[corner].extend(list(kinSetup['corner_pid_keywords'].get(corner, [])))
+        # de-duplicate while preserving order
+        seen = set()
+        dedup = []
+        for kw in cornerPidKeywords[corner]:
+            if kw not in seen:
+                dedup.append(kw)
+                seen.add(kw)
+        cornerPidKeywords[corner] = dedup
+    categorizedKeywords = utilities._categorize_pid_keywords_by_component(cornerPidKeywords)
+
+    # Ride-height table with kinematic solver columns (same call as the generator).
+    rideHeights = utilities.calculateRideHeights(fullCaseSetupDict)
+
+    # Filter to RUN_RH_POINTS, preserving the table order.
+    runPoints = fullCaseSetupDict['RIDE_HEIGHT_SETUP'].get('RUN_RH_POINTS', [''])
+    if len(runPoints) == 1 and runPoints[0] == '':
+        selected = rideHeights
+    else:
+        mask = rideHeights['point'].apply(lambda p: str(int(p)) in runPoints)
+        selected = rideHeights[mask]
+    selected = selected.reset_index(drop=True)
+    if len(selected) == 0:
+        print('\tSuspension animation skipped: no ride-height points selected.')
+        return None
+
+    # Load suspension geometry from the case triSurface dir, keep only matched PIDs.
+    triSurfaceDir = os.path.join(caseDir, 'constant', 'triSurface')
+    if not os.path.isdir(triSurfaceDir):
+        print('\tSuspension animation skipped: no geometry directory at %s' % triSurfaceDir)
+        return None
+
+    components = []  # list of dicts: {pid, corner, comp, baseVerts, faces}
+    for fname in sorted(os.listdir(triSurfaceDir)):
+        lower = fname.lower()
+        if not ('.obj' in lower or '.stl' in lower):
+            continue
+        fpath = os.path.join(triSurfaceDir, fname)
+        try:
+            groups = _load_pid_groups(fpath)
+        except Exception as exc:
+            print('\t\tSkipping %s for animation: %s' % (fname, exc))
+            continue
+        for pid, group in groups.items():
+            match = _match_pid_to_component(pid, categorizedKeywords)
+            if match is None:
+                continue
+            corner, comp = match
+            faces = group['faces']
+            if len(faces) > _MAX_FACES_PER_COMPONENT:
+                stride = int(np.ceil(len(faces) / _MAX_FACES_PER_COMPONENT))
+                faces = faces[::stride]
+            components.append({
+                'pid': pid,
+                'corner': corner,
+                'comp': comp,
+                'baseVerts': group['verts'],
+                'faces': faces,
+            })
+
+    if len(components) == 0:
+        print('\tSuspension animation skipped: no geometry PIDs matched the '
+              'suspension keywords from the hardpoint CFG.')
+        return None
+
+    print('\tBuilding suspension animation over %d ride-height point(s), %d component(s)...'
+          % (len(selected), len(components)))
+
+    # Build the playback schedule: hold a few frames at each ride-height point so the
+    # values are readable, then linearly interpolate the kinematic-solver columns into
+    # ``transitionFrames`` in-between poses so the motion to the next point is smooth.
+    # Each schedule entry is (row, srcPoint, dstPoint, alpha).
+    transitionFrames = max(1, int(transitionFrames))
+    holdFrames = max(1, int(holdFrames))
+    schedule = []
+    nPts = len(selected)
+    for i in range(nPts):
+        rowI = selected.iloc[i]
+        ptI = int(rowI['point'])
+        for _ in range(holdFrames):
+            schedule.append((rowI, ptI, ptI, 0.0))
+        if i < nPts - 1:
+            rowNext = selected.iloc[i + 1]
+            ptNext = int(rowNext['point'])
+            for s in range(1, transitionFrames):
+                alpha = s / float(transitionFrames)
+                schedule.append((_interpolate_row(rowI, rowNext, alpha), ptI, ptNext, alpha))
+
+    # Static bounding box (padded) for fixed, equal-aspect axes across all frames.
+    allVerts = np.vstack([c['baseVerts'] for c in components])
+    mins = allVerts.min(axis=0)
+    maxs = allVerts.max(axis=0)
+    center = (mins + maxs) / 2.0
+    span = float((maxs - mins).max()) * 1.25
+    if span <= 0:
+        span = 1.0
+    half = span / 2.0
+    limits = [(center[i] - half, center[i] + half) for i in range(3)]
+
+    rhUnit = fullCaseSetupDict['RIDE_HEIGHT_SETUP'].get('RH_UNIT', ['mm'])[0].lower()
+
+    # Three views: front (+X), side (+Y), top (-Z).
+    views = [
+        ('Front view (looking +X)', dict(elev=0, azim=180)),
+        ('Side view (looking +Y)', dict(elev=0, azim=270)),
+        ('Top view (looking -Z)', dict(elev=90, azim=-90)),
+    ]
+
+    fig = plt.figure(figsize=(16, 6))
+    axes = []
+    artists = []  # artists[viewIdx] -> list of Poly3DCollection aligned with components
+    for vIdx, (title, viewKwargs) in enumerate(views):
+        ax = fig.add_subplot(1, 3, vIdx + 1, projection='3d')
+        ax.set_title(title, fontsize=11)
+        ax.set_xlim(*limits[0])
+        ax.set_ylim(*limits[1])
+        ax.set_zlim(*limits[2])
+        ax.set_box_aspect((1, 1, 1))
+        ax.view_init(**viewKwargs)
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        viewArtists = []
+        for comp in components:
+            color = _COMPONENT_COLORS.get(comp['comp'], _DEFAULT_COLOR)
+            coll = Poly3DCollection([], facecolor=color, edgecolor='none', alpha=0.9)
+            ax.add_collection3d(coll)
+            viewArtists.append(coll)
+        axes.append(ax)
+        artists.append(viewArtists)
+
+    infoText = fig.text(0.5, 0.02, '', ha='center', va='bottom', fontsize=10,
+                        family='monospace')
+
+    def _ride_height_label(row, srcPoint, dstPoint, alpha):
+        scale = 1000.0 if rhUnit == 'm' else 1.0  # table fl/fr/rl/rr are in metres
+        unit = 'mm'
+        parts = []
+        for corner in ('fl', 'fr', 'rl', 'rr'):
+            if corner in row.index:
+                parts.append('%s=%.1f' % (corner.upper(), float(row[corner]) * scale))
+        rh = '  '.join(parts)
+        extra = []
+        for corner in ('fl', 'fr', 'rl', 'rr'):
+            camCol = '%s_camber_deg' % corner
+            if camCol in row.index:
+                extra.append('%s cam=%.2f' % (corner.upper(), float(row[camCol])))
+        if srcPoint == dstPoint or alpha <= 0.0:
+            header = 'Point %d' % srcPoint
+        else:
+            header = 'Point %d \u2192 %d  (%.0f%%)' % (srcPoint, dstPoint, alpha * 100.0)
+        line = '%s   RH(%s): %s' % (header, unit, rh)
+        if extra:
+            line += '\n' + '  '.join(extra)
+        return line
+
+    def update(frameIdx):
+        row, srcPoint, dstPoint, alpha = schedule[frameIdx]
+        # Compute transforms once per corner for this (possibly interpolated) pose.
+        cornerTransforms = {}
+        for corner in ('fr', 'fl', 'rr', 'rl'):
+            if corner in kinSetup['corners']:
+                cornerTransforms[corner] = utilities._compute_component_transforms(
+                    kinSetup, corner, row, selected)
+        updated = []
+        for cIdx, comp in enumerate(components):
+            transform = cornerTransforms.get(comp['corner'], {}).get(comp['comp'])
+            if transform is None:
+                newVerts = comp['baseVerts']
+            else:
+                newVerts = _apply_rigid_transform(comp['baseVerts'], transform)
+            tris = newVerts[comp['faces']]
+            for vIdx in range(len(views)):
+                artists[vIdx][cIdx].set_verts(tris)
+            updated.extend(artists[v][cIdx] for v in range(len(views)))
+        infoText.set_text(_ride_height_label(row, srcPoint, dstPoint, alpha))
+        return updated + [infoText]
+
+    anim = FuncAnimation(fig, update, frames=len(schedule),
+                         interval=intervalMs, blit=False)
+
+    if outputPath is None:
+        outputPath = os.path.join(caseDir, 'suspensionAnimation.gif')
+    fps = max(1.0, 1000.0 / float(intervalMs))
+    writer = PillowWriter(fps=fps)
+    anim.save(outputPath, writer=writer, dpi=90)
+    plt.close(fig)
+    print('\tSaved suspension animation GIF: %s' % outputPath)
+    return outputPath
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+def main():
+    parser = argparse.ArgumentParser(
+        prog='suspensionAnimator',
+        description='Animate suspension component motion across the ride-height map '
+                    'into a front/side/top GIF.')
+    parser.add_argument('-c', '--case', default='.',
+                        help='Case directory containing caseSetup and constant/triSurface.')
+    parser.add_argument('-o', '--output', default=None,
+                        help='Output GIF path (default: <case>/suspensionAnimation.gif).')
+    parser.add_argument('--interval', type=int, default=80,
+                        help='Per-frame interval in milliseconds (default: 80, ~12.5 fps).')
+    parser.add_argument('--transition-frames', type=int, default=12, dest='transitionFrames',
+                        help='Interpolated in-between frames per ride-height transition '
+                             '(default: 12). Higher = smoother, longer GIF.')
+    parser.add_argument('--hold-frames', type=int, default=6, dest='holdFrames',
+                        help='Frames to pause at each ride-height point (default: 6).')
+    args = parser.parse_args()
+
+    caseDir = os.path.abspath(args.case)
+    fullCaseSetupDict = loadCaseSetup(caseDir)
+    out = generateSuspensionAnimation(fullCaseSetupDict, caseDir=caseDir,
+                                      outputPath=args.output, intervalMs=args.interval,
+                                      transitionFrames=args.transitionFrames,
+                                      holdFrames=args.holdFrames)
+    if out is None:
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

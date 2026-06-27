@@ -130,10 +130,10 @@ def getCorneringInfo(fullCaseSetupDict, casePath, case):
                 if len(rowMatch) > 0:
                     row = rowMatch.iloc[0]
                     cornerCols = OrderedDict([
-                        ('Ride Height Change FL', 'wheel_fl'),
-                        ('Ride Height Change FR', 'wheel_fr'),
-                        ('Ride Height Change RL', 'wheel_rl'),
-                        ('Ride Height Change RR', 'wheel_rr'),
+                        ('RH_FL', 'wheel_fl'),
+                        ('RH_FR', 'wheel_fr'),
+                        ('RH_RL', 'wheel_rl'),
+                        ('RH_RR', 'wheel_rr'),
                     ])
                     for label, col in cornerCols.items():
                         if col in rhMap.columns:

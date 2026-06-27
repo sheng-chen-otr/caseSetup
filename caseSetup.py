@@ -58,6 +58,10 @@ parser.add_argument("--postProDict", action="store_true",
                     help='Copies post-processing config file into case folder.')
 parser.add_argument("--rideHeightMode", action="store_true", 
                     help='Run in ride height mode, does not link geometry files.')
+parser.add_argument("--animateSuspension", action="store_true",
+                    help='Generate a suspension-motion GIF (front/side/top views) across '
+                         'the ride-height map using the kinematic solver. Requires '
+                         '[RIDE_HEIGHT_SETUP] USE_KINEMATIC_SOLVER true.')
 args = parser.parse_args()
 CONTROLDICT = args.controlDict
 NEWCS = args.new
@@ -142,6 +146,15 @@ def main():
         
             
         
+        #generate suspension motion GIF (front/side/top) only when explicitly requested
+        if args.animateSuspension:
+            try:
+                from rideHeightUtils.suspensionAnimator import generateSuspensionAnimation
+                print('\n\tGenerating suspension motion animation...')
+                generateSuspensionAnimation(fullCaseSetupDict, caseDir=os.path.join(path, case))
+            except Exception as e:
+                print('\tWARNING! Suspension animation failed: %s' % e)
+
         #copy over the pvPostSetup
 
         if args.postProDict:
