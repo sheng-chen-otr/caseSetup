@@ -90,9 +90,9 @@ _COMPONENT_COLORS = {
 }
 _DEFAULT_COLOR = '#7f7f7f'
 
-# Cap triangles per component so a heavy mesh does not make the GIF render crawl.
+# Cap triangles per component so a heavy mesh does not make the render crawl.
 # Faces are strided (decimated), not removed, so the silhouette is preserved.
-_MAX_FACES_PER_COMPONENT = 6000
+_MAX_FACES_PER_COMPONENT = 40000
 
 
 # --------------------------------------------------------------------------- #
@@ -301,7 +301,7 @@ def _interpolate_row(rowA, rowB, alpha):
 # --------------------------------------------------------------------------- #
 def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None,
                                 intervalMs=80, transitionFrames=12, holdFrames=6,
-                                resolution=1400):
+                                resolution=1600):
     '''
     Build the suspension-motion GIF for ``caseDir`` (defaults to cwd).
 
@@ -488,13 +488,16 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
 
     # Resolve per-view output paths from the (optional) base output path.
     if outputPath is None:
-        base, ext = os.path.join(caseDir, 'suspensionAnimation'), '.gif'
+        base, ext = os.path.join(caseDir, 'suspensionAnimation'), '.mp4'
     else:
         base, ext = os.path.splitext(outputPath)
         if ext.lower() not in ('.gif', '.mp4'):
-            ext = '.gif'
+            ext = '.mp4'
     fps = max(1.0, 1000.0 / float(intervalMs))
     parallelScale = half * 1.1
+    # ffmpeg/h264 needs even (ideally /16) dimensions; round up to avoid a quality-
+    # degrading auto-resize on mp4 export.
+    resolution = int(np.ceil(resolution / 16.0) * 16)
 
     totalFrames = len(schedule)
     print('\tRendering %d frame(s) x %d view(s) (%d ride-height point(s), %d component(s))...'
@@ -506,10 +509,18 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
         plotter = pv.Plotter(off_screen=True, window_size=(resolution, resolution))
         plotter.set_background('white')
         plotter.enable_parallel_projection()
+        # Smooth anti-aliased edges for higher visual quality.
+        try:
+            plotter.enable_anti_aliasing('ssaa')
+        except Exception:
+            pass
         for comp, poly in zip(components, meshes):
             color = _COMPONENT_COLORS.get(comp['comp'], _DEFAULT_COLOR)
+            # Fully opaque solid surfaces (no transparency).
             plotter.add_mesh(poly, color=color, smooth_shading=True,
-                             specular=0.2, reset_camera=False)
+                             opacity=1.0, ambient=0.25, diffuse=0.7,
+                             specular=0.3, specular_power=15,
+                             reset_camera=False)
         plotter.camera.position = tuple(camPos)
         plotter.camera.focal_point = tuple(center)
         plotter.camera.up = viewUp
@@ -518,7 +529,8 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
                          color='black', name='title')
 
         if ext.lower() == '.mp4':
-            plotter.open_movie(outPath, framerate=int(round(fps)))
+            # quality 1-10 (10 = best); high bitrate for crisp output.
+            plotter.open_movie(outPath, framerate=int(round(fps)), quality=9)
         else:
             plotter.open_gif(outPath, fps=fps)
 
@@ -575,8 +587,8 @@ def main():
                              '(default: 12). Higher = smoother, longer GIF.')
     parser.add_argument('--hold-frames', type=int, default=6, dest='holdFrames',
                         help='Frames to pause at each ride-height point (default: 6).')
-    parser.add_argument('--resolution', type=int, default=1400,
-                        help='Square pixel resolution per view (default: 1400 -> 1400x1400).')
+    parser.add_argument('--resolution', type=int, default=1600,
+                        help='Square pixel resolution per view (default: 1600 -> 1600x1600).')
     args = parser.parse_args()
 
     caseDir = os.path.abspath(args.case)
