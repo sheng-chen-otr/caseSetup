@@ -30,6 +30,7 @@ import sys
 import re
 import gzip
 import argparse
+import time
 
 import numpy as np
 import matplotlib
@@ -302,6 +303,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
     categorizedKeywords = utilities._categorize_pid_keywords_by_component(cornerPidKeywords)
 
     # Ride-height table with kinematic solver columns (same call as the generator).
+    print('\tSolving suspension kinematics across the ride-height map...')
     rideHeights = utilities.calculateRideHeights(fullCaseSetupDict)
 
     # Filter to RUN_RH_POINTS, preserving the table order.
@@ -323,10 +325,11 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
         return None
 
     components = []  # list of dicts: {pid, corner, comp, baseVerts, faces}
-    for fname in sorted(os.listdir(triSurfaceDir)):
-        lower = fname.lower()
-        if not ('.obj' in lower or '.stl' in lower):
-            continue
+    geomFiles = [f for f in sorted(os.listdir(triSurfaceDir))
+                 if ('.obj' in f.lower() or '.stl' in f.lower())]
+    print('\tParsing %d geometry file(s) from %s ...' % (len(geomFiles), triSurfaceDir))
+    for fIdx, fname in enumerate(geomFiles):
+        print('\t\t[%d/%d] %s' % (fIdx + 1, len(geomFiles), fname))
         fpath = os.path.join(triSurfaceDir, fname)
         try:
             groups = _load_pid_groups(fpath)
@@ -475,9 +478,31 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
         outputPath = os.path.join(caseDir, 'suspensionAnimation.gif')
     fps = max(1.0, 1000.0 / float(intervalMs))
     writer = PillowWriter(fps=fps)
-    anim.save(outputPath, writer=writer, dpi=90)
+
+    totalFrames = len(schedule)
+    print('\tRendering %d frame(s) to GIF (%d ride-height point(s), %d component(s); '
+          'this can take a while)...' % (totalFrames, len(selected), len(components)))
+    renderStart = time.time()
+
+    def _render_progress(current, total):
+        # +1 so the count is 1-based for display; matplotlib calls this per saved frame.
+        done = current + 1
+        elapsed = time.time() - renderStart
+        pct = 100.0 * done / total if total else 100.0
+        if done > 0 and pct > 0:
+            eta = elapsed * (100.0 - pct) / pct
+            etaStr = ' ETA %4.0fs' % eta
+        else:
+            etaStr = ''
+        sys.stdout.write('\r\t\tframe %d/%d (%5.1f%%) elapsed %4.0fs%s'
+                         % (done, total, pct, elapsed, etaStr))
+        sys.stdout.flush()
+
+    anim.save(outputPath, writer=writer, dpi=90, progress_callback=_render_progress)
+    sys.stdout.write('\n')
     plt.close(fig)
-    print('\tSaved suspension animation GIF: %s' % outputPath)
+    print('\tSaved suspension animation GIF (%.0fs): %s'
+          % (time.time() - renderStart, outputPath))
     return outputPath
 
 
