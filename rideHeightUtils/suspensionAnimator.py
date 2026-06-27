@@ -47,6 +47,30 @@ except Exception:  # pragma: no cover - import-time environment check
     pv = None
     _HAVE_PYVISTA = False
 
+
+def _ensure_offscreen_display():
+    '''
+    Make sure VTK has a usable GL context on headless machines.
+
+    On Linux without a DISPLAY, VTK's X backend segfaults. PyVista can spin up a
+    virtual framebuffer (xvfb) to give it an off-screen target. Returns True if a
+    display is available (or not needed), False if rendering would crash.
+    '''
+    if not _HAVE_PYVISTA:
+        return False
+    # macOS/Windows do not use X11; rendering works without a DISPLAY.
+    if sys.platform != 'linux':
+        return True
+    if os.environ.get('DISPLAY'):
+        return True
+    # Headless Linux: try to start a virtual framebuffer.
+    try:
+        pv.start_xvfb()
+        return bool(os.environ.get('DISPLAY'))
+    except Exception as exc:
+        print('\t\tWARNING! Could not start xvfb virtual framebuffer: %s' % exc)
+        return False
+
 # Make the repo root importable so we can reuse the kinematics in utilities.py.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -427,6 +451,12 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
     if not _HAVE_PYVISTA:
         print('\tSuspension animation skipped: PyVista is not installed. Install it with\n'
               '\t\tpip install pyvista imageio imageio-ffmpeg')
+        return None
+
+    if not _ensure_offscreen_display():
+        print('\tSuspension animation skipped: no X display and xvfb is unavailable.\n'
+              '\t\tInstall xvfb (e.g. `sudo apt-get install xvfb`) or run on a node with a\n'
+              '\t\tdisplay so the off-screen GL context can be created.')
         return None
 
     # Pre-build one VTK PolyData per component. VTK face format is a flat array of
