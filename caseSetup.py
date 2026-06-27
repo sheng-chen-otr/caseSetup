@@ -98,6 +98,18 @@ def main():
                       'laterally symmetric). Forcing SIM_SYM=full for this run.')
                 fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'] = ['full']
 
+        #animateSuspension: link geometry first, then generate the suspension-motion GIF
+        #only and skip the rest of caseSetup.
+        if args.animateSuspension:
+            from rideHeightUtils.suspensionAnimator import generateSuspensionAnimation
+            print('\n\tanimateSuspension enabled: linking geometry then generating the '
+                  'suspension motion animation only (the rest of caseSetup is skipped)...')
+            writeCaseSetupDict,geomDict,fullCaseSetupDict = getGeometry(fullCaseSetupDict,writeCaseSetupDict)
+            linkGeomFiles(geomDict)
+            generateSuspensionAnimation(fullCaseSetupDict, caseDir=os.path.join(path, case))
+            print('\nSuspension animation completed.')
+            return
+
         writeCaseSetupDict,geomDict,fullCaseSetupDict = getGeometry(fullCaseSetupDict,writeCaseSetupDict) 
         
         cleanUpCaseSetup(geomDict,writeCaseSetupDict,fullCaseSetupDict,defaultDict)
@@ -146,15 +158,6 @@ def main():
         
             
         
-        #generate suspension motion GIF (front/side/top) only when explicitly requested
-        if args.animateSuspension:
-            try:
-                from rideHeightUtils.suspensionAnimator import generateSuspensionAnimation
-                print('\n\tGenerating suspension motion animation...')
-                generateSuspensionAnimation(fullCaseSetupDict, caseDir=os.path.join(path, case))
-            except Exception as e:
-                print('\tWARNING! Suspension animation failed: %s' % e)
-
         #copy over the pvPostSetup
 
         if args.postProDict:
