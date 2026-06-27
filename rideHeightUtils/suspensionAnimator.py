@@ -268,7 +268,8 @@ def _interpolate_row(rowA, rowB, alpha):
 # Main animation builder
 # --------------------------------------------------------------------------- #
 def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None,
-                                intervalMs=80, transitionFrames=12, holdFrames=6):
+                                intervalMs=80, transitionFrames=12, holdFrames=6,
+                                dpi=200):
     '''
     Build the suspension-motion GIF for ``caseDir`` (defaults to cwd).
 
@@ -401,7 +402,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
         ('Top view (looking -Z)', dict(elev=90, azim=-90)),
     ]
 
-    fig = plt.figure(figsize=(16, 6))
+    fig = plt.figure(figsize=(18, 7))
     axes = []
     artists = []  # artists[viewIdx] -> list of Poly3DCollection aligned with components
     for vIdx, (title, viewKwargs) in enumerate(views):
@@ -498,7 +499,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
                          % (done, total, pct, elapsed, etaStr))
         sys.stdout.flush()
 
-    anim.save(outputPath, writer=writer, dpi=90, progress_callback=_render_progress)
+    anim.save(outputPath, writer=writer, dpi=dpi, progress_callback=_render_progress)
     sys.stdout.write('\n')
     plt.close(fig)
     print('\tSaved suspension animation GIF (%.0fs): %s'
@@ -525,6 +526,9 @@ def main():
                              '(default: 12). Higher = smoother, longer GIF.')
     parser.add_argument('--hold-frames', type=int, default=6, dest='holdFrames',
                         help='Frames to pause at each ride-height point (default: 6).')
+    parser.add_argument('--dpi', type=int, default=200,
+                        help='Output resolution in dots-per-inch (default: 200). The '
+                             'figure is 18x7 in, so 200 dpi -> 3600x1400 px.')
     args = parser.parse_args()
 
     caseDir = os.path.abspath(args.case)
@@ -532,7 +536,7 @@ def main():
     out = generateSuspensionAnimation(fullCaseSetupDict, caseDir=caseDir,
                                       outputPath=args.output, intervalMs=args.interval,
                                       transitionFrames=args.transitionFrames,
-                                      holdFrames=args.holdFrames)
+                                      holdFrames=args.holdFrames, dpi=args.dpi)
     if out is None:
         sys.exit(1)
 
