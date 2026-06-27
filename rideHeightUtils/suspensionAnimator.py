@@ -10,10 +10,10 @@ geometry, keeps only the suspension components (matched by the per-corner PID
 keywords from the hardpoint CFG), and rigidly moves each component in-memory for
 every ride-height point.
 
-Output is a single animated GIF with three views:
-    - Front view : looking in the +X direction
-    - Side view  : looking in the +Y direction
-    - Top view   : looking in the -Z direction
+Output is one animation file per view (front/side/top), each written separately:
+    - <base>_front.gif : looking in the +X direction
+    - <base>_side.gif  : looking in the +Y direction
+    - <base>_top.gif   : looking in the -Z direction
 
 This is intended to be invoked by caseSetup.py only when the --animateSuspension
 flag is supplied, but it can also be run standalone:
@@ -21,8 +21,10 @@ flag is supplied, but it can also be run standalone:
     python rideHeightUtils/suspensionAnimator.py -c <caseDir>
 
 It reuses utilities for the kinematics so the animation matches exactly what the
-ride-height case generator produces. No extra third-party dependencies are
-required beyond numpy/matplotlib (Pillow ships the GIF writer).
+ride-height case generator produces. Rendering uses PyVista (VTK) off-screen,
+which is far faster than matplotlib's mplot3d. Install with:
+
+    pip install pyvista imageio imageio-ffmpeg
 '''
 
 import os
@@ -33,11 +35,17 @@ import argparse
 import time
 
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')  # headless: we only ever save a GIF, never show a window
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation, PillowWriter
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+# PyVista (VTK) is the rendering backend: it updates mesh coordinates in C++ and
+# renders off-screen, which is far faster than matplotlib's mplot3d (the latter
+# re-sorts every polygon in Python on each frame).
+try:
+    import pyvista as pv
+    pv.OFF_SCREEN = True
+    _HAVE_PYVISTA = True
+except Exception:  # pragma: no cover - import-time environment check
+    pv = None
+    _HAVE_PYVISTA = False
 
 # Make the repo root importable so we can reuse the kinematics in utilities.py.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -269,7 +277,7 @@ def _interpolate_row(rowA, rowB, alpha):
 # --------------------------------------------------------------------------- #
 def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None,
                                 intervalMs=80, transitionFrames=12, holdFrames=6,
-                                dpi=200):
+                                resolution=1400):
     '''
     Build the suspension-motion GIF for ``caseDir`` (defaults to cwd).
 
@@ -382,7 +390,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
                 alpha = s / float(transitionFrames)
                 schedule.append((_interpolate_row(rowI, rowNext, alpha), ptI, ptNext, alpha))
 
-    # Static bounding box (padded) for fixed, equal-aspect axes across all frames.
+    # Static bounding box (padded) for a fixed, equal-aspect camera across all frames.
     allVerts = np.vstack([c['baseVerts'] for c in components])
     mins = allVerts.min(axis=0)
     maxs = allVerts.max(axis=0)
@@ -391,42 +399,8 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
     if span <= 0:
         span = 1.0
     half = span / 2.0
-    limits = [(center[i] - half, center[i] + half) for i in range(3)]
 
     rhUnit = fullCaseSetupDict['RIDE_HEIGHT_SETUP'].get('RH_UNIT', ['mm'])[0].lower()
-
-    # Three views: front (+X), side (+Y), top (-Z).
-    views = [
-        ('Front view (looking +X)', dict(elev=0, azim=180)),
-        ('Side view (looking +Y)', dict(elev=0, azim=270)),
-        ('Top view (looking -Z)', dict(elev=90, azim=-90)),
-    ]
-
-    fig = plt.figure(figsize=(18, 7))
-    axes = []
-    artists = []  # artists[viewIdx] -> list of Poly3DCollection aligned with components
-    for vIdx, (title, viewKwargs) in enumerate(views):
-        ax = fig.add_subplot(1, 3, vIdx + 1, projection='3d')
-        ax.set_title(title, fontsize=11)
-        ax.set_xlim(*limits[0])
-        ax.set_ylim(*limits[1])
-        ax.set_zlim(*limits[2])
-        ax.set_box_aspect((1, 1, 1))
-        ax.view_init(**viewKwargs)
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-        viewArtists = []
-        for comp in components:
-            color = _COMPONENT_COLORS.get(comp['comp'], _DEFAULT_COLOR)
-            coll = Poly3DCollection([], facecolor=color, edgecolor='none', alpha=0.9)
-            ax.add_collection3d(coll)
-            viewArtists.append(coll)
-        axes.append(ax)
-        artists.append(viewArtists)
-
-    infoText = fig.text(0.5, 0.02, '', ha='center', va='bottom', fontsize=10,
-                        family='monospace')
 
     def _ride_height_label(row, srcPoint, dstPoint, alpha):
         scale = 1000.0 if rhUnit == 'm' else 1.0  # table fl/fr/rl/rr are in metres
@@ -444,67 +418,112 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
         if srcPoint == dstPoint or alpha <= 0.0:
             header = 'Point %d' % srcPoint
         else:
-            header = 'Point %d \u2192 %d  (%.0f%%)' % (srcPoint, dstPoint, alpha * 100.0)
+            header = 'Point %d -> %d  (%.0f%%)' % (srcPoint, dstPoint, alpha * 100.0)
         line = '%s   RH(%s): %s' % (header, unit, rh)
         if extra:
             line += '\n' + '  '.join(extra)
         return line
 
-    def update(frameIdx):
-        row, srcPoint, dstPoint, alpha = schedule[frameIdx]
-        # Compute transforms once per corner for this (possibly interpolated) pose.
-        cornerTransforms = {}
-        for corner in ('fr', 'fl', 'rr', 'rl'):
-            if corner in kinSetup['corners']:
-                cornerTransforms[corner] = utilities._compute_component_transforms(
-                    kinSetup, corner, row, selected)
-        updated = []
-        for cIdx, comp in enumerate(components):
-            transform = cornerTransforms.get(comp['corner'], {}).get(comp['comp'])
-            if transform is None:
-                newVerts = comp['baseVerts']
-            else:
-                newVerts = _apply_rigid_transform(comp['baseVerts'], transform)
-            tris = newVerts[comp['faces']]
-            for vIdx in range(len(views)):
-                artists[vIdx][cIdx].set_verts(tris)
-            updated.extend(artists[v][cIdx] for v in range(len(views)))
-        infoText.set_text(_ride_height_label(row, srcPoint, dstPoint, alpha))
-        return updated + [infoText]
+    if not _HAVE_PYVISTA:
+        print('\tSuspension animation skipped: PyVista is not installed. Install it with\n'
+              '\t\tpip install pyvista imageio imageio-ffmpeg')
+        return None
 
-    anim = FuncAnimation(fig, update, frames=len(schedule),
-                         interval=intervalMs, blit=False)
+    # Pre-build one VTK PolyData per component. VTK face format is a flat array of
+    # [n, i0, i1, i2, n, ...]; here every face is a triangle (n == 3).
+    meshes = []
+    for comp in components:
+        faces = np.asarray(comp['faces'], dtype=np.int64)
+        nFaces = len(faces)
+        faceArr = np.empty((nFaces, 4), dtype=np.int64)
+        faceArr[:, 0] = 3
+        faceArr[:, 1:] = faces
+        poly = pv.PolyData(np.asarray(comp['baseVerts'], dtype=np.float64),
+                           faceArr.ravel())
+        meshes.append(poly)
 
+    # Three orthographic views, each written to its OWN file:
+    #   front : camera on -X looking +X   (Y-Z plane), Z up
+    #   side  : camera on -Y looking +Y   (X-Z plane), Z up
+    #   top   : camera on +Z looking -Z   (X-Y plane), Y up
+    dist = span * 2.0
+    views = [
+        ('front', 'Front view (looking +X)',
+         (center + np.array([-dist, 0.0, 0.0])), (0.0, 0.0, 1.0)),
+        ('side', 'Side view (looking +Y)',
+         (center + np.array([0.0, -dist, 0.0])), (0.0, 0.0, 1.0)),
+        ('top', 'Top view (looking -Z)',
+         (center + np.array([0.0, 0.0, dist])), (0.0, 1.0, 0.0)),
+    ]
+
+    # Resolve per-view output paths from the (optional) base output path.
     if outputPath is None:
-        outputPath = os.path.join(caseDir, 'suspensionAnimation.gif')
+        base, ext = os.path.join(caseDir, 'suspensionAnimation'), '.gif'
+    else:
+        base, ext = os.path.splitext(outputPath)
+        if ext.lower() not in ('.gif', '.mp4'):
+            ext = '.gif'
     fps = max(1.0, 1000.0 / float(intervalMs))
-    writer = PillowWriter(fps=fps)
+    parallelScale = half * 1.1
 
     totalFrames = len(schedule)
-    print('\tRendering %d frame(s) to GIF (%d ride-height point(s), %d component(s); '
-          'this can take a while)...' % (totalFrames, len(selected), len(components)))
-    renderStart = time.time()
+    print('\tRendering %d frame(s) x %d view(s) (%d ride-height point(s), %d component(s))...'
+          % (totalFrames, len(views), len(selected), len(components)))
 
-    def _render_progress(current, total):
-        # +1 so the count is 1-based for display; matplotlib calls this per saved frame.
-        done = current + 1
-        elapsed = time.time() - renderStart
-        pct = 100.0 * done / total if total else 100.0
-        if done > 0 and pct > 0:
-            eta = elapsed * (100.0 - pct) / pct
-            etaStr = ' ETA %4.0fs' % eta
+    outputs = []
+    for viewKey, viewTitle, camPos, viewUp in views:
+        outPath = '%s_%s%s' % (base, viewKey, ext)
+        plotter = pv.Plotter(off_screen=True, window_size=(resolution, resolution))
+        plotter.set_background('white')
+        plotter.enable_parallel_projection()
+        for comp, poly in zip(components, meshes):
+            color = _COMPONENT_COLORS.get(comp['comp'], _DEFAULT_COLOR)
+            plotter.add_mesh(poly, color=color, smooth_shading=True,
+                             specular=0.2, reset_camera=False)
+        plotter.camera.position = tuple(camPos)
+        plotter.camera.focal_point = tuple(center)
+        plotter.camera.up = viewUp
+        plotter.camera.parallel_scale = parallelScale
+        plotter.add_text(viewTitle, position='upper_edge', font_size=12,
+                         color='black', name='title')
+
+        if ext.lower() == '.mp4':
+            plotter.open_movie(outPath, framerate=int(round(fps)))
         else:
-            etaStr = ''
-        sys.stdout.write('\r\t\tframe %d/%d (%5.1f%%) elapsed %4.0fs%s'
-                         % (done, total, pct, elapsed, etaStr))
-        sys.stdout.flush()
+            plotter.open_gif(outPath, fps=fps)
 
-    anim.save(outputPath, writer=writer, dpi=dpi, progress_callback=_render_progress)
-    sys.stdout.write('\n')
-    plt.close(fig)
-    print('\tSaved suspension animation GIF (%.0fs): %s'
-          % (time.time() - renderStart, outputPath))
-    return outputPath
+        renderStart = time.time()
+        for frameIdx in range(totalFrames):
+            row, srcPoint, dstPoint, alpha = schedule[frameIdx]
+            cornerTransforms = {}
+            for corner in ('fr', 'fl', 'rr', 'rl'):
+                if corner in kinSetup['corners']:
+                    cornerTransforms[corner] = utilities._compute_component_transforms(
+                        kinSetup, corner, row, selected)
+            for cIdx, comp in enumerate(components):
+                transform = cornerTransforms.get(comp['corner'], {}).get(comp['comp'])
+                if transform is None:
+                    meshes[cIdx].points = np.asarray(comp['baseVerts'], dtype=np.float64)
+                else:
+                    meshes[cIdx].points = _apply_rigid_transform(comp['baseVerts'], transform)
+            plotter.add_text(_ride_height_label(row, srcPoint, dstPoint, alpha),
+                             position='lower_edge', font_size=11, color='black',
+                             name='info')
+            plotter.write_frame()
+
+            done = frameIdx + 1
+            elapsed = time.time() - renderStart
+            pct = 100.0 * done / totalFrames
+            eta = elapsed * (100.0 - pct) / pct if pct > 0 else 0.0
+            sys.stdout.write('\r\t\t[%s] frame %d/%d (%5.1f%%) elapsed %4.0fs ETA %4.0fs'
+                             % (viewKey, done, totalFrames, pct, elapsed, eta))
+            sys.stdout.flush()
+        sys.stdout.write('\n')
+        plotter.close()
+        print('\t\tSaved %s view (%.0fs): %s' % (viewKey, time.time() - renderStart, outPath))
+        outputs.append(outPath)
+
+    return outputs
 
 
 # --------------------------------------------------------------------------- #
@@ -526,9 +545,8 @@ def main():
                              '(default: 12). Higher = smoother, longer GIF.')
     parser.add_argument('--hold-frames', type=int, default=6, dest='holdFrames',
                         help='Frames to pause at each ride-height point (default: 6).')
-    parser.add_argument('--dpi', type=int, default=200,
-                        help='Output resolution in dots-per-inch (default: 200). The '
-                             'figure is 18x7 in, so 200 dpi -> 3600x1400 px.')
+    parser.add_argument('--resolution', type=int, default=1400,
+                        help='Square pixel resolution per view (default: 1400 -> 1400x1400).')
     args = parser.parse_args()
 
     caseDir = os.path.abspath(args.case)
@@ -536,7 +554,7 @@ def main():
     out = generateSuspensionAnimation(fullCaseSetupDict, caseDir=caseDir,
                                       outputPath=args.output, intervalMs=args.interval,
                                       transitionFrames=args.transitionFrames,
-                                      holdFrames=args.holdFrames, dpi=args.dpi)
+                                      holdFrames=args.holdFrames, resolution=args.resolution)
     if out is None:
         sys.exit(1)
 
