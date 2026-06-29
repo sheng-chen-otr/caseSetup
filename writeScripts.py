@@ -81,9 +81,8 @@ def makeScripts(templateLoc,fullCaseSetupDict):
         meshingScriptArray.append(clusterDict[meshKey][line])
     meshingScript = '\n'.join(meshingScriptArray)
 
-    #SRF cornering is solved directly in the rotating frame with CORNER_SOLVER (default SRFSimpleFoam).
-    #The standard initialisers (potentialFoam / simpleFoam) run in the absolute frame and would seed an
-    #inconsistent field for an SRF solve, so initialisation is skipped entirely when cornering.
+    #srf cornering solves in the rotating frame with CORNER_SOLVER, so skip the
+    #absolute-frame initialisers (they'd seed a bad field)
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
 
@@ -108,35 +107,26 @@ def makeScripts(templateLoc,fullCaseSetupDict):
         solverApp = fullCaseSetupDict['CORNERING_SETUP']['CORNER_SOLVER'][0]
         simTypeLower = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0].lower()
         if simTypeLower == 'transient':
-            #transient cornering runs SRFPimpleFoam. CORNER_SOLVER defaults to the steady solver name
-            #(SRFSimpleFoam), so auto-upgrade it to the transient SRF solver when left at that default.
+            #transient cornering uses SRFPimpleFoam, auto-upgrade from the steady default
             if solverApp == 'SRFSimpleFoam':
                 solverApp = 'SRFPimpleFoam'
-            #bare (un-anchored) swaps so both the `[ -f system/controlDictPiso ]` guards and the
-            #`cp system/controlDictPiso ...` lines flip to the SRF variant. Safe because the meshing and
-            #solve scripts never reference controlDictPisoExport / fvSolutionPisoExport.
+            #bare swaps so the controlDictPiso guards and cp lines both flip to SRF
             fileSwaps = [('system/controlDictPiso', 'system/controlDictSRFPiso'),
                          ('system/fvSolutionPiso',  'system/fvSolutionSRFPiso'),
                          ('system/fvSchemesPiso',   'system/fvSchemesSRFPiso')]
             execOld = 'foamExec pisoFoam -parallel >> log.pisoFoam'
             execNew = 'foamExec %s -parallel >> log.pisoFoam' % (solverApp)
         else:
-            #cornering swaps the steady "Simple" dictionaries for their SRF counterparts so that meshing
-            #(getControlDict / getFvDict) and the solve step copy the SRF controlDict/fvSolution/fvSchemes,
-            #and createZeroDirectory reads application = SRFSimpleFoam and emits the Urel field. The trailing
-            #space anchors the filename so controlDictSimpleExport / controlDictSimpleInit are not matched.
+            #steady cornering swaps the Simple dicts for SRF. trailing space anchors the
+            #filename so the Export/Init variants aren't matched
             fileSwaps = [('system/controlDictSimple ', 'system/controlDictSRFSimple '),
                          ('system/fvSolutionSimple ',  'system/fvSolutionSRFSimple '),
                          ('system/fvSchemesSimple ',   'system/fvSchemesSRFSimple ')]
             execOld = 'foamExec simpleFoam -parallel >> log.simpleFoam'
             execNew = 'foamExec %s -parallel >> log.simpleFoam' % (solverApp)
-        #Meshing's getControlDict selects the controlDict by existence and falls back to
-        #controlDictPotential. For cornering only the SRF controlDict is ever written, and relying on the
-        #substring swaps below to flip that chain is fragile: if it misses, meshing leaves controlDict as
-        #controlDictPotential and the solve's createZeroDirectory then reads application = potentialFoam
-        #instead of the SRF solver. Replace the whole getControlDict chain with an explicit copy of the SRF
-        #controlDict so it can never fall back to controlDictPotential. Done before the swap loop so the
-        #exact original string still matches; the SRF replacement contains no swap-target substrings.
+        #replace the whole getControlDict chain with an explicit copy of the SRF controlDict
+        #so meshing can't fall back to controlDictPotential. done before the swap loop so the
+        #original string still matches
         srfControlDict = 'controlDictSRFPiso' if simTypeLower == 'transient' else 'controlDictSRFSimple'
         corneringGetControlDict = ('if [ -f system/%s ]; then cp system/%s system/controlDict; '
                                    'else exit 1; fi') % (srfControlDict, srfControlDict)
@@ -145,10 +135,8 @@ def makeScripts(templateLoc,fullCaseSetupDict):
             meshingScript = meshingScript.replace(src, dst)
             solveScript = solveScript.replace(src, dst)
         solveScript = solveScript.replace(execOld, execNew)
-        #The solve preamble copies controlDictPotential->controlDict (absolute-frame potential init) right
-        #before createZeroDirectory reads the application. Cornering never writes controlDictPotential, but a
-        #stale file from an earlier run would clobber the SRF controlDict and make createZeroDirectory emit U
-        #instead of Urel, so drop that copy entirely for cornering cases.
+        #drop the potential-init preamble for cornering - a stale controlDictPotential would
+        #clobber the SRF controlDict and make createZeroDirectory emit U instead of Urel
         potentialPreamble = (" if [[ -f 'system/controlDictPotential' ]]; then "
                              "cp system/controlDictPotential system/controlDict; "
                              "cp system/fvSolutionPotential system/fvSolution; fi;")
@@ -159,16 +147,8 @@ def makeScripts(templateLoc,fullCaseSetupDict):
     exportScript = '\n'.join(exportScriptArray)
 
     if runCornering:
-        #The export step template runs `pisoFoam -postProcess -latestTime -fields "(pMean UMean)"`. Two
-        #coordinated changes are required for cornering:
-        # 1. pisoFoam runs in the absolute frame and does not know about the SRF rotation, so it cannot
-        #    relate the rotating-frame fields. The export must run the same SRF solver used for the solve
-        #    (SRFSimpleFoam / SRFPimpleFoam, held in solverApp) so -postProcess understands the frame.
-        # 2. The -fields list is the ONLY thing read into the objectRegistry, and the cornering function
-        #    objects read both the absolute means (UMean) and the rotating-frame fields (UrelMean, Urel).
-        #    Unless every consumed field is preloaded the FOs fail with e.g. "failed lookup of UrelMean
-        #    (objectRegistry region0)", even though U/UMean and Urel/UrelMean all exist on disk. Preload all
-        #    four (pMean UMean UrelMean Urel) so every lookup resolves regardless of frame.
+        #export must run the SRF solver (not pisoFoam) so -postProcess knows the frame, and
+        #-fields must preload everything the FOs read (UrelMean/Urel aren't loaded from disk)
         exportScript = exportScript.replace('foamExec pisoFoam -postProcess',
                                             'foamExec %s -postProcess' % (solverApp))
         exportScript = exportScript.replace('(pMean UMean)', '(pMean UMean UrelMean Urel)')

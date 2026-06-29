@@ -87,8 +87,7 @@ def main():
     else:
         caseSetupDict,writeCaseSetupDict,fullCaseSetupDict = getCaseSetup(defaultDict)
 
-        #SRF cornering: validate domain and force a full (non-symmetric) model before any consumer runs.
-        #Override is in-memory only (fullCaseSetupDict) so the user's caseSetup SIM_SYM is left untouched.
+        #srf cornering: force a full (non-symmetric) model in-memory, leaves caseSetup SIM_SYM alone
         if 'CORNERING_SETUP' in fullCaseSetupDict and \
            fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true':
             print('\tCornering (SRF) enabled: validating domain and simulation symmetry...')
@@ -98,8 +97,7 @@ def main():
                       'laterally symmetric). Forcing SIM_SYM=full for this run.')
                 fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'] = ['full']
 
-        #animateSuspension: link geometry first, then generate the suspension-motion GIF
-        #only and skip the rest of caseSetup.
+        #animateSuspension: link geometry, make the animation, then skip the rest
         if args.animateSuspension:
             from rideHeightUtils.suspensionAnimator import generateSuspensionAnimation
             print('\n\tanimateSuspension enabled: linking geometry then generating the '

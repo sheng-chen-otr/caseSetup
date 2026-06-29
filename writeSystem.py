@@ -20,9 +20,8 @@ controlDictDict = {'steady':'controlDictSimple',
 exportDict = {'steady':'controlDictSimpleExport',
               'transient':'controlDictPisoExport'}
 
-#SRF cornering controlDicts. steady -> SRFSimpleFoam, transient -> SRFPimpleFoam. createZeroDirectory
-#picks the field-creation template from the controlDict `application`, so these drive both the solver
-#and the Urel field creation.
+#srf cornering controlDicts. createZeroDirectory picks the field template from the
+#controlDict application, so these drive both the solver and Urel creation
 controlDictCornerDict = {'steady':'controlDictSRFSimple',
                          'transient':'controlDictSRFPiso'}
 
@@ -78,9 +77,7 @@ def writeControlDict(templateLoc, fullCaseSetupDict):
     simType = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0].lower()
     simInit = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0].lower()
     simTurb = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['TURB_MODEL'][0].lower()
-    #SRF cornering is solved in the rotating frame: the relative velocity Urel is the primary field
-    #and createZeroDirectory must emit it. A dedicated controlDict (application SRFSimpleFoam) drives
-    #both the solver and the field creation, so cornering selects the SRF controlDict templates below.
+    #srf cornering solves Urel in the rotating frame, so select the SRF controlDict templates
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     if runCornering and simType not in dictDict['controlDictCornerType'].keys():
@@ -93,9 +90,8 @@ def writeControlDict(templateLoc, fullCaseSetupDict):
         
         #writes out controlDict for initialization method
         if runCornering:
-            #cornering skips the absolute-frame initialisation entirely; writing controlDictPotential or
-            #controlDictSimpleInit here would let the solve preamble swap controlDict and mislead
-            #createZeroDirectory about the application, so no initialisation controlDict is written.
+            #cornering skips absolute-frame init - writing an init controlDict here would let
+            #the solve preamble swap controlDict and mislead createZeroDirectory
             print('\t\tCornering case: skipping initialisation controlDict')
         elif simInit in possibleInit:
             controlDictTemplate = dictDict['initType'][simType][simInit]
@@ -154,30 +150,22 @@ def copyFunctionObjects(templateLoc,foList,geomDict,fullCaseSetupDict):
         
 
 def writeCorneringRelativeFields(fullCaseSetupDict):
-    #SRF cornering writes BOTH the absolute (U/UMean) and the rotating-frame relative (Urel/UrelMean)
-    #velocity to disk. The absolute mean is dominated by the solid-body term omega x r away from the
-    #rotation centre, so deriving cpt/Cp/wall-shear/iso shapes from UMean is physically wrong (the cpt
-    #iso-surfaces come out distorted). Repoint the *mean* velocity references in the shared function
-    #object dicts at UrelMean so all post-processed mean quantities are computed in the rotating frame.
-    #Only the MEAN references are swapped (UMean->UrelMean, UPrime2Mean->UrelPrime2Mean,
-    #UMeanNear->UrelMeanNear). The `U` dictionary KEYWORD and the instantaneous `U`/`field U` references
-    #are left untouched: export post-processing only consumes the mean fields, and not touching bare U
-    #keeps the keyword `U  UrelMean;` form valid. Result/output names (cpMean, QMean, vorticityMean,
-    #UnwMean, ...) are preserved so pvPost and the report tooling still resolve. averageFieldsDict is
-    #excluded: it already averages both U and Urel, so UrelMean/UrelPrime2Mean exist for these to read.
+ 
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     if not runCornering:
         return
-    print('\n\tCornering case: repointing mean-velocity function objects to UrelMean...')
-    #longest-first so UMeanNear / UPrime2Mean are not partially matched by the bare UMean rule.
+    print('\n\tCornering case: repointing velocity-dependent function objects to Urel/UrelMean...')
+
     meanSwaps = [(r'\bUPrime2Mean\b', 'UrelPrime2Mean'),
                  (r'\bUMeanNear\b', 'UrelMeanNear'),
                  (r'\bUMean\b', 'UrelMean')]
-    foFiles = ['cptMeanDict', 'cpMeanDict', 'forceCoeffsExport',
-               'wallShearStressDict', 'yPlusDict', 'vorticityDict', 'QCriterionDict',
-               'nearWallFieldsDict', 'surfaceFieldAverage', 'surfaces']
-    for fo in foFiles:
+
+    valueFiles = ['controlDictSRFSimple', 'controlDictSRFPiso',
+                  'vorticityDict', 'QCriterionDict', 'wallShearStressDict', 'yPlusDict',
+                  'nearWallFieldsDict', 'surfaceFieldAverage', 'surfaces']
+    keywordFiles = ['cptMeanDict', 'forceCoeffsExport']
+    for fo in valueFiles + keywordFiles:
         localPath = 'system/%s' % (fo)
         if not os.path.exists(localPath):
             continue
@@ -185,6 +173,8 @@ def writeCorneringRelativeFields(fullCaseSetupDict):
             content = f.read()
         for pattern, repl in meanSwaps:
             content = re.sub(pattern, repl, content)
+        if fo in valueFiles:
+            content = re.sub(r'\bU\b', 'Urel', content)
         with open(localPath, 'w') as f:
             f.write(content)
         print('\t\t%s' % (fo))
@@ -250,8 +240,7 @@ def writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict):
                         print('\t\t\tusing user input: %s' % (forceVec))
                         forceVec = ' '.join(forceVec)
                 if isinstance(forceVec, list):
-                    #forceType not in forceVecDict (e.g. a *_VEC key with an unrecognised prefix): forceVec
-                    #is still the raw token list. search_and_replace needs a string, so join it here.
+                    #unrecognised *_VEC prefix - still a token list, join for search_and_replace
                     forceVec = ' '.join(forceVec)
                 search_and_replace("system/forceCoeffsExport", "<%s>" % (key),forceVec) 
                 search_and_replace("system/forceCoeffSetup", "<%s>" % (key),forceVec) 
@@ -401,9 +390,7 @@ def writeSolution(templateLoc, fullCaseSetupDict):
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     if runCornering:
-        #cornering solves Urel in the rotating frame; the SRF fvSolution adds the Urel solver and
-        #relaxation entries. Initialisation is skipped, so no init fvSolution is written. Transient
-        #cornering uses the PIMPLE-based SRF variant, steady uses the SIMPLE-based one.
+        #SRF fvSolution adds the Urel solver/relaxation. init is skipped so no init fvSolution
         print('\t\tCornering case:')
         if simType.lower() == 'transient':
             print('\t\t\tCopying fvSolutionSRFPiso')
@@ -449,8 +436,7 @@ def writeSchemes(templateLoc, fullCaseSetupDict):
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     if runCornering:
-        #cornering needs Urel momentum schemes (div(phi,Urel), laplacian(nuEff,Urel), grad(Urel)).
-        #Transient cornering uses the backward-ddt PIMPLE variant, steady the steadyState SIMPLE one.
+        #cornering needs Urel momentum schemes. transient uses the PIMPLE variant, steady the SIMPLE one
         print('\t\tCornering case:')
         if simType.lower() == 'transient':
             print('\t\t\tCopying fvSchemesSRFPiso')
@@ -510,24 +496,16 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
         inletVec = velVector(float(inletMag[0]),float(yaw[0]),pitch)
     velString = 'U uniform (%s);' % (inletVec[0])
     initStringArray.append(velString)   
-    #SRF cornering solves the relative velocity Urel, which createZeroDirectory generates as a field.
-    #createZeroDirectory sets each field's internalField to ${:initialConditions.<fieldName>}, so the
-    #initialConditions block must contain a Urel entry or 0/Urel generation aborts. Seed Urel with the
-    #same freestream vector as U (a reasonable initial guess; the SRFFreestream/SRFVelocity BCs and the
-    #solver correct it for the rotating frame).
+    #cornering solves Urel, which createZeroDirectory makes from initialConditions, so seed a
+    #Urel entry (same freestream as U). the BCs/solver correct it for the rotating frame
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     if runCornering:
         urelString = 'Urel uniform (%s);' % (inletVec[0])
         initStringArray.append(urelString)
-        #SRFFreestreamVelocity reads UInf as a single vector keyword (no 'uniform' prefix), unlike the
-        #'value'/internalField fields which are uniform Fields. Expose a bare-vector UInf in initialConditions
-        #so the srfFreestream boundary template can reference ${:VALUE.UInf} without a 'uniform' token.
-        #UInf is the freestream in the INERTIAL frame: SRFFreestreamVelocity imposes a patch value of
-        #(UInf rotated into the frame) - omega x r. A car cornering through still air has zero inertial-frame
-        #freestream; all of its relative wind comes from the rotation (omega x r, which equals INLET_MAG at the
-        #car's radius). Seeding UInf with the INLET_MAG vector double-counts the speed (~2x velocity, ~4x forces)
-        #and piles the velocity/pressure maxima onto the car, so UInf must be the zero vector for cornering.
+        #UInf is the inertial-frame freestream for SRFFreestreamVelocity (bare vector, no 'uniform').
+        #a car cornering in still air has zero inertial freestream - all wind comes from omega x r,
+        #so seeding INLET_MAG would double-count the speed. UInf must be zero for cornering
         uInfString = 'UInf (0 0 0);'
         initStringArray.append(uInfString)
     
@@ -565,9 +543,8 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                           'walls':'walls{category wall; type slip; patches (".*z-max.*" ".*y-min.*"); values {$:initialConditions;}}',
                           'symmetry':'symmetry{category symmetry; type symmetry; patches (".*y-max.*");}'
                           }
-    #SRF cornering: whole domain rotates with the car. All vertical (x/y) walls become self-selecting
-    #SRFFreestream patches, the ground becomes an SRFVelocity moving wall, and the roof stays slip. No
-    #symmetry plane (the cornering flow field is not laterally symmetric, so the case must be run full).
+    #cornering: whole domain rotates with the car. x/y walls become srfFreestream, ground is an
+    #srf moving wall, roof stays slip. no symmetry plane since the flow isn't laterally symmetric
     domainWallDictCorner = {'inlet':'inlet{category inlet; type freestream; patches (".*x-min.*" ".*x-max.*" ".*y-min.*" ".*y-max.*"); options {flowSpecification srfFreestream;} values {$:initialConditions;}}',
                             'ground':'ground{category wall; type noSlip; patches (".*z-min.*"); options {wallFunction highReynolds; motion srf;} values {$:initialConditions;}}',
                             'walls':'walls{category wall; type slip; patches (".*z-max.*"); values {$:initialConditions;}}'
@@ -689,10 +666,8 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                     try:
                         vertices, faces = readGeomFile(geom)
                         xcenter,ycenter,zcenter, xaxis,yaxis,zaxis = find_wheel_axis(vertices,faces)
-                        #effective rolling radius = axle to the GROUND PLANE at the contact patch below the axle.
-                        #the tyre penetrates the floor and is cut at the ground by snappyHexMesh, so the rolling-wall
-                        #contact is at the ground plane (not the tyre geometry). calcLoadedRadius intersects the vertical
-                        #line through the axle with the heave-corrected, pitch/roll-tilted floor plane.
+                        #effective rolling radius = axle to the ground plane below the axle. the tyre is
+                        #cut at the floor by snappy, so contact is the ground plane, not the tyre geometry
                         radius = calcLoadedRadius(xcenter, ycenter, zcenter, fullCaseSetupDict) #axle to ground plane below axle
                         #bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = getBoundingBox(geom.replace('.gz',''))
                         
@@ -746,9 +721,8 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                 print('\t\t\t\tWheel Axis: %s' % (whAxis))
                 if fullCaseSetupDict[geom.split('.')[0]]['ROT_WH'][0].lower() == 'true':
                     if runCornering:
-                        #cornering: local ground speed differs per wheel. In the rotating frame the wheel
-                        #rolls at V_local = |omega_corner| * (horizontal distance from the corner axis to the
-                        #wheel centre), so inner wheels spin slower and outer wheels faster than INLET_MAG.
+                        #cornering: each wheel rolls at V_local = |omega| * radius from the corner axis,
+                        #so inner wheels spin slower and outer wheels faster than INLET_MAG
                         omegaSigned, cAxis, cCentre = corneringFrame(fullCaseSetupDict)
                         whOrigParts = whOrig.split()
                         dx = float(whOrigParts[0]) - cCentre[0]

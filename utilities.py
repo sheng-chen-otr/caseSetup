@@ -161,8 +161,7 @@ def _load_suspension_hardpoints_cfg(hardpointPath):
             if required not in c:
                 raise ValueError('Missing required key for %s: %s' % (sec, required))
 
-        # Rack travel direction for steering (tie-rod inner motion). Optional; defaults
-        # to vehicle-lateral so a single rack displaces the inner joint in y.
+        # rack travel direction for steering. optional, defaults to vehicle-lateral (y)
         if 'rack_axis' not in c:
             c['rack_axis'] = [0.0, 1.0, 0.0]
 
@@ -176,7 +175,7 @@ def _load_suspension_hardpoints_cfg(hardpointPath):
             if v != '':
                 cornerPidKeywords[corner].append(v)
 
-    # Optional component sections: merge PID keywords by CORNER field.
+    # optional component sections: merge PID keywords by CORNER field
     for sec in cfg.sections():
         if sec in cornerSections.values():
             continue
@@ -197,7 +196,7 @@ def _load_suspension_hardpoints_cfg(hardpointPath):
 
 
 def _load_suspension_kinematics_setup(fullCaseSetupDict):
-    # Preferred location is [RIDE_HEIGHT_SETUP] so no custom section handling is required.
+    # read from [RIDE_HEIGHT_SETUP] so no custom section handling is needed
     section = None
     sectionName = None
     if 'RIDE_HEIGHT_SETUP' in fullCaseSetupDict and 'USE_KINEMATIC_SOLVER' in fullCaseSetupDict['RIDE_HEIGHT_SETUP']:
@@ -272,9 +271,8 @@ def _append_suspension_kinematics(rideHeights, fullCaseSetupDict):
 
     nPoints = len(rideHeights)
 
-    # Optional front-axle steer input (road-wheel angle in degrees at the reference
-    # wheel, FL). FL and FR share a single rack, so the rack travel that achieves the
-    # commanded FL angle is reused for FR, letting the FR angle (Ackermann) emerge.
+    # optional front steer (FL road-wheel angle, deg). FL/FR share a rack so the FL
+    # rack travel is reused for FR, letting FR angle (Ackermann) emerge
     steerCol = None
     for cand in ('steer', 'steer_deg', 'steer_angle'):
         if cand in rideHeights.columns:
@@ -439,9 +437,8 @@ def calculateRideHeights(fullCaseSetupDict):
         rideHeights.loc[idx, 'roll'] = fr_roll_angle  # Use front roll angle since they should match
         rideHeights.loc[idx, 'heave'] = dz_wb_center  # Heave is center displacement
         
-        # Calculate wheel movements in tunnel coordinate system
-        # In vehicle coordinates: wheel positions relative to reference
-        # In tunnel coordinates: reference moves relative to wheels (inverse transformation)
+        # wheel movements in tunnel coords - in tunnel frame the reference moves
+        # relative to the wheels (inverse of the vehicle-frame motion)
         wheel_fl, wheel_fr, wheel_rl, wheel_rr, tunnel_pitch, tunnel_roll, tunnel_dz = calculateWheelMovements(
             row['fl'], row['fr'], row['rl'], row['rr'],
             pitch_angle, fr_roll_angle, dz_wb_center
@@ -485,10 +482,8 @@ def createRideHeightCases(rideHeights, fullCaseSetupDict):
     currentREFCOR = fullCaseSetupDict['BC_SETUP']['REFCOR']
     SIM_SYM = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM']
 
-    # SRF cornering: when enabled, the ride-height map drives the corner radius (and optionally the
-    # turn direction) per point, so each ride-height attitude is paired with its matching corner. The
-    # radius/direction are taken from optional ride-height columns; missing/invalid values fall back to
-    # the base [CORNERING_SETUP] values. Detected once here (mirrors the optional 'steer' column).
+    # srf cornering: ride-height map drives the per-point corner radius/direction from
+    # optional columns, falling back to base [CORNERING_SETUP] when missing
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     cornerRadiusCol = None
@@ -578,9 +573,7 @@ def _categorize_pid_keywords_by_component(cornerPidKeywords):
     Returns dict mapping corner -> {component_type -> [keywords]}
     '''
     compTypes = ['UCA', 'LCA', 'ROCKER', 'PUSHROD', 'DAMPER', 'WHEEL', 'TIE']
-    # Accept common abbreviations in addition to the full component name. Aliases are
-    # checked as substrings of the (upper-cased) keyword; keep them component-specific
-    # to avoid false matches.
+    # accept common abbreviations too. aliases are matched as substrings of the upper-cased keyword
     compAliases = {
         'UCA': ['UCA'],
         'LCA': ['LCA'],
@@ -605,49 +598,44 @@ def _categorize_pid_keywords_by_component(cornerPidKeywords):
 
 
 def _validate_component_transforms(compTransforms, corner):
-    '''
-    Validate computed component transforms and warn if values exceed reasonable bounds.
-    Returns list of validation warnings.
-    '''
+    #warn if any transform exceeds sane bounds. returns a list of warnings
     warnings = []
     
     for compType, transform in compTransforms.items():
-        # Check rotation magnitude
+        # rotation magnitude
         rvec = np.array(transform.get('rotation_rvec', [0, 0, 0]))
         rot_angle_rad = np.linalg.norm(rvec)
         rot_angle_deg = np.degrees(rot_angle_rad)
         
-        # Reasonable bounds for suspension components
+        # sane bounds per component
         if compType == 'WHEEL':
-            max_rot = 15.0  # Wheel camber/toe typically < ±15°
+            max_rot = 15.0  # camber/toe
         elif compType in ['UCA', 'LCA']:
-            max_rot = 20.0  # Arm rotation < ±20°
+            max_rot = 20.0  # arm rotation
         elif compType == 'TIE':
-            max_rot = 25.0  # Tie rod more flexible, < ±25°
+            max_rot = 25.0  # tie rod
         elif compType == 'ROCKER':
-            max_rot = 30.0  # Rocker can rotate more, < ±30°
+            max_rot = 30.0  # rocker
         else:
-            max_rot = 25.0  # Default
+            max_rot = 25.0  # default
         
         if rot_angle_deg > max_rot:
             warnings.append(f'{compType} ({corner}): rotation {rot_angle_deg:.2f}° exceeds typical bound {max_rot}°')
         
-        # Check translation magnitude
+        # translation magnitude
         trans = np.array(transform.get('translation', [0, 0, 0]))
         trans_mag = np.linalg.norm(trans)
-        if trans_mag > 0.5:  # > 50 cm of translation is suspicious
+        if trans_mag > 0.5:  # >50cm looks wrong
             warnings.append(f'{compType} ({corner}): translation {trans_mag:.4f}m exceeds typical bound 0.5m')
     
     return warnings
 
 
 def _write_component_transforms_log(childName, corner, row, compTransforms):
-    '''
-    Write detailed per-component transform log to CSV for inspection.
-    '''
+    #dump per-component transforms to csv for inspection
     logPath = os.path.join(childName, f'component_transforms_{corner}.csv')
     
-    # Ensure parent directory exists
+    # make sure parent dir exists
     os.makedirs(os.path.dirname(logPath), exist_ok=True)
     
     rows = []
@@ -689,10 +677,7 @@ def _write_component_transforms_log(childName, corner, row, compTransforms):
 
 
 def _plot_suspension_linkage(kinSetup, corner, row, compTransforms, childName, rideHeights):
-    '''
-    Plot suspension linkage before/after to visually validate kinematics.
-    Saves as PNG image.
-    '''
+    #plot the linkage before/after to eyeball the kinematics, save a png
     try:
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import Axes3D
@@ -875,9 +860,7 @@ def _plot_suspension_linkage(kinSetup, corner, row, compTransforms, childName, r
 
 
 def _create_linkage_gifs(baseCaseName, points, corners=('fl', 'fr', 'rl', 'rr'), frameDurationMs=450):
-    '''
-    Build animated GIFs from per-point linkage_validation PNGs for each corner.
-    '''
+    #build a gif per corner from the per-point linkage pngs
     try:
         from PIL import Image
     except ImportError:
@@ -894,7 +877,7 @@ def _create_linkage_gifs(baseCaseName, points, corners=('fl', 'fr', 'rl', 'rr'),
         if len(framePaths) == 0:
             continue
 
-        # Keep only initial and final states in the animation.
+        # keep only the first and last frames
         if len(framePaths) > 1:
             framePaths = [framePaths[0], framePaths[-1]]
 
@@ -914,10 +897,7 @@ def _create_linkage_gifs(baseCaseName, points, corners=('fl', 'fr', 'rl', 'rr'),
 
 
 def _compute_component_transforms(kinSetup, corner, row, rideHeights):
-    '''
-    Compute per-component transforms based on kinematic solver state.
-    Returns dict mapping component_type -> {translation, rotation_rvec, pivot}
-    '''
+    #per-component transforms from the solver state. returns component -> {translation, rotation_rvec, pivot}
     compTransforms = {}
     hardpoints = kinSetup['corners'][corner]
 
@@ -947,14 +927,8 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
         return pivot + v_rot
 
     def _rvec_about_axis_to_target(axisPoint, axisDir, p_from, p_to):
-        '''
-        Rotation vector about a fixed hinge LINE (passing through ``axisPoint`` with
-        direction ``axisDir``) that swings ``p_from`` to best align with ``p_to``.
-        Positions are measured relative to ``axisPoint`` (a point ON the line) and only
-        their components perpendicular to the line participate, so every point on the
-        line (e.g. the chassis bushings of an A-arm) stays exactly fixed and the swept
-        angle is the true hinge angle.
-        '''
+        #rvec about a fixed hinge line (through axisPoint, dir axisDir) that swings p_from
+        #onto p_to. only perpendicular components count, so points on the line stay fixed
         axis = np.asarray(axisDir, dtype=np.float64)
         n = np.linalg.norm(axis)
         if n <= 1e-15:
@@ -976,14 +950,14 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
         theta = math.atan2(sin_t, cos_t)
         return axis * theta
 
-    # Wheel: follows wheel center and rotates with camber/toe from kinematic solver
+    # wheel: follows wheel center, rotates with camber/toe from the solver
     wcx, wcy, wcz = '%s_wc_x' % corner, '%s_wc_y' % corner, '%s_wc_z' % corner
     if all(k in rideHeights.columns for k in [wcx, wcy, wcz]):
         staticWC = np.array(hardpoints['wheel_center_static'], dtype=np.float64)
         currentWC = np.array([float(row[wcx]), float(row[wcy]), float(row[wcz])], dtype=np.float64)
         wheelTranslation = (currentWC - staticWC).tolist()
         
-        # Get wheel rotation from kinematic solver (includes camber and toe)
+        # wheel rotation from the solver (camber + toe)
         rvec_x_col, rvec_y_col, rvec_z_col = '%s_rvec_x' % corner, '%s_rvec_y' % corner, '%s_rvec_z' % corner
         if all(k in rideHeights.columns for k in [rvec_x_col, rvec_y_col, rvec_z_col]):
             wheelRvec = [float(row[rvec_x_col]), float(row[rvec_y_col]), float(row[rvec_z_col])]
@@ -996,24 +970,20 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
             'pivot': staticWC.tolist(),
         }
     
-    # UCA & LCA: rigid A-arms hinged on the line through their two chassis bushings.
-    # They can ONLY rotate about that hinge line, so the bushings stay fixed and the
-    # outer ball joint swings to follow the wheel/upright. The target outer position is
-    # taken from the FULL wheel pose (rotation about the static wheel center + wheel
-    # translation) so the arm stays connected to the upright under camber and steer.
+    # UCA & LCA: rigid A-arms that only rotate about the line through their two chassis
+    # bushings. bushings stay fixed, outer ball joint swings to follow the wheel pose
     for compType in ['UCA', 'LCA']:
         inner_f_key = '%s_f_inner' % compType.lower()
         inner_r_key = '%s_r_inner' % compType.lower()
         outer_key = '%s_outer_static' % compType.lower()
         
         if all(k in hardpoints for k in [inner_f_key, inner_r_key, outer_key]):
-            # Static configuration
+            # static configuration
             innerF = np.array(hardpoints[inner_f_key], dtype=np.float64)
             innerR = np.array(hardpoints[inner_r_key], dtype=np.float64)
             outerStatic = np.array(hardpoints[outer_key], dtype=np.float64)
             
-            # New outer ball-joint position from the full wheel pose (consistent with
-            # how the upright/WHEEL transform moves the same joint).
+            # new outer ball-joint position from the full wheel pose
             if 'WHEEL' in compTransforms:
                 wheelPivot = np.array(compTransforms['WHEEL']['pivot'], dtype=np.float64)
                 wheelRvecArr = np.array(compTransforms['WHEEL']['rotation_rvec'], dtype=np.float64)
@@ -1022,12 +992,12 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
             else:
                 outerNew = outerStatic
             
-            # Hinge axis is the line through the two chassis bushings; rotate about it by
-            # the angle that best carries the outer joint from its static to new position.
+            # hinge axis is the line through the two bushings; rotate about it to carry
+            # the outer joint from static to new position
             hingeAxis = innerR - innerF
             rvec = _rvec_about_axis_to_target(innerF, hingeAxis, outerStatic, outerNew)
             
-            # Pivot is a real point on the hinge axis (a bushing), so both bushings stay fixed.
+            # pivot is a bushing on the hinge axis, so both bushings stay fixed
             compTransforms[compType] = {
                 'translation': [0.0, 0.0, 0.0],
                 'rotation_rvec': rvec.tolist(),
@@ -1038,16 +1008,16 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
     if 'rocker' in hardpoints:
         rocker_pivot = np.array(hardpoints['rocker']['pivot'], dtype=np.float64)
         
-        # Get rocker angle from kinematic solver
+        # rocker angle from the solver
         rocker_deg_col = '%s_rocker_deg' % corner
         if rocker_deg_col in rideHeights.columns:
             rocker_angle = float(row[rocker_deg_col])
             
-            # Get rocker axis
+            # rocker axis
             rocker_axis = np.array(hardpoints['rocker']['axis'], dtype=np.float64)
             rocker_axis = rocker_axis / np.linalg.norm(rocker_axis)  # normalize
             
-            # Convert angle to rotation vector (axis * angle in radians)
+            # angle -> rotation vector (axis * radians)
             rvec = rocker_axis * np.radians(rocker_angle)
             
             compTransforms['ROCKER'] = {
@@ -1056,7 +1026,7 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
                 'pivot': rocker_pivot.tolist(),
             }
     
-    # PUSHROD: one end on rocker, one end on wheel side. Solve from endpoint motion.
+    # PUSHROD: one end on rocker, one end on wheel side. solve from endpoint motion
     if 'ROCKER' in compTransforms and 'pushrod_outer_static' in hardpoints and 'rocker' in hardpoints and 'WHEEL' in compTransforms:
         pushrodInnerStatic = np.array(hardpoints['rocker']['pushrod_joint_ref'], dtype=np.float64)
         pushrodOuterStatic = np.array(hardpoints['pushrod_outer_static'], dtype=np.float64)
@@ -1066,10 +1036,8 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
         rockerTrans = np.array(compTransforms['ROCKER']['translation'], dtype=np.float64)
         pushrodInnerCurrent = _rotate_point_about_pivot(pushrodInnerStatic, rockerPivot, rockerRvec) + rockerTrans
 
-        # Pushrod outer end is rigidly attached to the UPPER CONTROL ARM, so it follows
-        # the UCA's rigid hinge motion (rotation about its chassis-bushing line) and NOT
-        # the upright. Using the upright/wheel pose would inject the steer (kingpin)
-        # rotation into the outer end, producing a spurious fore/aft (x) shift.
+        # pushrod outer end is bolted to the UCA, so it follows the UCA hinge motion, not
+        # the upright. using the upright pose would inject steer and a spurious fore/aft shift
         if 'UCA' in compTransforms:
             ucaPivot = np.array(compTransforms['UCA']['pivot'], dtype=np.float64)
             ucaRvec = np.array(compTransforms['UCA']['rotation_rvec'], dtype=np.float64)
@@ -1091,7 +1059,7 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
             'pivot': pushrodInnerStatic.tolist(),
         }
 
-    # DAMPER: chassis end fixed, rocker end follows rocker rotation; apply stroke morph from solver damper delta.
+    # DAMPER: chassis end fixed, rocker end follows the rocker; apply stroke morph from solver delta
     if 'ROCKER' in compTransforms and 'rocker' in hardpoints:
         damperJointStatic = np.array(hardpoints['rocker']['damper_joint_ref'], dtype=np.float64)
         damperChassis = np.array(hardpoints['rocker']['damper_chassis'], dtype=np.float64)
@@ -1134,9 +1102,8 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
             'damper_morph_factor': morph_factor,
         }
     
-    # TIE: inner (rack end) translates with rack travel; outer is rigid on the upright
-    # and follows the full wheel pose. With the rack-driven solver the tie length is
-    # preserved, so the link is reconstructed exactly as a rotation about the inner end.
+    # TIE: inner (rack end) slides with rack travel, outer is rigid on the upright and
+    # follows the wheel pose. tie length is preserved, so rebuild as a rotation about the inner end
     if 'tie_inner' in hardpoints and 'tie_outer_static' in hardpoints and 'WHEEL' in compTransforms:
         tieInnerStatic = np.array(hardpoints['tie_inner'], dtype=np.float64)
         tieOuterStatic = np.array(hardpoints['tie_outer_static'], dtype=np.float64)
@@ -1145,10 +1112,10 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
         wheelRvec = np.array(compTransforms['WHEEL']['rotation_rvec'], dtype=np.float64)
         wheelTrans = np.array(compTransforms['WHEEL']['translation'], dtype=np.float64)
 
-        # Tie outer rigidly attached to the upright -> apply full wheel pose.
+        # tie outer is on the upright -> apply full wheel pose
         tieOuterCurrent = _rotate_point_about_pivot(tieOuterStatic, staticWC, wheelRvec) + wheelTrans
 
-        # Tie inner (rack end) slides along the rack axis by the solved rack travel.
+        # tie inner (rack end) slides along the rack axis by the solved rack travel
         rackAxis = np.array(hardpoints.get('rack_axis', [0.0, 1.0, 0.0]), dtype=np.float64)
         rackNorm = np.linalg.norm(rackAxis)
         if rackNorm > 1e-15:
@@ -1184,7 +1151,7 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
     rideHeightSetup = fullCaseSetupDict.get('RIDE_HEIGHT_SETUP', {})
     requireSuspensionPidMatch = _truthy(rideHeightSetup.get('SUSP_REQUIRE_ALL_PIDS_MATCHED', ['false'])[0])
 
-    # Corner keywords from hardpoint cfg (preferred), then optional override/extension from caseSetup.
+    # corner keywords from the hardpoint cfg, then optional caseSetup override/extension
     cornerPidKeywords = {'fl': [], 'fr': [], 'rl': [], 'rr': []}
     if kinSetup is not None and 'corner_pid_keywords' in kinSetup:
         for c in cornerPidKeywords.keys():
@@ -1200,7 +1167,7 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
                 seen.add(k)
         cornerPidKeywords[c] = dedup
 
-    # Categorize keywords by component type
+    # categorize keywords by component type
     categorizedKeywords = _categorize_pid_keywords_by_component(cornerPidKeywords)
 
     # copies/transforms all geometries into each child case directory
@@ -1213,29 +1180,29 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
 
         print('\t\t\tTransforming geometries for point %s' % str(point))
 
-        # Build per-component, per-corner transforms from kinematics
+        # build per-component, per-corner transforms from kinematics
         pidTransformDict = {}
         
         for corner in ['fr', 'fl', 'rr', 'rl']:
             if kinSetup is None or corner not in kinSetup['corners']:
                 continue
             
-            # Compute transforms for each component type
+            # compute transforms for each component type
             compTransforms = _compute_component_transforms(kinSetup, corner, row, rideHeights)
             
-            # **[NEW] Validate transforms
+            # validate transforms
             validation_warnings = _validate_component_transforms(compTransforms, corner)
             if validation_warnings:
                 for warn in validation_warnings:
                     print(f'\t\t\t\tWARNING: {warn}')
             
-            # **[NEW] Write transform log
+            # write transform log
             _write_component_transforms_log(childName, corner, row, compTransforms)
             
-            # **[NEW] Plot linkage before/after
+            # plot linkage before/after
             _plot_suspension_linkage(kinSetup, corner, row, compTransforms, childName, rideHeights)
             
-            # Map each component's keywords to its transform
+            # map each component's keywords to its transform
             for compType, compTransform in compTransforms.items():
                 keywords = categorizedKeywords[corner].get(compType, [])
                 if len(keywords) == 0:
@@ -1266,11 +1233,10 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
                         transformedGeoms.add(geom)
                         continue
                 except Exception as e:
-                    # skip non-OBJ/STL formats or binary STL files for PID-path and continue with filename fallback
+                    # skip non-OBJ/STL or binary STL on the PID path, fall back to filename
                     print('\t\t\t\tPID scan skipped for %s: %s' % (geom, e))
 
-        # legacy filename-based fallback for wheel files that were not PID-transformed
-        # (fallback uses basic wheel translation only)
+        # legacy filename fallback for wheel files not PID-transformed (translation only)
         if kinSetup is not None:
             for corner in ['fr', 'fl', 'rr', 'rl']:
                 if corner not in kinSetup['corners']:
@@ -1299,7 +1265,7 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
             print('\t\t\tCopying non-moving geometry: %s' % (geom))
             copyWithMkdir(geomFilePath, geomChildPath)
 
-    # Build corner animation GIFs from per-point linkage validation plots.
+    # build corner animation gifs from the per-point linkage plots
     if len(processedPoints) > 0:
         _create_linkage_gifs(baseCaseName, processedPoints, corners=('fl', 'fr', 'rl', 'rr'))
 
@@ -1395,7 +1361,7 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
     
     outIsGz = outputFile.lower().endswith('.gz')
     
-    # Precompute axis-angle rotation matrix and pivot for rotation_rvec support.
+    # precompute axis-angle rotation matrix + pivot for rotation_rvec
     rvecMatrix = None
     if rotation_rvec is not None and float(np.linalg.norm(rotation_rvec)) > 1e-15:
         rvecMatrix = _rodrigues_matrix_from_rvec(rotation_rvec)
@@ -1535,7 +1501,7 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
             return outputFile
         
         else:
-            # Binary STL — preserve the 80-byte header (which contains the solid name)
+            # binary STL - keep the 80-byte header (holds the solid name)
             with openInput('rb') as f:
                 data = f.read()
             
@@ -1586,9 +1552,8 @@ def transformGeometryPreservePID(inputFile, outputFile, rotation=None, translati
 
 def _open_text_file_maybe_gz(path, mode='rt', compresslevel=1):
     if path.lower().endswith('.gz'):
-        # compresslevel=1 (fastest) is used for writes: these .obj.gz/.stl.gz outputs are
-        # intermediate meshing inputs, so write speed matters far more than file size.
-        # Level 1 is ~5-8x faster than the gzip default (9). Reads ignore compresslevel.
+        # compresslevel=1 (fastest) for writes - these gz outputs are intermediate
+        # meshing inputs so write speed matters more than size. reads ignore it
         if 'w' in mode or 'a' in mode or 'x' in mode:
             return gzip.open(path, mode, compresslevel=compresslevel)
         return gzip.open(path, mode)
@@ -1624,7 +1589,7 @@ def _build_pid_regex_mapping(pidNames, pidTransformDict):
 
 
 def _canonical_transform_signature(cfg):
-    # Stable signature used to detect conflicting transforms on shared OBJ vertices.
+    # stable signature to detect conflicting transforms on shared OBJ vertices
     if cfg is None:
         return json.dumps({}, sort_keys=True)
     return json.dumps(cfg, sort_keys=True)
@@ -1654,10 +1619,9 @@ def _build_vertex_transformer(cfg, pivot):
     morphing_dict = cfg.get('morphing_dict', None)
     morph = cfg.get('morph', None)
     
-    # Use pivot from config if present, otherwise use parameter (allows per-regex pivot override)
+    # pivot from config if present, else the parameter (per-regex override)
     pivot = cfg.get('pivot', pivot)
-    # A None pivot (e.g. static/unmatched PID with no override) must default to the origin,
-    # otherwise np.array(None, dtype=float64) is NaN and corrupts the whole block.
+    # a None pivot must default to origin - np.array(None) is NaN and corrupts the block
     if pivot is None:
         pivot = [0.0, 0.0, 0.0]
 
@@ -1717,7 +1681,7 @@ def _build_vertex_transformer(cfg, pivot):
 
                 origin = np.array(morph.get('origin', pivot), dtype=np.float64)
                 distance = float(morph.get('distance', 0.0))
-                # Convention: positive distance compresses toward origin; negative extends away.
+                # positive distance compresses toward origin, negative extends away
                 targetLength = float(morph.get('target_length', 0.0))
                 limits = morph.get('limits', None)
 
@@ -1958,8 +1922,8 @@ def transformGeometryByPIDRegex(
         pidVertexRefs = {}
         pidVertexRefs[currentPid] = set()
 
-        # Hot loop over (potentially millions of) lines: operate on the raw line and cache the current
-        # group's vertex-ref set to avoid per-line strip() and per-face setdefault() dict lookups.
+        # hot loop over millions of lines: work on the raw line and cache the current
+        # group's vertex-ref set to skip per-line strip() and setdefault() lookups
         currentRefSet = pidVertexRefs[currentPid]
         for line in lines:
             if line.startswith('v '):
@@ -1994,9 +1958,8 @@ def transformGeometryByPIDRegex(
         vertexToPid = {}
         for pid in pidNames:
             cfg = pidToCfg.get(pid, None)
-            # Unmatched PIDs (no transform config) are static: leave their vertices as
-            # identity. Assigning them a signature would route them through the rigid
-            # transform with pivot=None -> NaN, corrupting static parts (arb, bc, ...).
+            # unmatched PIDs have no transform - leave them identity. a signature would
+            # route them through the rigid transform with pivot=None -> NaN, corrupting static parts
             if cfg is None:
                 continue
             sig = _canonical_transform_signature(cfg)
@@ -2013,9 +1976,8 @@ def transformGeometryByPIDRegex(
                 vertexToCfg[vIdx] = cfg
                 vertexToPid[vIdx] = pid
 
-        # Vectorized transform: group vertices by transform signature and apply each transform to the
-        # whole block at once (single numpy matrix multiply per group) instead of building a closure and
-        # calling it per vertex. Unreferenced vertices (no signature) keep identity.
+        # vectorized transform: group vertices by signature and apply each transform to the
+        # whole block at once (one numpy matmul per group). unreferenced vertices keep identity
         transformedArr = np.array(vertices, dtype=np.float64) if len(vertices) > 0 else np.zeros((0, 3), dtype=np.float64)
 
         sigToIndices = {}
@@ -2087,7 +2049,7 @@ def transformGeometryByPIDRegex(
         facetPlaceholderIdx = None
         globalVertexIdx = 0
         pidVertexCounter = {pid: 0 for pid in pidNames}
-        # Cache one transformer per PID instead of rebuilding the closure for every vertex.
+        # cache one transformer per PID instead of rebuilding the closure per vertex
         pidTransformerCache = {}
 
         for line in lines:

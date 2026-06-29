@@ -67,27 +67,14 @@ def _distance(a: np.ndarray, b: np.ndarray) -> float:
 
 class DoubleWishbonePushrodSolver:
     """
-    Solve wheel/upright kinematics for a double wishbone + pushrod/rocker suspension.
+    solve wheel/upright kinematics for a double wishbone + pushrod/rocker corner.
+    convention: x forward, y lateral, z vertical. the upright is a rigid body with
+    unknown pose (rvec + wheel-center translation), rocker angle solved together to
+    hold pushrod length.
 
-    Coordinate convention used by default:
-    - x: longitudinal (vehicle forward)
-    - y: lateral
-    - z: vertical
-
-    The upright is treated as a rigid body with unknown pose (rotation vector + wheel center translation).
-    Rocker angle is solved simultaneously to enforce pushrod length.
-
-    Required hardpoint dictionary keys:
-    - wheel_center_static
-    - uca_f_inner, uca_r_inner, lca_f_inner, lca_r_inner, tie_inner
-    - uca_outer_static, lca_outer_static, tie_outer_static, pushrod_outer_static
-    - rocker: {
-        pivot, axis, pushrod_joint_ref, damper_joint_ref, damper_chassis
-      }
-
-    Optional keys:
-    - wheel_axis_local (default [0, 1, 0])
-    - wheel_forward_local (default [1, 0, 0])
+    required hardpoint keys: wheel_center_static, uca/lca/tie inner+outer, pushrod_outer_static,
+    rocker {pivot, axis, pushrod_joint_ref, damper_joint_ref, damper_chassis}.
+    optional: wheel_axis_local ([0,1,0]), wheel_forward_local ([1,0,0]).
     """
 
     def __init__(self, hardpoints: Dict[str, object]):
@@ -115,7 +102,7 @@ class DoubleWishbonePushrodSolver:
             "wheel_center": wc0,
         }
 
-        # Upright local frame is initialized aligned to global at static pose.
+        # upright local frame starts aligned to global at the static pose
         self.outer_local = {k: (v - wc0) for k, v in self.outer0_global.items()}
 
         rocker_dict = self.hp["rocker"]
@@ -136,8 +123,7 @@ class DoubleWishbonePushrodSolver:
             "wheel_forward_local",
         )
 
-        # Tie-rod inner (rack end) static position and the rack travel direction.
-        # Steering displaces the inner joint along rack_axis by the rack-travel DOF.
+        # tie-rod inner (rack end) static pos + rack direction. steering slides it along rack_axis
         self.tie_inner_static = self.inner["tie"]
         self.rack_axis = _normalize(
             _as_vec3(self.hp.get("rack_axis", [0.0, 1.0, 0.0]), "rack_axis"),
@@ -208,8 +194,7 @@ class DoubleWishbonePushrodSolver:
         res[5] = _distance(pg["pushrod"], rk["pushrod"]) - self.lengths["pushrod"]
         res[6] = wc[2] - target_wheel_z
 
-        # 8th constraint closes the rack DOF: either prescribe rack travel directly,
-        # prescribe the road-wheel (toe) angle, or lock the rack at zero (passive).
+        # 8th constraint closes the rack DOF: prescribe rack travel, prescribe toe angle, or lock at zero
         if steer_mode == "rack":
             res[7] = d - steer_target
         elif steer_mode == "angle":
@@ -250,18 +235,10 @@ class DoubleWishbonePushrodSolver:
         damping: float = 1e-9,
     ) -> Dict[str, object]:
         """
-        Solve kinematics for target wheel center vertical travel, optionally with steer.
-
-        :param wheel_dz: Desired wheel center z displacement from static (same units as hardpoints)
-        :param steer: Steer command. Interpreted per steer_mode.
-        :param steer_mode: One of:
-            - "none"  : rack locked at zero (passive ride-height only).
-            - "angle" : ``steer`` is the target road-wheel (toe) angle in degrees; the
-                        solver finds the rack travel that achieves it.
-            - "rack"  : ``steer`` is the rack travel directly (same length units as
-                        hardpoints), e.g. shared across an axle for Ackermann.
-        :param initial_state: Optional warm-start state; use previous solution for sweep robustness
-        :return: Dict with solved points, rocker angle, damper length, rack travel, and alignment metrics
+        solve kinematics for a target wheel-center vertical travel, optionally with steer.
+        steer_mode: "none" (rack locked), "angle" (steer = target toe in deg, solve rack),
+        "rack" (steer = rack travel directly). initial_state warm-starts a sweep.
+        returns solved points, rocker angle, damper length, rack travel and alignment metrics.
         """
         target_z = self.wc0[2] + wheel_dz
 
@@ -287,12 +264,12 @@ class DoubleWishbonePushrodSolver:
             JTJ = J.T @ J + damping * np.eye(x.size)
             step = np.linalg.solve(JTJ, -J.T @ r)
 
-            # Backtracking line-search to improve robustness around singular positions.
+            # backtracking line-search for robustness near singular positions
             alpha = 1.0
             accepted = False
             for _ls in range(10):
                 x_try = x + alpha * step
-                # Clamp rocker angle to physically reasonable bounds (±90°)
+                # clamp rocker angle to ±90°
                 x_try[6] = np.clip(x_try[6], -np.pi/2, np.pi/2)
                 r_try = self._residual(x_try, target_z, steer, steer_mode)
                 if np.linalg.norm(r_try) < err:
@@ -303,7 +280,7 @@ class DoubleWishbonePushrodSolver:
 
             if not accepted:
                 x = x + 0.2 * step
-                # Also clamp rocker angle after fallback update
+                # clamp rocker angle after the fallback step
                 x[6] = np.clip(x[6], -np.pi/2, np.pi/2)
 
         rvec = x[0:3]

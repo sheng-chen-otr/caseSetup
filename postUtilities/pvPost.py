@@ -57,10 +57,8 @@ LIC_LABEL_FONT_SIZE = 50
 USE_PRE_DEF_VARS = False #using only predefined variables in list PRE_DEF_VAR_LIST, for dev purposes
 PRE_DEF_VAR_LIST = ['UnwMean','pMean']
 
-#SRF cornering: the time-averaged velocity solved/averaged in the rotating frame is the relative
-#velocity UrelMean, not the absolute UMean. For corner cases all post-processing that would read
-#UMean must read UrelMean instead. Detected in main() from the case setup; default is the
-#straight-line field name.
+#cornering: the averaged velocity is the rotating-frame UrelMean, not UMean. swapped in
+#main() from the case setup; default is the straight-line field name
 UMEAN_FIELD = 'UMean'
 
 
@@ -81,8 +79,7 @@ def main():
     #Getting reference values and geometries
     UREF,LREF,WREF,CREF,FREF,fullCaseSetupDict = getRef()
 
-    #Detect an SRF cornering case. When cornering is on the averaged velocity field is UrelMean
-    #(rotating-frame relative velocity); use it everywhere UMean would be used.
+    #cornering uses UrelMean as the averaged velocity, use it everywhere UMean would be
     if isCornering(fullCaseSetupDict):
         UMEAN_FIELD = 'UrelMean'
         print('\n\tCornering (SRF) case detected: using %s in place of UMean.' % (UMEAN_FIELD))
@@ -97,9 +94,8 @@ def main():
     else:
         varDict,viewsDict = getVariableDicts(pvPostSetupDict['PV_POST_MAIN']['VARIABLE_DICT'],pvPostSetupDict['PV_POST_MAIN']['CAMERA_VIEWS'])
 
-    #For cornering, rewrite every variable equation that references UMean to read UrelMean instead
-    #(covers UMean, its components UMean_X/Y/Z, and CptMean's UMean^2). Variable keys and labels are
-    #left unchanged so the existing variable lists still resolve.
+    #cornering: rewrite variable equations that reference UMean to UrelMean (incl UMean_X/Y/Z
+    #and CptMean's UMean^2). keys/labels stay the same so the variable lists still resolve
     if UMEAN_FIELD != 'UMean':
         swapMeanVelocityField(varDict,UMEAN_FIELD)
     
@@ -160,10 +156,9 @@ def main():
         print('\t\tMESH ONLY: Using Predefined Variable List! ')
         reader.CellArrays = PRE_DEF_MESH_LIST
     else:
-        #only load the fields actually referenced by the loaded variable equations (plus the LIC input
-        #vector). Everything else is dropped before the cell-to-point conversion and slicing, which is
-        #the bulk of the runtime. Intersecting with the arrays the reader provides guarantees we never
-        #request a missing field; if detection yields nothing we fall back to loading all.
+        #only load the fields actually referenced by the variable equations (plus the LIC input).
+        #everything else is dropped before cell-to-point + slicing, which is most of the runtime.
+        #intersect with the reader's arrays so we never request a missing field, else load all
         availableCellArrays = list(reader.CellArrays)
         requiredFields = getRequiredFields(varDict, extraFields=[UMEAN_FIELD])
         loadFields = [array for array in availableCellArrays if array in requiredFields]
@@ -1030,9 +1025,8 @@ def saveImages(renderView,caseName,variable,imageType,view,normal=None,position=
 
 
     #checking if required folders exists
-    #os.makedirs builds the full postProcessing/images/<dirName> tree in one call (no-op if it
-    #already exists). This replaces several os.system('mkdir ...') shell spawns that previously ran
-    #on every saved image (~1400+ times in a default slice run).
+    #makedirs builds the whole images/<dirName> tree in one call (no-op if it exists),
+    #replacing the per-image os.system('mkdir') spawns (~1400+ in a default slice run)
     os.makedirs('postProcessing/images/%s' % (dirName), exist_ok=True)
 
     titleText = Text(registrationName="TitleText")

@@ -2,29 +2,16 @@
 '''
 suspensionAnimator.py
 
-Standalone visualisation tool that animates the motion of the suspension
-components across the ride-height map using the SAME kinematic pipeline as the
-case generator (utilities.calculateRideHeights ->
-utilities._compute_component_transforms). It loads the actual triSurface STL/OBJ
-geometry, keeps only the suspension components (matched by the per-corner PID
-keywords from the hardpoint CFG), and rigidly moves each component in-memory for
-every ride-height point.
+animates the suspension components across the ride height map using the same
+kinematics as the case generator. loads the triSurface stls/objs, keeps only the
+suspension parts (matched by hardpoint pid keywords) and rigidly moves them.
 
-Output is one animation file per view (front/side/top), each written separately:
-    - <base>_front.gif : looking in the +X direction
-    - <base>_side.gif  : looking in the +Y direction
-    - <base>_top.gif   : looking in the -Z direction
-
-This is intended to be invoked by caseSetup.py only when the --animateSuspension
-flag is supplied, but it can also be run standalone:
+outputs one file per view (front +x, side +y, top -z). run via caseSetup.py
+--animateSuspension or standalone:
 
     python rideHeightUtils/suspensionAnimator.py -c <caseDir>
 
-It reuses utilities for the kinematics so the animation matches exactly what the
-ride-height case generator produces. Rendering uses PyVista (VTK) off-screen,
-which is far faster than matplotlib's mplot3d. Install with:
-
-    pip install pyvista imageio imageio-ffmpeg
+needs pyvista: pip install pyvista imageio imageio-ffmpeg
 '''
 
 import os
@@ -36,9 +23,8 @@ import time
 
 import numpy as np
 
-# PyVista (VTK) is the rendering backend: it updates mesh coordinates in C++ and
-# renders off-screen, which is far faster than matplotlib's mplot3d (the latter
-# re-sorts every polygon in Python on each frame).
+# pyvista (vtk) backend - updates mesh coords in c++ and renders offscreen, much
+# faster than matplotlib mplot3d
 try:
     import pyvista as pv
     pv.OFF_SCREEN = True
@@ -49,21 +35,15 @@ except Exception:  # pragma: no cover - import-time environment check
 
 
 def _ensure_offscreen_display():
-    '''
-    Make sure VTK has a usable GL context on headless machines.
-
-    On Linux without a DISPLAY, VTK's X backend segfaults. PyVista can spin up a
-    virtual framebuffer (xvfb) to give it an off-screen target. Returns True if a
-    display is available (or not needed), False if rendering would crash.
-    '''
+    '''make sure vtk has a gl context on headless boxes (starts xvfb if needed).'''
     if not _HAVE_PYVISTA:
         return False
-    # macOS/Windows do not use X11; rendering works without a DISPLAY.
+    # mac/windows don't use x11
     if sys.platform != 'linux':
         return True
     if os.environ.get('DISPLAY'):
         return True
-    # Headless Linux: try to start a virtual framebuffer.
+    # headless linux - try a virtual framebuffer
     try:
         pv.start_xvfb()
         return bool(os.environ.get('DISPLAY'))
@@ -71,14 +51,14 @@ def _ensure_offscreen_display():
         print('\t\tWARNING! Could not start xvfb virtual framebuffer: %s' % exc)
         return False
 
-# Make the repo root importable so we can reuse the kinematics in utilities.py.
+# make the repo root importable so we can reuse utilities
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 import utilities  # noqa: E402
 
 
-# Colour per component type so the GIF is readable.
+# colour per component type
 _COMPONENT_COLORS = {
     'WHEEL': '#222222',
     'UCA': '#d62728',
@@ -90,8 +70,8 @@ _COMPONENT_COLORS = {
 }
 _DEFAULT_COLOR = '#7f7f7f'
 
-# Cap triangles per component so a heavy mesh does not make the render crawl.
-# Faces are strided (decimated), not removed, so the silhouette is preserved.
+# cap triangles per component so heavy meshes don't crawl. strided, not removed,
+# so the silhouette stays
 _MAX_FACES_PER_COMPONENT = 40000
 
 
@@ -99,10 +79,7 @@ _MAX_FACES_PER_COMPONENT = 40000
 # caseSetup loading (standalone use)
 # --------------------------------------------------------------------------- #
 def loadCaseSetup(caseDir):
-    '''
-    Read a case's ``caseSetup`` file into the same list-valued dict structure that
-    caseSetup.getCaseSetup produces: ``{SECTION: {KEY: [tokens...]}}``.
-    '''
+    '''read a caseSetup file into the same list-valued dict getCaseSetup makes.'''
     import configparser
 
     caseSetupPath = os.path.join(caseDir, 'caseSetup')
@@ -132,13 +109,7 @@ def _open_maybe_gz(path, mode='rt'):
 
 
 def _parse_obj_groups(path):
-    '''
-    Parse an OBJ file into per-PID triangle groups.
-
-    PID = current ``g``/``o`` group name (matching transformGeometryByPIDRegex).
-    Returns dict: pid -> {'verts': (N,3) float array, 'faces': (M,3) int array}
-    where faces index into the local per-PID vertex array.
-    '''
+    '''parse an obj into per-pid triangle groups. pid = current g/o group name.'''
     vertices = []
     currentPid = '__DEFAULT__'
     pidGlobalFaces = {currentPid: []}
@@ -156,7 +127,7 @@ def _parse_obj_groups(path):
                         ref = ref.split('/', 1)[0]
                     idx = int(ref)
                     refs.append(idx - 1 if idx > 0 else nVerts + idx)
-                # fan-triangulate any polygon into triangles
+                # fan-triangulate the polygon
                 for i in range(1, len(refs) - 1):
                     pidGlobalFaces[currentPid].append((refs[0], refs[i], refs[i + 1]))
             elif line.startswith('g ') or line.startswith('o '):
@@ -184,10 +155,7 @@ def _localise_groups(vertices, pidGlobalFaces):
 
 
 def _parse_ascii_stl_groups(path):
-    '''
-    Parse an ASCII STL into per-PID triangle groups. PID = ``solid <name>``.
-    Returns dict: pid -> {'verts': (N,3) array, 'faces': (M,3) int array}.
-    '''
+    '''parse an ascii stl into per-pid triangle groups. pid = solid name.'''
     groups = {}
     currentPid = None
     verts = []
@@ -221,7 +189,7 @@ def _parse_ascii_stl_groups(path):
                     verts.extend(pending)
                     faces.append((base, base + 1, base + 2))
                     pending = []
-    # handle files with a single unterminated solid
+    # handle a single unterminated solid
     if currentPid is not None:
         _flush(currentPid)
     return groups
@@ -242,11 +210,7 @@ def _load_pid_groups(path):
 # PID -> component matching and rigid transform application
 # --------------------------------------------------------------------------- #
 def _match_pid_to_component(pidName, categorizedKeywords):
-    '''
-    Find the (corner, compType) that owns ``pidName`` by case-sensitive regex
-    search of the escaped keywords (same matching basis as the generator).
-    Returns (corner, compType) or None.
-    '''
+    '''find the (corner, compType) owning pidName by case-sensitive keyword regex.'''
     for corner, compMap in categorizedKeywords.items():
         for compType, keywords in compMap.items():
             for kw in keywords:
@@ -256,10 +220,7 @@ def _match_pid_to_component(pidName, categorizedKeywords):
 
 
 def _apply_rigid_transform(verts, transform):
-    '''
-    Apply ``v' = R(rvec) . (v - pivot) + pivot + translation`` to an (N,3) array,
-    matching utilities.transformGeometryByPIDRegex's rigid convention.
-    '''
+    '''apply v' = R(rvec).(v - pivot) + pivot + translation, same as the generator.'''
     rvec = np.asarray(transform.get('rotation_rvec', [0.0, 0.0, 0.0]), dtype=np.float64)
     translation = np.asarray(transform.get('translation', [0.0, 0.0, 0.0]), dtype=np.float64)
     pivot = transform.get('pivot', None)
@@ -276,15 +237,8 @@ def _apply_rigid_transform(verts, transform):
 
 
 def _interpolate_row(rowA, rowB, alpha):
-    '''
-    Linearly blend the numeric columns of two ride-height rows.
-
-    Every kinematic-solver column read by ``_compute_component_transforms``
-    (``*_wc_x/y/z``, ``*_rvec_x/y/z``, ``*_rocker_deg``, ``*_damper_delta``,
-    ``*_rack_travel`` ...) is numeric, so a per-column lerp produces a
-    kinematically-consistent in-between pose. Non-numeric columns (caseName,
-    steer mode, ...) are carried through from ``rowA`` unchanged.
-    '''
+    '''lerp the numeric columns of two rows for a smooth in-between pose. all the
+    solver columns are numeric so this stays kinematically consistent.'''
     out = rowA.copy()
     for col in rowA.index:
         try:
@@ -302,15 +256,8 @@ def _interpolate_row(rowA, rowB, alpha):
 def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None,
                                 intervalMs=80, transitionFrames=12, holdFrames=6,
                                 resolution=1600):
-    '''
-    Build the suspension-motion GIF for ``caseDir`` (defaults to cwd).
-
-    The animation holds ``holdFrames`` frames at each ride-height point and inserts
-    ``transitionFrames`` interpolated poses between consecutive points so the motion is
-    smooth. ``intervalMs`` is the per-frame delay (GIF fps = 1000 / intervalMs).
-
-    Returns the output GIF path, or None if it could not be generated.
-    '''
+    '''build the per-view suspension animations for caseDir. holds holdFrames at
+    each point and lerps transitionFrames between points for smooth motion.'''
     if caseDir is None:
         caseDir = os.getcwd()
     caseDir = os.path.abspath(caseDir)
@@ -321,11 +268,11 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
               '(set [RIDE_HEIGHT_SETUP] USE_KINEMATIC_SOLVER true and HARDPOINT_FILE).')
         return None
 
-    # Per-corner keyword lists -> per-corner/per-component keyword map.
+    # per-corner keyword lists -> per-corner/per-component map
     cornerPidKeywords = {'fl': [], 'fr': [], 'rl': [], 'rr': []}
     for corner in cornerPidKeywords:
         cornerPidKeywords[corner].extend(list(kinSetup['corner_pid_keywords'].get(corner, [])))
-        # de-duplicate while preserving order
+        # dedupe, keep order
         seen = set()
         dedup = []
         for kw in cornerPidKeywords[corner]:
@@ -335,11 +282,11 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
         cornerPidKeywords[corner] = dedup
     categorizedKeywords = utilities._categorize_pid_keywords_by_component(cornerPidKeywords)
 
-    # Ride-height table with kinematic solver columns (same call as the generator).
+    # ride height table with solver columns (same call as the generator)
     print('\tSolving suspension kinematics across the ride-height map...')
     rideHeights = utilities.calculateRideHeights(fullCaseSetupDict)
 
-    # Filter to RUN_RH_POINTS, preserving the table order.
+    # filter to RUN_RH_POINTS, keep table order
     runPoints = fullCaseSetupDict['RIDE_HEIGHT_SETUP'].get('RUN_RH_POINTS', [''])
     if len(runPoints) == 1 and runPoints[0] == '':
         selected = rideHeights
@@ -351,7 +298,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
         print('\tSuspension animation skipped: no ride-height points selected.')
         return None
 
-    # Load suspension geometry from the case triSurface dir, keep only matched PIDs.
+    # load suspension geometry, keep only matched pids
     triSurfaceDir = os.path.join(caseDir, 'constant', 'triSurface')
     if not os.path.isdir(triSurfaceDir):
         print('\tSuspension animation skipped: no geometry directory at %s' % triSurfaceDir)
@@ -394,10 +341,8 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
     print('\tBuilding suspension animation over %d ride-height point(s), %d component(s)...'
           % (len(selected), len(components)))
 
-    # Build the playback schedule: hold a few frames at each ride-height point so the
-    # values are readable, then linearly interpolate the kinematic-solver columns into
-    # ``transitionFrames`` in-between poses so the motion to the next point is smooth.
-    # Each schedule entry is (row, srcPoint, dstPoint, alpha).
+    # build the playback schedule: hold a few frames at each point, then lerp the
+    # solver columns into transitionFrames in-between poses. entry = (row, src, dst, alpha)
     transitionFrames = max(1, int(transitionFrames))
     holdFrames = max(1, int(holdFrames))
     schedule = []
@@ -414,7 +359,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
                 alpha = s / float(transitionFrames)
                 schedule.append((_interpolate_row(rowI, rowNext, alpha), ptI, ptNext, alpha))
 
-    # Static bounding box (padded) for a fixed, equal-aspect camera across all frames.
+    # padded bbox for a fixed equal-aspect camera across all frames
     allVerts = np.vstack([c['baseVerts'] for c in components])
     mins = allVerts.min(axis=0)
     maxs = allVerts.max(axis=0)
@@ -427,7 +372,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
     rhUnit = fullCaseSetupDict['RIDE_HEIGHT_SETUP'].get('RH_UNIT', ['mm'])[0].lower()
 
     def _ride_height_label(row, srcPoint, dstPoint, alpha):
-        scale = 1000.0 if rhUnit == 'm' else 1.0  # table fl/fr/rl/rr are in metres
+        scale = 1000.0 if rhUnit == 'm' else 1.0  # fl/fr/rl/rr are in metres
         unit = 'mm'
         parts = []
         for corner in ('fl', 'fr', 'rl', 'rr'):
@@ -459,8 +404,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
               '\t\tdisplay so the off-screen GL context can be created.')
         return None
 
-    # Pre-build one VTK PolyData per component. VTK face format is a flat array of
-    # [n, i0, i1, i2, n, ...]; here every face is a triangle (n == 3).
+    # one vtk polydata per component. vtk face format is flat [3, i0, i1, i2, ...]
     meshes = []
     for comp in components:
         faces = np.asarray(comp['faces'], dtype=np.int64)
@@ -472,10 +416,10 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
                            faceArr.ravel())
         meshes.append(poly)
 
-    # Three orthographic views, each written to its OWN file:
-    #   front : camera on -X looking +X   (Y-Z plane), Z up
-    #   side  : camera on -Y looking +Y   (X-Z plane), Z up
-    #   top   : camera on +Z looking -Z   (X-Y plane), Y up
+    # three ortho views, each to its own file:
+    #   front: cam on -x looking +x, z up
+    #   side : cam on -y looking +y, z up
+    #   top  : cam on +z looking -z, y up
     dist = span * 2.0
     views = [
         ('front', 'Front view (looking +X)',
@@ -486,7 +430,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
          (center + np.array([0.0, 0.0, dist])), (0.0, 1.0, 0.0)),
     ]
 
-    # Resolve per-view output paths from the (optional) base output path.
+    # resolve per-view output paths from the (optional) base path
     if outputPath is None:
         base, ext = os.path.join(caseDir, 'suspensionAnimation'), '.mp4'
     else:
@@ -495,8 +439,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
             ext = '.mp4'
     fps = max(1.0, 1000.0 / float(intervalMs))
     parallelScale = half * 1.1
-    # ffmpeg/h264 needs even (ideally /16) dimensions; round up to avoid a quality-
-    # degrading auto-resize on mp4 export.
+    # ffmpeg/h264 wants dims divisible by 16, round up to avoid an auto-resize
     resolution = int(np.ceil(resolution / 16.0) * 16)
 
     totalFrames = len(schedule)
@@ -509,14 +452,14 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
         plotter = pv.Plotter(off_screen=True, window_size=(resolution, resolution))
         plotter.set_background('white')
         plotter.enable_parallel_projection()
-        # Smooth anti-aliased edges for higher visual quality.
+        # anti-aliased edges
         try:
             plotter.enable_anti_aliasing('ssaa')
         except Exception:
             pass
         for comp, poly in zip(components, meshes):
             color = _COMPONENT_COLORS.get(comp['comp'], _DEFAULT_COLOR)
-            # Fully opaque solid surfaces (no transparency).
+            # fully opaque solid surfaces
             plotter.add_mesh(poly, color=color, smooth_shading=True,
                              opacity=1.0, ambient=0.25, diffuse=0.7,
                              specular=0.3, specular_power=15,
@@ -529,7 +472,7 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
                          color='black', name='title')
 
         if ext.lower() == '.mp4':
-            # quality 1-10 (10 = best); high bitrate for crisp output.
+            # quality 1-10 (10 best)
             plotter.open_movie(outPath, framerate=int(round(fps)), quality=9)
         else:
             plotter.open_gif(outPath, fps=fps)

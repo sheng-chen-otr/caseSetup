@@ -72,11 +72,8 @@ def main():
 
 
 def isCaseComplete(casePath):
-    #A ride-height child is "complete" when its OpenFOAM solver finished, which the solver signals by
-    #printing a standalone "End" line at the very end of its log. Checking that marker (rather than
-    #comparing the latest time against controlDict endTime) is robust to convergence-based early stops
-    #(residualControl), where a steady case legitimately ends before endTime. SRF cornering solves still
-    #write log.simpleFoam (steady) / log.pisoFoam (transient), so the same log names cover cornering.
+    #a case is done when the solver wrote a standalone "End" line in its log. more robust
+    #than comparing latest time vs endTime (residualControl can stop steady early)
     for logName in ('log.simpleFoam', 'log.pisoFoam'):
         logPath = os.path.join(casePath, logName)
         if not os.path.isfile(logPath):
@@ -94,14 +91,9 @@ def isCaseComplete(casePath):
 
 
 def getCorneringInfo(fullCaseSetupDict, casePath, case):
-    #Returns the cornering / per-corner descriptors for a single case as an ordered dict of
-    #column-name -> value, ready to extend the summary rowNames/data.
-    #  - Cornering flag, corner radius and direction come from THIS case's own caseSetup
-    #    (createRideHeightCases injects the per-point CORNER_RADIUS / CORNER_DIR into each child).
-    #  - The per-corner ride-height change and steer angle come from the parent's
-    #    rideHeights_updated.csv (written by createRideHeightCases, one row per point keyed by
-    #    'caseName'), which lives one directory above the child case.
-    #Standalone / non-cornering cases fall back to N/A so the column set stays consistent.
+    #cornering/per-corner descriptors for a case as an ordered dict to extend the summary.
+    #flag/radius/dir from this case's caseSetup, ride-height change + steer from the parent
+    #rideHeights_updated.csv. non-cornering falls back to N/A
     info = OrderedDict([
         ('Cornering', 'False'),
         ('Corner Radius (m)', 'N/A'),
