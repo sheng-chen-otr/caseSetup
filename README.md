@@ -2,11 +2,12 @@
 
 ## Overview
 
-**caseSetup** is a Python-based framework for automated OpenFOAM case setup with advanced support for external aerodynamics and suspension kinematics. It streamlines mesh generation, boundary condition configuration, solver setup, and post-processing workflows for automotive CFD applications.
+caseSetup is a python framework that sets up OpenFOAM cases for external automotive aero. it handles the mesh config, boundary conditions, solver setup, cluster scripts and post-processing so you don't have to hand edit every dict.
 
-**Key Feature**: **Double Wishbone + Pushrod Suspension Kinematic Solver** — automatically computes per-suspension-component transforms (translation, rotation, pivot point) from ride-height inputs, enabling accurate geometry deformation that follows actual suspension mechanics.
+two bigger features beyond the basic straight-line case:
 
-**Key Feature**: **Cornering (SRF) Simulation** — solves the whole domain in a Single Rotating Frame so the car follows a steady curved path, with the rotating-frame solver, boundary conditions, per-wheel rolling speeds, and post-processing fields configured automatically. Integrates with the ride-height study for per-point corner radius/direction.
+- double wishbone + pushrod kinematic solver - works out the per-component transforms (translation, rotation, pivot) from a ride-height input and deforms the geometry so it follows the actual suspension motion, not just a vertical wheel shift.
+- cornering (SRF) - solves the whole domain in a single rotating frame so the car follows a steady curved path. the rotating-frame solver, BCs, per-wheel rolling speeds and post fields are all set up automatically, and it ties into the ride-height study for per-point radius/direction.
 
 ---
 
@@ -14,7 +15,7 @@
 
 | Aspect | Support |
 |--------|---------|
-| **OpenFOAM Versions** | v2012 - v2212 (newer versions untested) |
+| **OpenFOAM Versions** | v2012 - v2212 (newer versions untested, should work though) |
 | **Operating Systems** | Ubuntu 22.XX (Linux preferred); Windows/macOS untested |
 | **Python** | 3.8+ |
 
@@ -60,7 +61,6 @@ caseSetup-dev/
 ├── meshUtilities/                  # Mesh generation & analysis tools
 │   ├── ansaMesh.py                 # ANSA mesh import/export utilities
 │   ├── fidelityMesh.py             # Fidelity mesh integration
-│   ├── getStats.py                 # Mesh quality statistics
 │   └── _obsolete/                  # Legacy mesh scripts
 │
 ├── postUtilities/                  # Post-processing & results analysis
@@ -102,9 +102,9 @@ caseSetup-dev/
 
 ## Core Modules
 
-### **caseSetup.py** — Main Entry Point
+### caseSetup.py - main entry point
 
-Command-line interface for case setup. Orchestrates geometry linkage, mesh configuration, solver setup, and optional ride-height processing.
+the command-line entry point. it links the geometry, sets up the mesh, solver and BCs, and runs the ride-height study if it's turned on.
 
 **Usage**:
 ```bash
@@ -128,88 +128,89 @@ python caseSetup.py
 #  --rideHeightMode       INTERNAL ONLY (used by caseSetup when re-running child cases)
 ```
 
-### **utilities.py** — Core Geometry & Kinematics Engine
+### utilities.py - core geometry & kinematics engine
 
-**Key Responsibilities**:
-- Suspension hardpoint loading & parsing (CFG/INI format)
-- Kinematic solver integration (DoubleWishbonePushrodSolver)
-- **Per-component transform computation** (WHEEL, UCA, LCA, ROCKER, PUSHROD, DAMPER, TIE)
-- Geometry transformation (OBJ/STL)
-- Ride-height calculation and case generation
+does most of the heavy lifting:
+- loads and parses the suspension hardpoints (CFG/INI)
+- drives the kinematic solver (DoubleWishbonePushrodSolver)
+- works out the per-component transforms (WHEEL, UCA, LCA, ROCKER, PUSHROD, DAMPER, TIE)
+- transforms the OBJ/STL geometry
+- builds the ride-height child cases
 
-**Key Functions**:
-- `calculateRideHeights()` — Compute pitch, roll, heave, wheel movements from ride-height input file
-- `_load_suspension_kinematics_setup()` — Load hardpoints and validate kinematic setup
-- `_compute_component_transforms()` — Compute per-component translation/rotation/pivot from kinematic solver state
-- `_categorize_pid_keywords_by_component()` —  Match geometry PIDs to suspension components
-- `transformGeom()` — Apply per-component transforms to geometry files
-- `transformGeometryByPIDRegex()` — PID-aware geometry transformation with regex matching
+main functions:
+- `calculateRideHeights()` - pitch, roll, heave and wheel motion from the ride-height file
+- `_load_suspension_kinematics_setup()` - load hardpoints and sanity-check the kinematic setup
+- `_compute_component_transforms()` - per-component translation/rotation/pivot from the solver state
+- `_categorize_pid_keywords_by_component()` - map geometry PIDs onto suspension components
+- `transformGeom()` - apply the per-component transforms to the geometry files
+- `transformGeometryByPIDRegex()` - PID-aware geometry transform with regex matching
 
-### **writeSystem.py** — OpenFOAM System Directory
+### writeSystem.py - OpenFOAM system directory
 
-Generates `system/` directory contents:
-- `blockMeshDict` — Structured mesh parameters
-- `snappyHexMeshDict` — Mesh refinement & snapping
-- `decomposeParDict` — Parallel decomposition
-- `controlDict` — Solver time stepping & output
-- `fvSchemes`, `fvSolution` — Discretization & solver schemes
+writes the `system/` dir:
+- `blockMeshDict` - background mesh
+- `snappyHexMeshDict` - refinement & snapping
+- `decomposeParDict` - parallel decomposition
+- `controlDict` - time stepping & output
+- `fvSchemes`, `fvSolution` - discretisation & solver schemes
 
-### **writeConstant.py** — OpenFOAM Constant Directory
+### writeConstant.py - OpenFOAM constant directory
 
-Generates `constant/` directory:
-- Turbulence model setup
-- Material properties
-- Geometry boundary condition patches
-- Transport properties
+writes the `constant/` dir:
+- turbulence model
+- material properties
+- geometry BC patches
+- transport properties
 
-### **writeScripts.py** — Job Submission & Execution Scripts
+### writeScripts.py - job submission & run scripts
 
-Generates cluster submission scripts:
-- SLURM, PBS, SGE configurations
-- Meshing, solving, post-processing pipelines
-- Job monitoring and result export
+writes the cluster/run scripts:
+- SLURM, PBS, SGE configs
+- mesh, solve, export, post pipelines
+- job monitoring and result export
+- needs a couple of tweaks in clusterDict (see below)
 
-### **meshUtilities/** — Mesh Tools
+### meshUtilities/ - mesh tools
 
-- **ansaMesh.py**: ANSA Hypermesh integration for mesh import/export
-- **fidelityMesh.py**: Mesh fidelity analysis and refinement control
-- **getStats.py**: Mesh quality metrics (aspect ratio, orthogonal quality, etc.)
+- **ansaMesh.py**: ANSA mesh import/export
+- **fidelityMesh.py**: meshing in Cadence Fidelity (WIP)
+- **getStats.py**: mesh quality metrics (aspect ratio, orthogonal quality, etc.)
 
-### **postUtilities/** — Results Processing
+### postUtilities/ - results processing
 
-- **pvPost.py**: Automated ParaView field extraction (pressure, velocity, etc.)
-- **plotForces.py**: Force coefficient time-history and convergence plots
-- **summary.py**: Compact results summary with aerodynamic coefficients
-- **pptGeneration.py**: Automated PowerPoint report generation
-- **postProReportGen.py**: LaTeX-based technical report generation
+- **pvPost.py**: automated ParaView field images (pressure, velocity, etc.)
+- **plotForces.py**: force coefficient time history and convergence plots
+- **summary.py**: compact summary with the aero coefficients
+- **pptGeneration.py**: auto powerpoint report
+- **postProReportGen.py**: LaTeX technical report
 
-### **rideHeightUtils/** — Suspension Kinematics 
+### rideHeightUtils/ - suspension kinematics
 
-#### **doubleWishbonePushrodKinematics.py**
-Kinematic solver for double-wishbone + pushrod suspension systems:
-- Solves 3D linkage constraint equations
-- Outputs per-ride-height: wheel center position, rotation (camber/toe), rocker angle, damper stroke
-- Integrates with `utilities.py` for automatic geometry transformation
+#### doubleWishbonePushrodKinematics.py
+the kinematic solver for a double-wishbone + pushrod corner:
+- solves the 3D linkage constraints
+- outputs per ride-height: wheel center, rotation (camber/toe), rocker angle, damper stroke
+- feeds `utilities.py` for the geometry transform
 
-#### **suspensionHardpoints_template.cfg**
-Template defining suspension geometry for each corner (FL, FR, RL, RR):
+#### suspensionHardpoints_template.cfg
+the suspension geometry for each corner (FL, FR, RL, RR).
 
-**Per-Corner Sections** `[SUSP_FL]`, `[SUSP_FR]`, `[SUSP_RL]`, `[SUSP_RR]`:
-- **Kinematic Points**:
-  - `WHEEL_CENTER_STATIC` — Static wheel position
-  - `UCA_F_INNER`, `UCA_R_INNER`, `UCA_OUTER_STATIC` — Upper Control Arm chassis/wheel mounts
-  - `LCA_F_INNER`, `LCA_R_INNER`, `LCA_OUTER_STATIC` — Lower Control Arm chassis/wheel mounts
-  - `TIE_INNER`, `TIE_OUTER_STATIC` — Tie rod mounts
-  - `PUSHROD_OUTER_STATIC` — Pushrod-to-rocker joint
-  - `ROCKER_PIVOT`, `ROCKER_AXIS` — Rocker rotation center and axis
-  - `ROCKER_PUSHROD_JOINT_REF`, `ROCKER_DAMPER_JOINT_REF`, `ROCKER_DAMPER_CHASSIS` — Rocker joint references
-  - `WHEEL_AXIS_LOCAL`, `WHEEL_FORWARD_LOCAL` — Wheel orientation vectors
+per-corner sections `[SUSP_FL]`, `[SUSP_FR]`, `[SUSP_RL]`, `[SUSP_RR]`:
+- kinematic points:
+  - `WHEEL_CENTER_STATIC` - static wheel position
+  - `UCA_F_INNER`, `UCA_R_INNER`, `UCA_OUTER_STATIC` - upper control arm chassis/wheel mounts
+  - `LCA_F_INNER`, `LCA_R_INNER`, `LCA_OUTER_STATIC` - lower control arm chassis/wheel mounts
+  - `TIE_INNER`, `TIE_OUTER_STATIC` - tie rod mounts
+  - `PUSHROD_OUTER_STATIC` - pushrod-to-rocker joint
+  - `ROCKER_PIVOT`, `ROCKER_AXIS` - rocker rotation center and axis
+  - `ROCKER_PUSHROD_JOINT_REF`, `ROCKER_DAMPER_JOINT_REF`, `ROCKER_DAMPER_CHASSIS` - rocker joint refs
+  - `WHEEL_AXIS_LOCAL`, `WHEEL_FORWARD_LOCAL` - wheel orientation vectors
 
-- **PID Keywords** (any key containing `PID`):
+- PID keywords (any key with `PID` in the name):
   - `FL_UCA_PID`, `FL_LCA_PID`, `FL_ROCKER_PID`, `FL_PUSHROD_PID`, `FL_DAMPER_PID`, `FL_TIE_PID`, `FL_WHEEL_PID`
-  - Matched (case-insensitive, substring) against geometry file PIDs to apply component-specific transforms
-  - Similar patterns for FR, RL, RR corners with fr/rl/rr prefixes
-  - **Component classification** accepts the full name *and* common abbreviations, so values like `flprod` or `rlpr` are recognized as PUSHROD:
+  - matched case-insensitive, substring, against the geometry PIDs to pick which transform to apply
+  - same pattern for FR, RL, RR with the fr/rl/rr prefixes
+  - the classifier takes the full name or a common abbreviation, so `flprod` or `rlpr` still come out as PUSHROD:
 
     | Component | Accepted keyword aliases |
     |-----------|--------------------------|
@@ -261,7 +262,7 @@ point,fl,fr,rl,rr,yaw,steer
 Where:
 - `fl, fr, rl, rr` = wheel vertical displacements (meters or mm depending on `RH_UNIT`)
 - `yaw` = vehicle yaw angle (degrees, 0 for straight)
-- `steer` = optional front road-wheel steering angle in degrees at the reference (front-left) wheel. The kinematic solver finds the rack travel that produces this angle at the front-left, then applies the same rack to the front-right so the Ackermann difference emerges. The tie-rod inner joint slides along the rack axis (`RACK_AXIS` in the hardpoint file, default lateral `0 1 0`) and the tie-rod length is preserved. Omit or set to `0` for no steer. Rear wheels are not steered.
+- `steer` = optional front road-wheel steer angle in degrees at the reference (front-left) wheel. the kinematic solver finds the rack travel that gives this angle at the front-left, then applies the same rack to the front-right so the Ackermann difference falls out on its own. the tie-rod inner joint slides along the rack axis (`RACK_AXIS` in the hardpoint file, default lateral `0 1 0`) and the tie-rod length is kept. leave blank or `0` for no steer. rear wheels aren't steered.
 
 ---
 
@@ -269,18 +270,7 @@ Where:
 
 ### How It Works
 
-**Input**: Ride-height point (corner displacements + yaw angle)
-↓
-**Kinematic Solver**: Computes wheel position, rotation, rocker angle, damper stroke
-↓
-**Component Transforms**: For each suspension component, compute:
-1. **Translation** — How the component moves
-2. **Rotation** — Axis-angle rotation vector (radians)
-3. **Pivot** — Center point for rotation
-↓
-**Geometry Transform**: Apply per-component transforms to matching PIDs in OBJ/STL files
-↓
-**Output**: Deformed geometry following suspension kinematics
+ride-height point (corner displacements + yaw) goes in, the kinematic solver works out the wheel position, rotation, rocker angle and damper stroke, then for each component it builds a transform (translation, rotation axis-angle in radians, pivot). those get applied to the matching PIDs in the OBJ/STL, and out comes geometry that follows the suspension motion.
 
 ### Component Transform Details
 
@@ -296,37 +286,37 @@ Where:
 
 ### Rotation Computation (UCA/LCA/TIE)
 
-**Algorithm**: Rigid body fit using linkage vectors
-1. **Static linkage vector**: From chassis mount to wheel attachment (static config)
-2. **Current linkage vector**: Same, after wheel has moved
-3. **Rotation axis**: Cross product of normalized vectors (perpendicular to both)
-4. **Rotation angle**: Arc-cosine of dot product (angle between vectors)
-5. **Rotation vector**: `axis × angle` (axis-angle representation in radians)
+rigid-body fit off the linkage vectors:
+1. static linkage vector: chassis mount to wheel attachment in the static config
+2. current linkage vector: same thing after the wheel has moved
+3. rotation axis: cross product of the normalised vectors (perpendicular to both)
+4. rotation angle: arccos of the dot product
+5. rotation vector: `axis x angle` (axis-angle, radians)
 
-This ensures arms rotate realistically while maintaining distance constraints at their pivot points.
+that way the arms swing the way they actually would while keeping the pivot distances fixed.
 
 ---
 
 ## Cornering (SRF) Simulation
 
-Cornering runs the whole domain in a **Single Rotating Frame (SRF)** that rotates at `omega` about a vertical axis through the corner centre, so the car follows a steady circular path of radius `CORNER_RADIUS` at speed `INLET_MAG`:
+cornering solves the whole domain in a single rotating frame (SRF) spinning at `omega` about a vertical axis through the corner centre, so the car follows a steady circle of radius `CORNER_RADIUS` at `INLET_MAG`:
 
 ```
 |omega| = INLET_MAG / CORNER_RADIUS    (rad/s)
 ```
 
-Enabling it (via `RUN_CORNERING = True`) automatically reconfigures the case:
+set `RUN_CORNERING = True` and the case reconfigures itself:
 
-- **Solver**: SRF solver (steady `SRFSimpleFoam`, transient auto-upgrades to `SRFPimpleFoam`). The primary field is the relative velocity `Urel`.
-- **Boundary conditions**: the x/y outer walls become `srfFreestream` patches, the ground becomes an SRF moving wall, and the roof stays slip. The inertial-frame freestream `UInf` is set to zero (all relative wind comes from the rotation).
-- **Per-wheel rolling speed**: each wheel rolls at `V_local = |omega| * (distance from the corner axis to the wheel centre)`, so inner wheels spin slower and outer wheels faster than `INLET_MAG`.
-- **Symmetry**: the cornering flow field is not laterally symmetric, so `SIM_SYM = half` is overridden to `full` for the run.
-- **Post-processing**: fields that would read `UMean` are switched to `UrelMean` (the rotating-frame averaged velocity).
-- **Domain validity guard**: the rectangular box only approximates a curved tunnel when it is narrow relative to the turn radius, so the setup requires `CORNER_RADIUS >= CORNER_CLEARANCE_FACTOR * (DOMAIN_SIZE_y / 2)` and exits with the minimum admissible radius otherwise.
+- **solver**: the SRF solver (steady `SRFSimpleFoam`, transient auto-upgrades to `SRFPimpleFoam`). it solves the relative velocity `Urel`.
+- **BCs**: the x/y outer walls become `srfFreestream`, the ground becomes an SRF moving wall, the roof stays slip. the inertial freestream `UInf` is zero - all the wind comes from the rotation.
+- **per-wheel rolling speed**: each wheel rolls at `V_local = |omega| * (distance from the corner axis to the wheel centre)`, so inner wheels spin slower and outer wheels faster than `INLET_MAG`.
+- **symmetry**: the flow isn't laterally symmetric, so `SIM_SYM = half` gets forced to `full`.
+- **post**: anything that would read `UMean` switches to `UrelMean` (the rotating-frame average).
+- **domain check**: the box only looks like a curved tunnel when it's narrow next to the radius, so it requires `CORNER_RADIUS >= CORNER_CLEARANCE_FACTOR * (DOMAIN_SIZE_y / 2)` and bails with the min radius otherwise.
 
 ### Configuration
 
-Edit the `[CORNERING_SETUP]` block in `caseSetup`:
+edit the `[CORNERING_SETUP]` block in `caseSetup`:
 
 ```ini
 [CORNERING_SETUP]
@@ -340,16 +330,16 @@ CORNER_SOLVER = SRFSimpleFoam   # SRF solver app
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `RUN_CORNERING` | `False` | Master switch. `True` solves the case in an SRF cornering frame |
-| `CORNER_RADIUS` | (empty) | Path radius of the reference centre of rotation (REFCOR), in metres. Required when cornering is enabled (or supply a per-point `corner_radius` CSV column) |
-| `CORNER_DIR` | `left` | Turn direction. `left` puts the corner centre on the car's left (-y), `right` on the right (+y) |
-| `CORNER_CENTER` | `default` | Explicit rotation centre as three floats `x y z`. `default` derives it from REFCOR with a `+/- CORNER_RADIUS` lateral offset |
-| `CORNER_CLEARANCE_FACTOR` | `3` | Sets the minimum admissible radius relative to the domain half-width; guards the box-vs-annulus approximation |
-| `CORNER_SOLVER` | `SRFSimpleFoam` | SRF solver application. Steady uses `SRFSimpleFoam`; transient cases auto-upgrade to `SRFPimpleFoam` |
+| `RUN_CORNERING` | `False` | master switch, `True` solves the case as an SRF cornering frame |
+| `CORNER_RADIUS` | (empty) | path radius of REFCOR in metres. needed when cornering is on (or supply a per-point `corner_radius` CSV column) |
+| `CORNER_DIR` | `left` | turn direction. `left` puts the centre on the car's left (-y), `right` on the right (+y) |
+| `CORNER_CENTER` | `default` | explicit centre as three floats `x y z`, or `default` to derive it from REFCOR with a `+/- CORNER_RADIUS` offset in y |
+| `CORNER_CLEARANCE_FACTOR` | `3` | sets the min radius relative to the domain half-width, keeps the box-vs-annulus approximation honest |
+| `CORNER_SOLVER` | `SRFSimpleFoam` | SRF solver app. steady uses `SRFSimpleFoam`, transient auto-upgrades to `SRFPimpleFoam` |
 
 ### Cornering With Ride-Height Studies
 
-When both `RUN_CORNERING` and `RUN_RIDE_HEIGHT` are enabled, the ride-height CSV can drive the corner per point with optional columns:
+with both `RUN_CORNERING` and `RUN_RIDE_HEIGHT` on, the ride-height CSV can drive the corner per point with two optional columns:
 
 ```csv
 point,fl,fr,rl,rr,yaw,steer,corner_radius,corner_dir
@@ -357,10 +347,10 @@ point,fl,fr,rl,rr,yaw,steer,corner_radius,corner_dir
 2,0.10,0.10,0.05,0.05,0.0,-6,45,right
 ```
 
-- `corner_radius` — per-point turn radius (m); overrides the base `CORNER_RADIUS` for that child case. Invalid/missing values fall back to the base value.
-- `corner_dir` — per-point `left`/`right`; overrides the base `CORNER_DIR`. Invalid/missing values fall back to the base value.
+- `corner_radius` - per-point radius (m), overrides the base `CORNER_RADIUS` for that child case. bad/missing values fall back to the base.
+- `corner_dir` - per-point `left`/`right`, overrides the base `CORNER_DIR`. bad/missing values fall back to the base.
 
-Each child case re-validates against the domain clearance guard, so an out-of-range per-point radius fails fast with a clear message.
+every child case re-runs the domain check, so an out-of-range per-point radius fails fast.
 
 ---
 
@@ -371,12 +361,12 @@ Each child case re-validates against the domain clearance guard, so an out-of-ra
 ```bash
 cd CASES/001
 python ../caseSetup.py --new
-# Edit caseSetup file with your parameters
+# edit the caseSetup file with your parameters
 ```
 
 ### Step 2: Enable Kinematic Solver (Optional)
 
-Edit `caseSetup` and configure the `[RIDE_HEIGHT_SETUP]` block:
+edit `caseSetup` and set up the `[RIDE_HEIGHT_SETUP]` block:
 ```ini
 [RIDE_HEIGHT_SETUP]
 RUN_RIDE_HEIGHT = True              # master switch for ride-height study
@@ -395,25 +385,25 @@ SUSP_REQUIRE_ALL_PIDS_MATCHED = False
 
 | Key | Description |
 |-----|-------------|
-| `RUN_RIDE_HEIGHT` | Master switch. `True` generates one child case per ride-height point |
-| `RIDE_HEIGHT_FILE` | Name/path of the ride-height CSV file |
-| `RUN_RH_POINTS` | Space-separated list of point indices (from the CSV) to build |
-| `USE_DEPEND` | Not operational at this moment |
-| `RH_UNIT` | Unit of corner displacements in the CSV (`mm` or `m`) |
-| `INIT_RH` | Optional initial/reference ride-height offset, not operational at this moment |
-| `RH_REF_WIDTH`, `RH_REF_LEN` | Optional reference track width / wheelbase, not operational at this moment  |
-| `USE_KINEMATIC_SOLVER` | Enable per-component kinematic deformation (else simple wheel translation) |
-| `HARDPOINT_FILE` | Path to the suspension hardpoint CFG (required if solver enabled) |
-| `HARDPOINT_SCALE` | Coordinate-to-metre multiplier (`0.001` for mm, `1.0` for m) |
-| `SUSP_REQUIRE_ALL_PIDS_MATCHED` | `True` errors on any unmatched part; `False` leaves it untouched with a warning |
+| `RUN_RIDE_HEIGHT` | master switch, `True` builds one child case per ride-height point |
+| `RIDE_HEIGHT_FILE` | name/path of the ride-height CSV |
+| `RUN_RH_POINTS` | space-separated list of point indices (from the CSV) to build |
+| `USE_DEPEND` | not operational at this moment |
+| `RH_UNIT` | unit of the corner displacements in the CSV (`mm` or `m`) |
+| `INIT_RH` | optional initial/reference ride-height offset, not operational at this moment |
+| `RH_REF_WIDTH`, `RH_REF_LEN` | optional reference track width / wheelbase, not operational at this moment |
+| `USE_KINEMATIC_SOLVER` | turn on the per-component kinematic deform (otherwise just a vertical wheel shift) |
+| `HARDPOINT_FILE` | path to the suspension hardpoint CFG (needed if the solver's on) |
+| `HARDPOINT_SCALE` | coordinate-to-metre multiplier (`0.001` for mm, `1.0` for m) |
+| `SUSP_REQUIRE_ALL_PIDS_MATCHED` | `True` errors on any unmatched part, `False` leaves it alone with a warning |
 
-Prepare hardpoint file (copy `suspensionHardpoints_template.cfg` and update coordinates):
+prep the hardpoint file (copy the template and update the coordinates):
 ```bash
 cp rideHeightUtils/suspensionHardpoints_template.cfg /path/to/suspensionHardpoints.cfg
-# Edit suspension geometry coordinates in CFG
+# edit the suspension coordinates in the CFG
 ```
 
-Add PID keywords to geometry (any key containing `PID` in hardpoint CFG sections):
+add the PID keywords to the geometry (any key with `PID` in the hardpoint CFG sections):
 ```ini
 [SUSP_FL]
 ...
@@ -426,31 +416,31 @@ FL_DAMPER_PID = fldamper
 FL_TIE_PID = fltie
 ...
 ```
-The keyword must be a **substring** of the actual part/group name in the OBJ/STL (e.g. keyword `fllca` matches a part named `body_susp_fllca`).
+the keyword has to be a substring of the actual part/group name in the OBJ/STL (e.g. `fllca` matches a part named `body_susp_fllca`).
 
 ### Step 3: Setup Case
 
 ```bash
-# Standard mesh + boundary condition setup. If RUN_RIDE_HEIGHT = True this
-# automatically generates and builds the per-point child cases.
+# standard mesh + BC setup. if RUN_RIDE_HEIGHT = True this
+# builds the per-point child cases for you.
 python ../caseSetup.py
 ```
 
-> **Note:** `--rideHeightMode` is an internal flag that `caseSetup` passes to itself when re-running inside each child case. Do **not** invoke it manually — just set `RUN_RIDE_HEIGHT = True` and run `caseSetup` normally.
+> **Note:** `--rideHeightMode` is an internal flag caseSetup passes to itself when it re-runs inside each child case. don't pass it yourself, just set `RUN_RIDE_HEIGHT = True` and run caseSetup normally.
 
 ### Step 4: Process Ride-Height Points
 
-If ride-height mode enabled, child cases created:
+if ride-height mode is on, you get one child case per point:
 ```
-001_1/     # Case for ride-height point 1
-001_2/     # Case for ride-height point 2
+001_1/     # ride-height point 1
+001_2/     # ride-height point 2
 ...
 ```
 
-Each child case has:
-- Deformed geometry following suspension kinematics
-- Updated domain pitch/roll/heave
-- Individual caseSetup with ride-height-specific parameters
+each child case has:
+- the geometry deformed to follow the suspension
+- domain pitch/roll/heave updated
+- its own caseSetup with the point's parameters
 
 ### Step 5: Run Solver
 
@@ -458,32 +448,33 @@ Each child case has:
 cd 001_1/
 blockMesh
 snappyHexMesh
-# Run solver (OpenFOAM command or cluster submission)
-# or run generated bash scripts in order: meshScript, solveScript, exportScript (postScript is called by exportScript when done)
+# run the solver (OpenFOAM command or cluster submission)
+# or run the generated bash scripts in order: meshScript, solveScript, exportScript
+# (postScript is called by exportScript when it's done)
 ```
 
 ### Step 6: Post-Process Results
 
 ```bash
 python ../postUtilities/postRun.py
-# Generates:
-# - Force convergence plots
-# - Pressure/velocity field plots
-# - Summary statistics
-# - PowerPoint report (optional)
+# gives you:
+# - force convergence plots
+# - pressure/velocity field plots
+# - summary stats
+# - powerpoint report (optional)
 ```
 
 ---
 
 ## Compilation
 
-Use PyInstaller to create standalone executable (recommended for deployment):
+PyInstaller builds a standalone executable (handy for deployment):
 
 ```bash
 bash compileFiles.sh
 ```
 
-This creates `dist/caseSetup` executable with all templates and utilities bundled.
+you get `dist/caseSetup` with all the templates and utilities bundled in.
 
 ---
 
@@ -491,46 +482,47 @@ This creates `dist/caseSetup` executable with all templates and utilities bundle
 
 ### Multi-Point Ride-Height Mapping
 
-Generate cases for multiple ride-height points (e.g., acceleration, braking, cornering):
+one case per ride-height point (e.g. accel, braking, cornering):
 
 ```csv
 point,fl,fr,rl,rr,yaw
-1,0.05,0.02,-0.02,-0.05,0.0      # Acceleration
-2,-0.02,-0.05,0.05,0.02,0.0      # Braking
-3,0.00,-0.08,0.08,0.00,5.0       # Yaw + roll
+1,0.05,0.02,-0.02,-0.05,0.0      # accel
+2,-0.02,-0.05,0.05,0.02,0.0      # braking
+3,0.00,-0.08,0.08,0.00,5.0       # yaw + roll
 ```
 
-Run with `--rideHeightMode` (only for use by caseSetup itself internally!):
+run with `--rideHeightMode` (only caseSetup itself should pass this!):
 ```bash
 python caseSetup.py --rideHeightMode
 ```
 
-Creates child cases for each point with automatically deformed suspension geometry.
+builds a child case per point with the suspension geometry already deformed.
 
 ### Mesh Fidelity Control
 
-Define refinement regions in `defaultRefinements/`:
-- Surface layers
-- Local refinement zones
-- Boundary layer y+ specification
+refinement regions live in `defaultRefinements/`:
+- surface layers
+- local refinement zones
+- boundary layer y+
 
 ### Custom Turbulence Models
 
-Add new models in `zeroTemplates/models/`. Supported:
+drop new models in `zeroTemplates/models/`. already there:
 - k-omega SST
 - Spalart-Allmaras (SA)
 - k-epsilon (standard)
 
 ### Cluster Submission
 
-Auto-generate SLURM/PBS scripts:
+auto-generate the SLURM/PBS scripts:
 ```bash
-# Edit defaultCluster/clusterDict templates with your HPC settings, default setup template outputs regular bash scripts
+# edit the defaultCluster/clusterDict templates with your HPC settings.
+# the default setup template just outputs plain bash scripts.
 python caseSetup.py 
-# Generate: meshScript, solveScript, exportScript, postScript
-# Upadate in setupTemplates/default/defaultCluster/slurm/clusterDict:
-#  - solveScript requires you to update the path to the zeroTemplates directory (located in this repo)
-#  - postScript requires you to update the path to the Paraview pvbatch command 
+# generates: meshScript, solveScript, exportScript, postScript
+# in setupTemplates/default/defaultCluster/slurm/clusterDict you need to:
+#  - point solveScript at the zeroTemplates dir (in this repo)
+#  - point postScript at the ParaView pvbatch command
 ```
 
 ---
@@ -538,46 +530,46 @@ python caseSetup.py
 ## Troubleshooting
 
 ### Kinematic Solver Fails
-- Check hardpoint CFG syntax (INI format, exact key names)
-- Verify all required keys present (see template)
-- Ensure suspension geometry is physically feasible (no link crossing)
+- check the hardpoint CFG syntax (INI format, exact key names)
+- make sure all the required keys are there (see the template)
+- check the suspension geometry is actually feasible (no links crossing)
 
 ### Geometry Misaligned After Transform
-- Verify PID keywords match geometry group names
-- Check ride-height input (excessive corner displacements?)
-- Review component pivot points in hardpoint CFG
+- check the PID keywords match the geometry group names
+- check the ride-height input (corner displacements too big?)
+- check the pivot points in the hardpoint CFG
 
 ### "PID scan skipped" / Unmatched PID
-- "PID scan skipped" means a geometry could not be processed by the PID-aware path (unsupported or binary format); it falls back to simple wheel translation. Use **ASCII** OBJ/STL for suspension parts.
-- An "Unmatched PID" warning means a hardpoint keyword does not appear in any part/group name. Confirm the keyword is a substring of the actual part name, or add an alias.
-- Inspect the per-part transform log written next to each output geometry (`*.susp_pid_transform.json` / `.csv`) to confirm which parts were moved.
-- Verify `HARDPOINT_SCALE` matches the unit of your hardpoint coordinates (`0.001` for mm).
+- "PID scan skipped" means a geometry couldn't go through the PID-aware path (unsupported or binary), so it falls back to simple wheel translation. use ASCII OBJ/STL for the suspension parts.
+- "Unmatched PID" means a hardpoint keyword doesn't show up in any part/group name. check the keyword is a substring of the real part name, or add an alias.
+- check the per-part transform log next to each output geometry (`*.susp_pid_transform.json` / `.csv`) to see what actually moved.
+- check `HARDPOINT_SCALE` matches the unit of your hardpoint coordinates (`0.001` for mm).
 
 ### Cornering (SRF) Errors
-- **"CORNER_RADIUS must be a positive number"**: set `CORNER_RADIUS` in `[CORNERING_SETUP]`, or provide a per-point `corner_radius` column in the ride-height CSV.
-- **"CORNER_RADIUS is too small for this domain"**: the radius violates `CORNER_RADIUS >= CORNER_CLEARANCE_FACTOR * (DOMAIN_SIZE_y / 2)`. Increase `CORNER_RADIUS`, reduce `DOMAIN_SIZE` in y, or lower `CORNER_CLEARANCE_FACTOR`.
-- **`SIM_SYM = half` warning**: cornering is not laterally symmetric, so the run is forced to `full`. Set `SIM_SYM = full` to silence it.
-- **Post-processing shows no velocity field**: cornering averages `UrelMean` (not `UMean`); the post tools detect this automatically, so ensure the case was solved with cornering enabled.
+- **"CORNER_RADIUS must be a positive number"**: set `CORNER_RADIUS` in `[CORNERING_SETUP]`, or give a per-point `corner_radius` column in the ride-height CSV.
+- **"CORNER_RADIUS is too small for this domain"**: the radius breaks `CORNER_RADIUS >= CORNER_CLEARANCE_FACTOR * (DOMAIN_SIZE_y / 2)`. bump `CORNER_RADIUS`, shrink `DOMAIN_SIZE` in y, or drop `CORNER_CLEARANCE_FACTOR`.
+- **`SIM_SYM = half` warning**: cornering isn't laterally symmetric so it's forced to `full`. set `SIM_SYM = full` to quiet it.
+- **no velocity field in post**: cornering averages `UrelMean` not `UMean`. the post tools catch this on their own, just make sure the case was actually solved with cornering on.
 
 ### Memory Issues with Large Meshes
-- Enable parallel decomposition in `system/decomposeParDict`
-- Reduce mesh refinement in `snappyHexMeshDict`
-- Split case into multiple smaller domains
+- turn on parallel decomposition in `system/decomposeParDict`
+- back off the refinement in `snappyHexMeshDict`
+- split the case into smaller domains
 
 ---
 
 ## Performance & Scalability
 
-- **Mesh generation**: ~minutes (depends on refinement)
-- **Kinematic solve**: ~milliseconds per ride-height point
-- **Geometry transform**: ~seconds per component (OBJ/STL file size dependent)
-- **CFD solver**: Hours to days (HPC recommended for production)
+- mesh generation: ~minutes (depends on refinement)
+- kinematic solve: ~ms per ride-height point
+- geometry transform: ~seconds per component (depends on OBJ/STL size)
+- CFD solve: hours to days (use the HPC for production runs)
 
 ---
 
 ## License & Attribution
 
-This framework builds on OpenFOAM and community contributions. See individual module headers for specific acknowledgments.
+built on OpenFOAM and community work. see the individual module headers for specific acknowledgments.
 
 ---
 
@@ -585,13 +577,16 @@ This framework builds on OpenFOAM and community contributions. See individual mo
 
 | Version | Date | Changes |
 |---------|------|---------|
-| **4.2-dev** | 2026 | Cornering (SRF) simulation: rotating-frame solver/BC/field setup, per-wheel rolling speeds, domain clearance guard, and per-point `corner_radius`/`corner_dir` ride-height columns; per-component transforms, wheel camber/toe, UCA/LCA/TIE rotation computation; PID keyword abbreviation matching (e.g. `flprod`/`rlpr` → PUSHROD); macOS multiprocessing fix (`__main__` guard) preventing child-case process recursion; PID transform log `pivot=None` fix |
-| 4.1.1 | 2025 | Kinematic solver integration, hardpoint CFG support |
-| 4.0 | 2024 | Initial multi-setup template framework |
+| **4.2.2** | 2026 | cornering (SRF): rotating-frame solver/BC/field setup, kinematic ride height solver, ride height mapping|
+| 4.1.1 | 2025 | updates to postProcessing and ANSA mesh integration |
+| 4.0 | 2024 | complete re-write with multi-setup template framework |
+| 3.* | 2024 | more functionality |
+| 2.* | 2023 | added functionality for porous media and wheel MRF |
+| 1.* | 2022 | Birth of this concept |
 
 ---
 
 ## Support & Contact
 
-For issues, questions, or contributions, refer to project documentation or contact maintainers.
+for issues, questions or contributions, check the docs or ping the maintainers.
 
