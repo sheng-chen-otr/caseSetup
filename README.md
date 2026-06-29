@@ -459,6 +459,7 @@ cd 001_1/
 blockMesh
 snappyHexMesh
 # Run solver (OpenFOAM command or cluster submission)
+# or run generated bash scripts in order: meshScript, solveScript, exportScript (postScript is called by exportScript when done)
 ```
 
 ### Step 6: Post-Process Results
@@ -527,6 +528,9 @@ Auto-generate SLURM/PBS scripts:
 # Edit defaultCluster/clusterDict templates with your HPC settings, default setup template outputs regular bash scripts
 python caseSetup.py 
 # Generate: meshScript, solveScript, exportScript, postScript
+# Upadate in setupTemplates/default/defaultCluster/slurm/clusterDict:
+#  - solveScript requires you to update the path to the zeroTemplates directory (located in this repo)
+#  - postScript requires you to update the path to the Paraview pvbatch command 
 ```
 
 ---

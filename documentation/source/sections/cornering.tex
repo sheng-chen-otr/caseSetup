@@ -1,5 +1,5 @@
 \section{Cornering (Single Reference Frame)}
-\codeword{caseSetup} can set up a steady curved-path (cornering) case using a Single Reference Frame (SRF). Instead of meshing a curved tunnel, the existing rectangular domain is solved in a frame that rotates at a constant angular velocity about a vertical axis through the corner centre. In that rotating frame the car follows a circular path of radius \codeword{CORNER_RADIUS} at the freestream speed \codeword{INLET_MAG}, and the steady flow field represents a mid-corner condition. The solver is \codeword{SRFSimpleFoam}.
+\codeword{caseSetup} can set up a steady curved-path (cornering) case using a Single Reference Frame (SRF). Instead of meshing a curved tunnel, the existing rectangular domain is solved in a frame that rotates at a constant angular velocity about a vertical axis through the corner centre. In that rotating frame the car follows a circular path of radius \codeword{CORNER_RADIUS} at the freestream speed \codeword{INLET_MAG}, and the steady flow field represents a mid-corner condition. The solver follows \codeword{SIM_TYPE}: a steady case uses \codeword{SRFSimpleFoam} and a transient case uses \codeword{SRFPimpleFoam}.
 
 \subsection{Cornering Setup}
 Deleting the module \codeword{defaultCornering} will expose the following block:
@@ -23,7 +23,7 @@ Deleting the module \codeword{defaultCornering} will expose the following block:
 
     \item \codeword{CORNER_CLEARANCE_FACTOR} [\codeword{float}] - minimum ratio of \codeword{CORNER_RADIUS} to the domain lateral half-width, guards against a turn so tight that the rectangular box is a poor model of the curved tunnel (\codeword{float})
 
-    \item \codeword{CORNER_SOLVER} [\codeword{str}] - the OpenFOAM solver used for the cornering run (\codeword{SRFSimpleFoam})
+    \item \codeword{CORNER_SOLVER} [\codeword{str}] - the OpenFOAM SRF solver used for the cornering run, the steady default is \codeword{SRFSimpleFoam}, when \codeword{SIM_TYPE} is \codeword{transient} it is auto-upgraded to \codeword{SRFPimpleFoam} (\codeword{SRFSimpleFoam}, \codeword{SRFPimpleFoam})
 \end{itemize}
 To run a cornering case, set \codeword{RUN_CORNERING} to \codeword{True}, provide a valid \codeword{CORNER_RADIUS} and \codeword{CORNER_DIR}, and run \codeword{caseSetup} as normal.
 
@@ -74,7 +74,7 @@ and stops with an error reporting the minimum admissible radius if the check fai
 
     \item To sweep attitudes and corners together, also set \codeword{RUN_RIDE_HEIGHT} to \codeword{True} and add \codeword{corner_radius} and \codeword{corner_dir} columns to the ride-height file.
 
-    \item Run \codeword{caseSetup} as normal. The case is built full width, the SRF rotation is written, the wheels are set to their local corner speeds, and the run uses \codeword{CORNER_SOLVER}.
+    \item Run \codeword{caseSetup} as normal. The case is built full width, the SRF rotation is written, the wheels are set to their local corner speeds, and the run uses \codeword{CORNER_SOLVER} (\codeword{SRFSimpleFoam} for steady, \codeword{SRFPimpleFoam} for transient).
 \end{itemize}
 
 \subsection{Troubleshooting}
