@@ -142,7 +142,7 @@ def getCorneringInfo(fullCaseSetupDict, casePath, case):
 
 def generate_summary():
         
-    caseSetupPath="%s/caseSetup" % (casePath)
+    caseSetupPath="%s/fullCaseSetupDict" % (casePath)
     fullCaseSetupDict = configparser.ConfigParser()
     fullCaseSetupDict.optionxform = str
     fullCaseSetupDict.read_file(open(caseSetupPath))

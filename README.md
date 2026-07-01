@@ -95,7 +95,10 @@ NOTE: the `ROTA` prefix is to specify that part will get a rotating wall boundar
 
 For more information about the options and settings, refer to the `documentation/source/caseSetupTUG.pdf` or reach out to me for clarification!
 
+## Demo Cases
+A motorbike demo case has been provided in the `motorbikeDemoCase` directory. Copy that file to a desired location and execute `caseSetup.py` in either the `baseDemo` or `cornerDemo` directories. Run the scripts in order of `meshingScript`, `solveScript`, `exportScript`. 
 
+NOTE: Make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` path in this repo in `setupTemplates/default/defaultCluster/slurm/clusterDict`. Likewise replace `/path/to/bin/pvbatch` with the path to your local Paraview `pvbatch` installation, and `/path/to/postUtilities/` with the path to this local repo. An example `clusterDict` has been provided in `setupTemplates/default-local`
 
 ## Directory Structure
 
