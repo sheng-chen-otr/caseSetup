@@ -100,9 +100,9 @@ A motorbike demo case has been provided in the `motorbikeDemoCase` directory. Co
 
 NOTE: Make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` path in this repo in `setupTemplates/default/defaultCluster/slurm/clusterDict`. Likewise replace `/path/to/bin/pvbatch` with the path to your local Paraview `pvbatch` installation, and `/path/to/postUtilities/` with the path to this local repo. An example `clusterDict` has been provided in `setupTemplates/default-local`
 
-![baseDemo](\motorbikeDemoCase\CASES\baseDemo-slice.png)
+![baseDemo](motorbikeDemoCase/CASES/baseDemo-slice.png)
 
-![cornerDemo](\motorbikeDemoCase\CASES\cornerDemo-slice.png)
+![cornerDemo](motorbikeDemoCase/CASES/cornerDemo-slice.png)
 ## Directory Structure
 
 ```
