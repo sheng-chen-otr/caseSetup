@@ -6,8 +6,7 @@ import math
 import re
 from utilities import *
 
-
-steadyTurb = {'sa':'SpalartAllmaras','kosst':'kOmegaSST'}
+steadyTurb = {'sa':'SpalartAllmaras','kosst':'kOmegaSST','geko':'GEKO'}
 
 transientTurb = {'sa':'SpalartAllmarasIDDES','kosst':'kOmegaSSTIDDES'}
 
@@ -51,8 +50,6 @@ def writeSurfaceFeatureExtract(templateLoc,geomDict,fullCaseSetupDict):
     localPath = 'system/surfaceFeatureExtractDict'
     copyTemplateToCase(templatePath,localPath)
 
-        
-    
     featExtractStringArray = []
     featExtractString = 'GEOM_NAME{extractionMethod extractFromSurface; includedAngle FEAT_ANGLE;subsetFeatures{nonManifoldEdges no; openEdges yes;}writeObj no;}'
     feat_angle = fullCaseSetupDict['GLOBAL_REFINEMENT']['FEAT_EDGE_ANGLE'][0]
@@ -64,9 +61,7 @@ def writeSurfaceFeatureExtract(templateLoc,geomDict,fullCaseSetupDict):
     
     featExtractString = '\n'.join(featExtractStringArray)
     search_and_replace('system/surfaceFeatureExtractDict','<SURFACE_FEAT_EXTRACT>',featExtractString)
-    
 
-   
     
 def writeControlDict(templateLoc, fullCaseSetupDict):
     print('\n\tWriting out controlDicts...')
@@ -147,8 +142,6 @@ def copyFunctionObjects(templateLoc,foList,geomDict,fullCaseSetupDict):
             for var in fullCaseSetupDict[section].keys():
                 search_and_replace(localPath, '<%s>' % (var), ' '.join(fullCaseSetupDict[section][var]))
         
-        
-
 def writeCorneringRelativeFields(fullCaseSetupDict):
  
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
@@ -254,7 +247,6 @@ def writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict):
         sys.exit('ERROR! Unable to find forceCoeffsExport in system directory! %s' % (e))
     
 
-    
 def writeSurfaces(templateLoc,geomDict,fullCaseSetupDict):        
     #no need to copy surfacesTemplate due to it being copied by fo copy
     geomList = []
@@ -280,8 +272,6 @@ def writeSurfaces(templateLoc,geomDict,fullCaseSetupDict):
         search_and_replace("system/surfaces", "<%s>" % (var), val)
         
         
-        
-
 def writePostProSurfaceList(fullCaseSetupDict):
     #slices this would require updating the slices from the previous versions
     #might not work well with the pv-post output names
@@ -352,7 +342,7 @@ def writePostProSurfaceList(fullCaseSetupDict):
                 print('\t\tnSlices: %s' % (int((slidePositions[1]-slidePositions[0])/slidePositions[2])))
             except:
                 print('\t%s not requested or invalid input, skipping...' % (sliceType))
-    
+   
     with open('system/surfaceSetupList', 'w') as surfaceSetupList:
         surfacesList = []
         for sliceType in sliceDict.keys():
@@ -376,7 +366,7 @@ def writePostProSurfaceList(fullCaseSetupDict):
                 n = n + 1
                 surfacesList.append(stringToAdd)
         surfaceSetupList.write(''.join(surfacesList))
-        
+
 def writeSolution(templateLoc, fullCaseSetupDict):
     print('\tWriting fvSolution...')
     simType = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0]

@@ -21,6 +21,82 @@ two bigger features beyond the basic straight-line case:
 
 ---
 
+## Quick Start
+
+1. Ensure your preferred version of OpenFOAM (v2012+) is installed
+2. Create a directory structure as such:
+```
+projectDirectory/
+├── 02_reference/                    # Location where reference files reside
+│    └── MSH/                        # Where geometry files reside (.obj,.stl)
+│
+└── CASES/                           # Run directories reside in here
+    ├── 001/                         # Run directory, where your simulation case resides
+    │   ├── system/
+    │   ├── constant/
+    ├── 002/                        
+    │   ├── system/
+    │   ├── constant/
+    ...
+```
+3. Navigate into your case directory and run the following:
+```bash
+python /path/to/caseSetup.py --new
+```
+This will generate a new caseSetup file that looks like this:
+```
+[DEFAULTS]
+DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultBCSetup defaultGlobalDecomposition defaultGlobalMaterial defaultGlobalRefinement defaultRideHeight defaultCornering defaultPost
+ADDON_MODULES =
+
+[TITLES]
+CASENAME = casename
+CASEDESCRP = default description
+JOBCODE = TS
+
+[GEOMETRY]
+GEOM = default.stl,1,8,5,1.1,high
+```
+The `DEFAULT_MODULES` line consists of the modules that are set to default values. To edit, remove that module from the line and re-run `caseSetup.py` to reveal the hidden module for editing. The coordinate system follows SAEJ1594. Remove `defaultBCSetup` to expose the settings for the inlet velocity and reference values, and to set the center of rotation for pitching moment.
+
+4. Specifying your geometry can be done easily in the `[GEOMETRY]` section, for example:
+```
+[GEOMETRY]
+GEOM = frontWing.obj.gz,1,8,5,1.1,high
+  rearWing.obj.gz,1,8,5,1.1,high
+  body.obj.gz,1,8,5,1.1,high
+  ROTA-front-wheel-lhs.obj.gz,1,8,5,1.1,high
+  ROTA-front-wheel-rhs.obj.gz,1,8,5,1.1,high
+  ROTA-rear-wheel-lhs.obj.gz,1,8,5,1.1,high
+  ROTA-rear-wheel-rhs.obj.gz,1,8,5,1.1,high
+```
+The `GEOM` columns are as follows:
+
+`GEOMETRY_FILE, SCALE_FACTOR, REFINEMENT_LEVEL, NLAYERS, EXPANSION_RATIO, WALL_MODELLING`
+
+`GEOMETRY_FILE` - Geometry file name (.obj/.stl, .gz compression is fine, must be ASCII format!)
+
+`SCALE_FACTOR` - Scale factor to scale the geometry, unit conversion (Only works with snappyHexMesh)
+
+`REFINEMENT_LEVEL` - Base refinement level for specified geometry, additional curvature and edge refinements added on where required, global settings exposed with `defaultGlobalRefinement`
+
+`NLAYERS` - Number of inflation layers 
+
+`EXPANSION_RATIO` - Expansion ratio
+
+`WALL_MODELLING` - high/low, high: uses wall model, low: no wall model
+
+NOTE: the `ROTA` prefix is to specify that part will get a rotating wall boundary condition, more information in the `documentation/source/caseSetupTUG.pdf`!
+
+5. When all geometry is setup and your `BC_SETUP` is all done, run `caseSetup.py` to finish setting up the case.
+6. Use the `meshingScript`, `solveScript`, `exportScript` to execute each part of the case. 
+    
+    NOTE: make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` path in this repo in `setupTemplates/default/defaultCluster/slurm/clusterDict`. Likewise replace `/path/to/bin/pvbatch` with the path to your local Paraview `pvbatch` installation, and `/path/to/postUtilities/` with the path to this local repo.
+
+For more information about the options and settings, refer to the `documentation/source/caseSetupTUG.pdf` or reach out to me for clarification!
+
+
+
 ## Directory Structure
 
 ```

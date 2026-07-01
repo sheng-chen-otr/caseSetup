@@ -1,0 +1,43 @@
+[PV_POST_MAIN]
+CASE_NAME = default
+CAMERA_VIEWS = default
+WHEEL_BASE = default
+BACKGROUND_COLOR = default
+RESOLUTION = default
+GEOM_IMG = True
+SURFACE_IMG = True
+SLICE_IMG = True
+SLICE_LIC_IMG = True
+ISO_SURFACE_IMG = True
+CREATE_SCALAR_BAR = True
+
+[GEOM]
+VIEWS = default
+
+[SURFACE]
+VIEWS = default
+VARIABLES = default
+
+[SLICE]
+NORMALS = default
+NSLICES = default
+SLICE_RANGE = default
+VARIABLES = default
+
+[ISO_SURFACE]
+VIEWS = default
+ISO_VARIABLES = default
+
+[VARIABLES]
+SURFACE_VARIABLES = default
+SLICE_VARIABLES = default
+ISO_VARIABLES = default
+
+
+
+
+
+
+
+
+

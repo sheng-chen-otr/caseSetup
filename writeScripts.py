@@ -47,15 +47,6 @@ from writeConstant import *
                 # }
 
 
-# def getClusterType(templateLoc, fullCaseSetupDict):
-    
-    # #replaceScript header
-
-
-
-
-
-
 
 def makeScripts(templateLoc,fullCaseSetupDict):
 
