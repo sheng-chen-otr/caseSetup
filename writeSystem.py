@@ -735,10 +735,13 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
 
         else:
         #if geom is not a rotating geometry then use the default no-slip patch
-            geomString = bcStrings['GEOM']
-            geomString = geomString.replace('WALL_MODEL',geomWallModel).replace('WH_ORIG',whOrig).replace('WH_AXIS',whAxis).replace('WH_VEL',whVel).replace('GEOM_NAME',geom.split('.')[0])
-            
-            caseSetupStringArray.append(geomString)
+            if 'POR' in geom:
+                continue
+            else:
+                geomString = bcStrings['GEOM']
+                geomString = geomString.replace('WALL_MODEL',geomWallModel).replace('WH_ORIG',whOrig).replace('WH_AXIS',whAxis).replace('WH_VEL',whVel).replace('GEOM_NAME',geom.split('.')[0])
+                
+                caseSetupStringArray.append(geomString)
                 
     caseSetupStrings = '\n'.join(caseSetupStringArray)
     
