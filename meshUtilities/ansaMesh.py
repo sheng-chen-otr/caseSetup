@@ -740,13 +740,14 @@ def createSizeField(fullCaseSetupDict,geomDict):
                                                               max_vol_len = size,
                                                               offset = dist)
         for part in geomDict.keys():
+            print('\t\t\t\t%s' % (part))
             part_ent = geomDict[part]['part_ent']
             pids = getPIDsFromPart(part_ent)
             for pidEntity in pids:
                 pidName = pidEntity._name
-                boundaryList = ['-min','-max','REFX-','REF-','MRFG-'] # don't create offset size fields for these types
+                boundaryList = ['-min','-max','REFX-','REF-','MRFG-','POR-'] # don't create offset size fields for these types
                 if not any(x in pidName for x in boundaryList):
-                    #print('\t\t\t\t%s' % (pidName))
+                    print('\t\t\t\t\t%s' % (pidName))
                     mesh.AddContentsToSizeFieldRule( entities = pidEntity , rule = global_offset)
 
     for geom in geomDict:

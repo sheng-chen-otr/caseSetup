@@ -91,8 +91,7 @@ def makeScripts(templateLoc,fullCaseSetupDict):
                     solveScriptArray.append(clusterDict['solve']['initialize']['initializeSteady'])
             elif 'topoSet' in line:
                 #ansaMesh can't snap the porous/MRF interface, so build those cellZones with topoSet
-                #(system/topoSetDict, written by createTopoSet) before the solver runs. only include
-                #the line when there actually are porous/rotating-MRF regions in an ansaMesh case
+                #(system/topoSetDict, written by createTopoSet) before the solver runs.
                 if hasTopoSetRegions(fullCaseSetupDict):
                     solveScriptArray.append(clusterDict['solve']['topoSet'])
             elif 'solve' in line:
