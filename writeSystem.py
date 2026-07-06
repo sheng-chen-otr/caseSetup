@@ -330,16 +330,16 @@ def writePostProSurfaceList(fullCaseSetupDict):
         else:
             try:
                 sliceDict[sliceType] = {}
-                sliceDict[sliceType]['start'] = slidePositions[0]
-                sliceDict[sliceType]['end'] = slidePositions[1]
-                sliceDict[sliceType]['ds'] = slidePositions[2]
-                sliceDict[sliceType]['nslice'] = int((slidePositions[1]-slidePositions[0])/slidePositions[2])
+                sliceDict[sliceType]['start'] = slicePositions[0]
+                sliceDict[sliceType]['end'] = slicePositions[1]
+                sliceDict[sliceType]['ds'] = slicePositions[2]
+                sliceDict[sliceType]['nslice'] = int((slicePositions[1]-slicePositions[0])/slicePositions[2])
                 
                 print('\t%s' % (sliceType))
-                print('\t\tStart: %s'% (slidePositions[0]))
-                print('\t\tEnd: %s' % (slidePositions[1]))
-                print('\t\tDs: %s' % (slidePositions[2]))
-                print('\t\tnSlices: %s' % (int((slidePositions[1]-slidePositions[0])/slidePositions[2])))
+                print('\t\tStart: %s'% (slicePositions[0]))
+                print('\t\tEnd: %s' % (slicePositions[1]))
+                print('\t\tDs: %s' % (slicePositions[2]))
+                print('\t\tnSlices: %s' % (int((slicePositions[1]-slicePositions[0])/slicePositions[2])))
             except:
                 print('\t%s not requested or invalid input, skipping...' % (sliceType))
    
@@ -762,9 +762,87 @@ def writeDecomposeParDict(templateLoc,fullCaseSetupDict):
     search_and_replace('system/decomposeParDict','<DECOMPOSITION>','(%s %s %s)' % (decomposition[0],decomposition[1],decomposition[2]))
     
 
+def hasTopoSetRegions(fullCaseSetupDict):
+    #ansaMesh can't conformally snap the porous/MRF internal interface, so the cellZones the
+    #porosity (fvOptions) and MRFProperties dicts reference never get created during meshing.
+    #this returns True when the ansaMesh flow has porous or rotating-MRF regions that therefore
+    #need the topoSet workaround. geometry sections are keyed by geomName (e.g. 'POR-...',
+    #'MRFG-...') in fullCaseSetupDict
+    if 'ansa' not in fullCaseSetupDict['GLOBAL_REFINEMENT']['TEMPLATE_TYPE'][0].lower():
+        return False
+    for section in fullCaseSetupDict.keys():
+        prefix = section.split('-')[0]
+        if prefix == 'POR':
+            return True
+        if prefix == 'MRFG' and fullCaseSetupDict[section].get('ROT_MRF', ['false'])[0].lower() == 'true':
+            return True
+    return False
+
+
 def createTopoSet(templateLoc,geomDict,fullCaseSetupDict):
-    #must check for check for moving grounds, and rotating geometry
-    pass
+    
+    #cells inside each closed porous/MRF surface with topoSet and drop them into the cellZone
+    #that fvOptions (DarcyForchheimer porosity -> GEOMNAME_INTERNAL) and MRFProperties
+    #(rotating frame -> fluid-GEOMNAME) expect. only relevant for the ansaMesh flow
+    if 'ansa' not in fullCaseSetupDict['GLOBAL_REFINEMENT']['TEMPLATE_TYPE'][0].lower():
+        return False
+
+    #the global inside point (main fluid domain) is outside every porous/MRF region, so it's the
+    #outsidePoints seed surfaceToCell uses to decide which side of the surface is the region
+    locInMesh = fullCaseSetupDict['GLOBAL_REFINEMENT']['LOC_IN_MESH']
+    outsidePoint = '(%s %s %s)' % (locInMesh[0], locInMesh[1], locInMesh[2])
+    cellSetTemplate = '    {name ZONE_NAME; type cellSet; action new; source surfaceToCell; file "SURF_FILE"; outsidePoints (OUTSIDE_POINT); includeCut false; includeInside true; includeOutside false; nearDistance -1; curvature -100;}\n'
+    cellZoneTemplate = '    {name ZONE_NAME; type cellZoneSet; action new; source setToCellZone; set ZONE_NAME;}\n'
+
+    actions = []
+    for geom in geomDict:
+        geomName = geom.split('.')[0]
+        if geom.startswith('POR'):
+            zoneName = '%s_INTERNAL' % (geomName)
+        elif geom.startswith('MRFG'):
+            #only rotating MRF regions get a fluid zone referenced in MRFProperties
+            if fullCaseSetupDict[geomName]['ROT_MRF'][0].lower() != 'true':
+                continue
+            zoneName = 'fluid-%s' % (geomName)
+        else:
+            continue
+        surfFile = 'constant/triSurface/%s' % (geom.replace('.gz',''))
+        print('\t\tAdding topoSet zone: %s (from %s)' % (zoneName,surfFile))
+        actions.append(cellSetTemplate.replace('ZONE_NAME',zoneName).replace('SURF_FILE',surfFile).replace('OUTSIDE_POINT',outsidePoint))
+        actions.append(cellZoneTemplate.replace('ZONE_NAME',zoneName))
+
+    if not actions:
+        return False
+
+    print('\tWriting out system/topoSetDict for ansaMesh porous/MRF regions...')
+    topoSetDict = '''/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  v2206                                 |
+|   \\\\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      topoSetDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+actions
+(
+%s);
+
+// ************************************************************************* //
+''' % (''.join(actions))
+
+    os.makedirs('system', exist_ok=True)
+    with open('system/topoSetDict', 'w') as f:
+        f.write(topoSetDict)
+    return True
+
         
 def writeBlockMesh(templateLoc, fullCaseSetupDict):
     print('\n\tWriting out blockMeshDict...')

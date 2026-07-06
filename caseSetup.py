@@ -133,6 +133,7 @@ def main():
         writeForceCoeff(templateLoc,geomDict,fullCaseSetupDict)
         writeOptions(templateLoc,geomDict,fullCaseSetupDict)
         writeMRFG(templateLoc,geomDict,fullCaseSetupDict)
+        createTopoSet(templateLoc,geomDict,fullCaseSetupDict)
         writeSRFProperties(templateLoc,fullCaseSetupDict)
         writeSurfaces(templateLoc, geomDict,fullCaseSetupDict)
         writeCorneringRelativeFields(fullCaseSetupDict)

@@ -89,6 +89,12 @@ def makeScripts(templateLoc,fullCaseSetupDict):
                     solveScriptArray.append(clusterDict['solve']['initialize']['initializePotential'])
                 elif fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0] == 'steady':
                     solveScriptArray.append(clusterDict['solve']['initialize']['initializeSteady'])
+            elif 'topoSet' in line:
+                #ansaMesh can't snap the porous/MRF interface, so build those cellZones with topoSet
+                #(system/topoSetDict, written by createTopoSet) before the solver runs. only include
+                #the line when there actually are porous/rotating-MRF regions in an ansaMesh case
+                if hasTopoSetRegions(fullCaseSetupDict):
+                    solveScriptArray.append(clusterDict['solve']['topoSet'])
             elif 'solve' in line:
                 if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0].lower() == 'steady':
                     solveScriptArray.append(clusterDict['solve']['solve']['steady'])
