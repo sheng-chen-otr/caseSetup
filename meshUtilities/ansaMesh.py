@@ -865,7 +865,7 @@ def getAllPID():
         
 
 def getParts(geomDict):
-    
+    print('\t\tGetting parts from...')
     deck = constants.OPENFOAM
     parts = base.CollectEntities(deck,None,'ANSAGROUP')
         
