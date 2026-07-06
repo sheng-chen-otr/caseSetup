@@ -956,7 +956,7 @@ def importGeometry(geomDict):
         if '.obj' in geom:
             base.InputWaveFront(filename = geomPath,
                                 unit_system=units)
-        elif '.stl.' in geom:
+        elif '.stl' in geom:
             base.InputStereoLithography(filename = geomPath,
                                         unit_system=units)
     
