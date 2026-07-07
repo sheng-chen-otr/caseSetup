@@ -32,7 +32,7 @@ parser.add_argument('--archiveRefData', action='store_true',
 
 args = parser.parse_args()
 
-defaultArchivePath = '/Users/zchen147/Library/CloudStorage/OneDrive-azureford/researchMasc/caseSetup-dev/testArchive'
+defaultArchivePath = '/media/openfoam/archive/jobs'
 
 def main():
     job,parentPath = getJob()
