@@ -400,6 +400,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
 
     geomPartList = []
     for geom in geomDict.keys():
+        
         geomPrefixList = ['REFX-','REF-','MRF-','MRFG-']
         if not any(x in geom for x in geomPrefixList):
             geomPartList.append(geomDict[geom]['part_ent'])
@@ -787,7 +788,7 @@ def createSizeField(fullCaseSetupDict,geomDict):
 
     print('\n\t\tChecking for refinement regions...')
     refinementList = []
-    refinementKeys = ['REF-','REFX-']
+    refinementKeys = ['REF-','REFX-','POR-']
     for geom in geomDict.keys():
         if any(x in geom for x in refinementKeys):
             refinementList.append(geomDict[geom]['part_ent'])
@@ -993,8 +994,8 @@ def geomToDict(fullCaseSetupDict):
             if geometryName in geomDict.keys():
                 print('ERROR! Duplicate geometry name found: %s' % (geometryName))
                 exit()
-            if [x for x in ['POR-'] if x in geometryName]:
-                continue
+            # if [x for x in ['POR-'] if x in geometryName]:
+            #     continue
             geomDict[geometryName] = {}
             n = 0
             while n < (len(geomColumnNames)):
