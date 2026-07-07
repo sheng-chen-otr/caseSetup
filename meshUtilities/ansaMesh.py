@@ -787,7 +787,7 @@ def createSizeField(fullCaseSetupDict,geomDict):
 
     print('\n\t\tChecking for refinement regions...')
     refinementList = []
-    refinementKeys = ['REF-','REFX-']
+    refinementKeys = ['REF-','REFX-','POR-','MRF-','MRFG-']
     for geom in geomDict.keys():
         if any(x in geom for x in refinementKeys):
             refinementList.append(geomDict[geom]['part_ent'])
