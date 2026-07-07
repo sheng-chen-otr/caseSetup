@@ -503,7 +503,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
     #starting general geometry settings
    
     for geom in geomDict.keys():
-        geomPrefixList = ['domain','REFX-','REF-','MRF-','MRFG-']
+        geomPrefixList = ['domain','REFX-','REF-','MRF-','MRFG-','POR-']
         if not any(x in geom for x in geomPrefixList):
             partMparfile = geomMparfile.copy()
             
@@ -937,6 +937,8 @@ def exportAnsaMesh():
 def importGeometry(geomDict):
     print('\n\n\t\tImporting geometry!')
     for geom in geomDict:
+        if [x for x in ['POR-'] if x in geom]:
+            continue
         geomPath = os.path.join('constant','triSurface',geom)
         if not os.path.exists(geomPath):
             sys.exit('ERROR! %s not in triSurface directory!' % (geom))

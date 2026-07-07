@@ -21,14 +21,13 @@ def writeOptions(templateLoc, geomDict,fullCaseSetupDict):
     
     for geom in geomDict:
         if geom.startswith('POR'):
+
             
             geomName = geom.split('.')[0]
             print('\t\tWriting out porous media: %s' % (geomName))
             porString = '''GEOMNAME{type explicitPorositySource;active yes; explicitPorositySourceCoeffs {type DarcyForchheimer; selectionMode cellZone;cellZone GEOMNAME_INTERNAL; DarcyForchheimerCoeffs{d d [0 -2 0 0 0 0 0] (DCOEFFS 3e10 3e10);f f [0 -1 0 0 0 0 0] (FCOEFFS 1e5 1e5); coordinateSystem {type cartesian; origin  (0 0 0); coordinateRotation {type axesRotation;e1 (VEC1);e2 (VEC2);}}}}}\n'''
-            
             string = porString.replace('GEOMNAME',geomName)
             for key in fullCaseSetupDict[geomName].keys():
-                
                 string = string.replace(key,' '.join(fullCaseSetupDict[geomName][key]))
             
             optionList.append(string)
@@ -37,8 +36,6 @@ def writeOptions(templateLoc, geomDict,fullCaseSetupDict):
     optionList = ''.join(optionList)
     
     search_and_replace(localFvOptionPath,'<OPTION_MEDIA>',optionList)
-    #limitVelocity targets one field (default U). cornering solves Urel and never corrects U via
-    #fvOptions, so the limiter must point at Urel to do anything. non-cornering keeps limiting U
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and
                     fullCaseSetupDict['CORNERING_SETUP']['RUN_CORNERING'][0].lower() == 'true')
     limitField = 'Urel' if runCornering else 'U'
