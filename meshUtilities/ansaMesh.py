@@ -400,7 +400,6 @@ def createOctree2(fullCaseSetupDict,geomDict):
 
     geomPartList = []
     for geom in geomDict.keys():
-        
         geomPrefixList = ['REFX-','REF-','MRF-','MRFG-']
         if not any(x in geom for x in geomPrefixList):
             geomPartList.append(geomDict[geom]['part_ent'])
@@ -504,7 +503,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
     #starting general geometry settings
    
     for geom in geomDict.keys():
-        geomPrefixList = ['domain','REFX-','REF-','MRF-','MRFG-','POR-']
+        geomPrefixList = ['domain','REFX-','REF-','MRF-','MRFG-']
         if not any(x in geom for x in geomPrefixList):
             partMparfile = geomMparfile.copy()
             
@@ -788,7 +787,7 @@ def createSizeField(fullCaseSetupDict,geomDict):
 
     print('\n\t\tChecking for refinement regions...')
     refinementList = []
-    refinementKeys = ['REF-','REFX-','POR-']
+    refinementKeys = ['REF-','REFX-']
     for geom in geomDict.keys():
         if any(x in geom for x in refinementKeys):
             refinementList.append(geomDict[geom]['part_ent'])
@@ -938,7 +937,6 @@ def exportAnsaMesh():
 def importGeometry(geomDict):
     print('\n\n\t\tImporting geometry!')
     for geom in geomDict:
-        
         geomPath = os.path.join('constant','triSurface',geom)
         if not os.path.exists(geomPath):
             sys.exit('ERROR! %s not in triSurface directory!' % (geom))
@@ -985,7 +983,6 @@ def geomToDict(fullCaseSetupDict):
     for geometry in geometryList:
         geometry = geometry.split(',')
         
-        
         if len(geometry) != len(geomColumnNames) + 1:
             print('ERROR! Geometry input invalid! Insufficient options input for: %s' % (geometry[0]))
             exit()
@@ -994,8 +991,6 @@ def geomToDict(fullCaseSetupDict):
             if geometryName in geomDict.keys():
                 print('ERROR! Duplicate geometry name found: %s' % (geometryName))
                 exit()
-            # if [x for x in ['POR-'] if x in geometryName]:
-            #     continue
             geomDict[geometryName] = {}
             n = 0
             while n < (len(geomColumnNames)):
