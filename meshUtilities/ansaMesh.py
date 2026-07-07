@@ -591,6 +591,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
                 print('\n\t\tAdding PID refinements...')
                 n = 0
                 for geompid in geompids:
+                    if [x in geompid for x in ['POR-','REF-','REFX-','MRF-','MRFG-']]:
+                        continue
                     refPartMparfile = partMparfile.copy()
                     pidRefTable = None
                     for key in refTable.keys():
