@@ -937,8 +937,7 @@ def exportAnsaMesh():
 def importGeometry(geomDict):
     print('\n\n\t\tImporting geometry!')
     for geom in geomDict:
-        if [x for x in ['POR-'] if x in geom]:
-            continue
+        
         geomPath = os.path.join('constant','triSurface',geom)
         if not os.path.exists(geomPath):
             sys.exit('ERROR! %s not in triSurface directory!' % (geom))
@@ -985,6 +984,7 @@ def geomToDict(fullCaseSetupDict):
     for geometry in geometryList:
         geometry = geometry.split(',')
         
+        
         if len(geometry) != len(geomColumnNames) + 1:
             print('ERROR! Geometry input invalid! Insufficient options input for: %s' % (geometry[0]))
             exit()
@@ -993,6 +993,8 @@ def geomToDict(fullCaseSetupDict):
             if geometryName in geomDict.keys():
                 print('ERROR! Duplicate geometry name found: %s' % (geometryName))
                 exit()
+            if [x for x in ['POR-'] if x in geometryName]:
+                continue
             geomDict[geometryName] = {}
             n = 0
             while n < (len(geomColumnNames)):
