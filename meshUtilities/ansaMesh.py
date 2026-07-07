@@ -400,7 +400,10 @@ def createOctree2(fullCaseSetupDict,geomDict):
 
     geomPartList = []
     for geom in geomDict.keys():
-        geomPrefixList = ['REFX-','REF-','MRF-','MRFG-']
+        #POR is meshed only as a closed-surface size-field rule (see createSizeField), which makes
+        #ANSA exclude its shells from the octree input. it must therefore be kept out of the octree
+        #geometry too (like MRFG), otherwise the build fails with 'shells belong to Sizefield rules'
+        geomPrefixList = ['REFX-','REF-','MRF-','MRFG-','POR-']
         if not any(x in geom for x in geomPrefixList):
             geomPartList.append(geomDict[geom]['part_ent'])
             
@@ -503,7 +506,8 @@ def createOctree2(fullCaseSetupDict,geomDict):
     #starting general geometry settings
    
     for geom in geomDict.keys():
-        geomPrefixList = ['domain','REFX-','REF-','MRF-','MRFG-']
+        #POR excluded here too - it's a size-field-only region, not a meshed geometry part
+        geomPrefixList = ['domain','REFX-','REF-','MRF-','MRFG-','POR-']
         if not any(x in geom for x in geomPrefixList):
             partMparfile = geomMparfile.copy()
             
