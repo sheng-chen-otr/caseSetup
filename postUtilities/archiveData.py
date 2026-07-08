@@ -601,7 +601,7 @@ def clearCase(casePath):
         print('\t\tRemoving Ensight files...')
         ensightFiles = [f for f in os.listdir(casePath) if f.endswith('EnSight')]
         for ensightFile in ensightFiles:
-            os.remove(os.path.join(casePath, ensightFile))
+            shutil.rmtree(os.path.join(casePath, ensightFile))
 
 
 
