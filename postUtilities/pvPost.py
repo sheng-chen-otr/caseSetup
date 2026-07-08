@@ -562,9 +562,9 @@ def generateMeshSlices(volumeSource,renderView,sliceDict,viewsDict):
         nSliceList = [50,20,20,20,20]
 
         if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'].lower() == 'half':
-            nSliceList = [50,20,20,20,20]
+            nSliceList = [50,20,20,20,50]
         else:
-            nSliceList = [50,40,40,40,20]
+            nSliceList = [50,40,40,40,50]
     else:
         nSliceList = sliceDict['NSLICES'].split()
 
