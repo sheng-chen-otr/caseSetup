@@ -31,6 +31,9 @@ parser.add_argument('--keepEnsight', action='store_true',
 parser.add_argument('--archiveRefData', action='store_true',
                    help='Also copy the job reference data (02_reference, e.g. MSH) to the archive. Reference data is copied, never removed.')
 
+parser.add_argument('--batchMode', action='store_true',
+                   help='Run in batch mode without user prompts.')
+
 
 args = parser.parse_args()
 
@@ -44,11 +47,12 @@ def main():
         # its own without a trial range - just run the standalone reference archive
         if args.archiveRefData:
             summarizeReferenceData(job, parentPath)
-            if not confirmArchive('Proceeding will copy the reference data above to '
-                                  'the archive location. The local copy is kept.'):
-                print("Archive cancelled by user. No changes made.")
-                return
-            archiveReferenceData(job, parentPath)
+            if not args.batchMode:
+                if not confirmArchive('Proceeding will copy the reference data above to '
+                                    'the archive location. The local copy is kept.'):
+                    print("Archive cancelled by user. No changes made.")
+                    return
+                archiveReferenceData(job, parentPath)
             return
         print("Please specify a trial range using the -t or --trial option.")
         return
@@ -87,9 +91,10 @@ def main():
         summarizeCases(job, casesToProcess)
         if args.archiveRefData:
             summarizeReferenceData(job, parentPath)
-        if not confirmArchive():
-            print("Archive cancelled by user. No changes made.")
-            return
+        if not args.batchMode:
+            if not confirmArchive():
+                print("Archive cancelled by user. No changes made.")
+                return
 
     for casePath in casesToProcess:
         print('\tArchiving %s...' % (casePath))
@@ -342,7 +347,7 @@ def summarizeCases(job, casesToProcess):
     Prints a per-case status summary of everything that is about to be archived,
     so the user can review before confirming.
     '''
-    print('\n' + '=' * 77)
+    print('\n' + '=' `*` 77)
     print('  ARCHIVE SUMMARY - job %s' % (job))
     print('=' * 77)
     print(_summaryRowFmt.format('CASE', 'SIZE', 'PROCS', 'MESH',
