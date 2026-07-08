@@ -22,6 +22,8 @@ parser.add_argument('-n', '--noCompress', action='store_true',
                    help='Do not compress data when archiving, compresses by default')
 parser.add_argument('-r', '--retrieve', action='store_true',
                    help='Retrieve data from archive')
+parser.add_argument('--compress', action='store_true',
+                   help='Compress the selected cases already in the archive location. Uncompressed cases are compressed to .tar.gz; already-compressed cases are skipped.')
 parser.add_argument('--overwrite', action='store_true',
                    help='Overwrite existing data when archiving')   
 parser.add_argument('--keepEnsight', action='store_true',
@@ -62,6 +64,12 @@ def main():
     # of the -c archive move and doesn't touch anything already present unless --overwrite
     if args.retrieve:
         retrieveCases(job, trialRange)
+        return
+
+    # compress only operates on data already in the archive: uncompressed archived cases
+    # are tarred up, cases already compressed are left alone
+    if args.compress:
+        compressArchivedCases(job, trialRange)
         return
 
     if len(args.trial) == 2:
@@ -229,6 +237,41 @@ def collectArchivedCases(job, trialRange):
 
 def stripArchiveExt(name):
     return name[:-len('.tar.gz')] if name.endswith('.tar.gz') else name
+
+
+def compressArchivedCases(job, trialRange):
+    '''
+    Compresses the selected cases that already live in the archive location. An
+    uncompressed archived case (a directory) is compressed to <case>.tar.gz and the
+    directory removed; a case that is already compressed is skipped.
+    '''
+    result = collectArchivedCases(job, trialRange)
+    if not result:
+        return
+    cases, rideHeightParents = result
+    casesRoot = os.path.join(defaultArchivePath, job, 'CASES')
+
+    # figure out which cases actually need compressing before touching anything
+    toCompress = []
+    for casePath in cases:
+        archivePath = os.path.join(casesRoot, casePath)
+        if os.path.exists(archivePath + '.tar.gz'):
+            print(f"\t{casePath} already compressed. Skipping.")
+        elif os.path.isdir(archivePath):
+            toCompress.append(casePath)
+        else:
+            print(f"\t{casePath} not found in archive. Skipping.")
+
+    if len(toCompress) == 0:
+        print("No uncompressed archived cases to compress.")
+        return
+
+    for casePath in toCompress:
+        archivePath = os.path.join(casesRoot, casePath)
+        print(f"\tCompressing {casePath}...")
+        shutil.make_archive(archivePath, 'gztar', archivePath)
+        shutil.rmtree(archivePath)
+    print("Compression complete.")
 
 
 def retrieveData(job, casePath):
