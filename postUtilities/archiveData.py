@@ -347,7 +347,7 @@ def summarizeCases(job, casesToProcess):
     Prints a per-case status summary of everything that is about to be archived,
     so the user can review before confirming.
     '''
-    print('\n' + '=' `*` 77)
+    print('\n' + '=' * 77)
     print('  ARCHIVE SUMMARY - job %s' % (job))
     print('=' * 77)
     print(_summaryRowFmt.format('CASE', 'SIZE', 'PROCS', 'MESH',
