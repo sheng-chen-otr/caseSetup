@@ -25,7 +25,7 @@ parser.add_argument('-r', '--retrieve', action='store_true',
 parser.add_argument('--compress', action='store_true',
                    help='Compress the selected cases already in the archive location. Uncompressed cases are compressed to .tar.gz; already-compressed cases are skipped.')
 parser.add_argument('--overwrite', action='store_true',
-                   help='Overwrite existing data when archiving')   
+                   help='Merge into existing archived/retrieved data: refresh files in place and add missing ones, but never delete existing files. Compressed .tar.gz archives are left untouched.')   
 parser.add_argument('--keepEnsight', action='store_true',
                    help='Keep Ensight files when archiving')
 parser.add_argument('--archiveRefData', action='store_true',
@@ -140,9 +140,8 @@ def archiveTrialParent(job, trialName):
             continue
         print(f"\t\tArchiving parent data {os.path.join(trialName, item)}...")
         if os.path.isdir(src):
-            if os.path.exists(dst):
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+            #merge into any existing archived dir: refresh/add files, keep extras
+            shutil.copytree(src, dst, dirs_exist_ok=True)
             shutil.rmtree(src)
         else:
             shutil.copy2(src, dst)
@@ -193,9 +192,8 @@ def retrieveTrialParent(job, trialName):
             continue
         print(f"\t\tRetrieving parent data {dst}...")
         if os.path.isdir(src):
-            if os.path.exists(dst):
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+            #merge into any existing local dir: refresh/add files, keep extras
+            shutil.copytree(src, dst, dirs_exist_ok=True)
         else:
             shutil.copy2(src, dst)
 
@@ -287,8 +285,7 @@ def retrieveData(job, casePath):
         print(f"Case {dest} already exists locally. Skipping retrieval.")
         return False
     if os.path.exists(dest) and args.overwrite:
-        print(f"Overwriting existing local case {dest}.")
-        shutil.rmtree(dest)
+        print(f"Updating existing local case {dest} (existing files kept, missing ones added).")
 
     # ride-height cases live under a trial subdir that must exist first
     parent = os.path.dirname(dest)
@@ -297,7 +294,8 @@ def retrieveData(job, casePath):
 
     if os.path.isdir(source):
         print(f"\t\tCopying uncompressed case from archive...")
-        shutil.copytree(source, dest)
+        #merge into any existing local case: refresh/add files, keep extras
+        shutil.copytree(source, dest, dirs_exist_ok=True)
     elif os.path.exists(source + '.tar.gz'):
         print(f"\t\tUncompressing case from archive...")
         os.makedirs(dest, exist_ok=True)
@@ -414,10 +412,10 @@ def archiveReferenceData(job, parentPath):
         print('\t\tReference data already exists in archive. Skipping copy.')
         return
     if os.path.exists(dest) and args.overwrite:
-        print('\t\tOverwriting existing reference data in archive.')
-        shutil.rmtree(dest)
+        print('\t\tUpdating existing reference data in archive (existing files kept, missing ones added).')
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    shutil.copytree(refPath, dest)
+    #merge into any existing archived reference data: refresh/add files, keep extras
+    shutil.copytree(refPath, dest, dirs_exist_ok=True)
     print('\t\tCopied %s to archive.' % (referenceDirName))
 
 
@@ -530,28 +528,29 @@ def copyData(job,jobPath,source,dest):
             print(f"Creating CASES directory for job {job}.")
             os.makedirs(casesPath)
     
-    # check if the case already exists in the archive (compressed or uncompressed)
-    archiveExists = os.path.exists(dest) or os.path.exists(dest + '.tar.gz')
-
-    if archiveExists and not args.overwrite:
-        print(f"Data for {dest} already exists in archive. Skipping copy.")
-        return False
-
-    if archiveExists and args.overwrite:
-        print(f"Overwriting existing data in archive for {dest}.")
-        # removes the duplicates in archive
-        if os.path.exists(dest):
-            shutil.rmtree(dest)
-        if os.path.exists(dest + '.tar.gz'):
-            os.remove(dest + '.tar.gz')
-
     # ensure the destination parent exists (ride-height cases live under trial subdirs)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
 
-    # copy without compression if noCompress flag is given, otherwise compress the case
     if args.noCompress:
+        # uncompressed archive: the case lives as a directory
+        if os.path.exists(dest):
+            if not args.overwrite:
+                print(f"Data for {dest} already exists in archive. Skipping copy.")
+                return False
+            #overwrite merges: refresh files in place, add missing ones, keep extras
+            print(f"Updating existing archive data for {dest} (existing files kept, missing ones added).")
+        #a compressed archive of the same case would be stale; leave it, but warn
+        if os.path.exists(dest + '.tar.gz'):
+            print(f"Note: a compressed archive {dest}.tar.gz also exists and is left untouched.")
         shutil.copytree(source, dest, dirs_exist_ok=True)
     else:
+        # compressed archive: a tarball can't be merged, so an existing one is left as-is
+        if os.path.exists(dest + '.tar.gz'):
+            print(f"Compressed archive for {dest} already exists. Skipping (cannot merge into a tarball).")
+            return False
+        if os.path.exists(dest):
+            print(f"Uncompressed archive data for {dest} already exists. Skipping to avoid mixing formats.")
+            return False
         shutil.make_archive(dest, 'gztar', source)
     return True
 
