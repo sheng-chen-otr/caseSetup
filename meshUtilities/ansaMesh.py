@@ -28,7 +28,7 @@ jobPath = os.path.abspath(os.path.join(path,os.pardir)) #path of the job i.e. 10
 rootDir = Path(__file__).parents[1]
 templateBaseLoc = "%s/setupTemplates" % (rootDir) 
 
-addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG']
+addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG','GRND']
 
 
 
@@ -403,7 +403,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
         #POR is meshed only as a closed-surface size-field rule (see createSizeField), which makes
         #ANSA exclude its shells from the octree input. it must therefore be kept out of the octree
         #geometry too (like MRFG), otherwise the build fails with 'shells belong to Sizefield rules'
-        geomPrefixList = ['REFX-','REF-','MRF-','MRFG-','POR-']
+        geomPrefixList = ['REFX-','REF-','MRF-','MRFG-','POR-','GRND-']
         if not any(x in geom for x in geomPrefixList):
             geomPartList.append(geomDict[geom]['part_ent'])
             
@@ -507,7 +507,7 @@ def createOctree2(fullCaseSetupDict,geomDict):
    
     for geom in geomDict.keys():
         #POR excluded here too - it's a size-field-only region, not a meshed geometry part
-        geomPrefixList = ['domain','REFX-','REF-','MRF-','MRFG-','POR-']
+        geomPrefixList = ['domain','REFX-','REF-','MRF-','MRFG-','POR-','GRND-']
         if not any(x in geom for x in geomPrefixList):
             partMparfile = geomMparfile.copy()
             
@@ -602,7 +602,6 @@ def createOctree2(fullCaseSetupDict,geomDict):
                     for key in refTable.keys():
                         #going through each key word, if key word is in pid name, that ref table is assigned
                         if key in geompid._name:
-                            #print(key)
                             pidRefTable = refTable[key]
                             #will keep looping until the last one is used (if exists) avoids duplicates
                     if pidRefTable != None:
@@ -746,6 +745,9 @@ def createSizeField(fullCaseSetupDict,geomDict):
                                                               max_vol_len = size,
                                                               offset = dist)
         for part in geomDict.keys():
+            #ground zones aren't imported/meshed, so they have no part entity
+            if part.startswith('GRND'):
+                continue
             print('\t\t\t\t%s' % (part))
             part_ent = geomDict[part]['part_ent']
             pids = getPIDsFromPart(part_ent)
@@ -943,6 +945,9 @@ def exportAnsaMesh():
 def importGeometry(geomDict):
     print('\n\n\t\tImporting geometry!')
     for geom in geomDict:
+        #ground zones are topoSet selection volumes only, never meshed
+        if geom.startswith('GRND'):
+            continue
         geomPath = os.path.join('constant','triSurface',geom)
         if not os.path.exists(geomPath):
             sys.exit('ERROR! %s not in triSurface directory!' % (geom))

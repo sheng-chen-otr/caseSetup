@@ -1037,7 +1037,7 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
         pushrodInnerCurrent = _rotate_point_about_pivot(pushrodInnerStatic, rockerPivot, rockerRvec) + rockerTrans
 
         # pushrod outer end is bolted to the UCA, so it follows the UCA hinge motion, not
-        # the upright. using the upright pose would inject steer and a spurious fore/aft shift
+        # the upright. using the upright pose would add steer and a spurious fore/aft shift
         if 'UCA' in compTransforms:
             ucaPivot = np.array(compTransforms['UCA']['pivot'], dtype=np.float64)
             ucaRvec = np.array(compTransforms['UCA']['rotation_rvec'], dtype=np.float64)
@@ -1142,6 +1142,10 @@ def _compute_component_transforms(kinSetup, corner, row, rideHeights):
 def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
     baseCaseDir = os.getcwd()
     baseCaseName = os.path.basename(baseCaseDir)
+    #base domain tilt + ground height, used to build each point's ground-zone transform
+    baseDomainPitch = float(fullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'][0])
+    baseDomainRoll = float(fullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'][0])
+    baseREFCOR = fullCaseSetupDict['BC_SETUP']['REFCOR']
     if 'ansa' in fullCaseSetupDict['GLOBAL_REFINEMENT']['TEMPLATE_TYPE'][0].lower():
         USE_ANSA = True
     else:
@@ -1262,6 +1266,19 @@ def transformGeom(fullCaseSetupDict,rideHeights,geomDict):
                 continue
             geomFilePath = 'constant/triSurface/%s' % (geom)
             geomChildPath = '%s/constant/triSurface/%s' % (childName,geom)
+            if geom.startswith('GRND'):
+                #ground zone follows the domain: heave up to the new REFCOR height, then tilt about
+                #it (roll x then pitch y), matching the blockMesh transform for this point
+                childPitch = math.radians(baseDomainPitch + float(row['tunnel_pitch']))
+                childRoll = math.radians(baseDomainRoll + float(row['tunnel_roll']))
+                childPivot = [float(baseREFCOR[0]), float(baseREFCOR[1]), float(baseREFCOR[2]) + float(row['tunnel_heave'])]
+                tmp = geomChildPath + '.grndtmp'
+                print('\t\t\tTransforming ground zone: %s' % (geom))
+                transformGeometryPreservePID(geomFilePath,outputFile=geomChildPath,translation=[0,0,float(row['tunnel_heave'])])
+                transformGeometryPreservePID(geomChildPath,outputFile=tmp,rotation_rvec=[childRoll,0,0],pivot=childPivot)
+                transformGeometryPreservePID(tmp,outputFile=geomChildPath,rotation_rvec=[0,childPitch,0],pivot=childPivot)
+                os.remove(tmp)
+                continue
             print('\t\t\tCopying non-moving geometry: %s' % (geom))
             copyWithMkdir(geomFilePath, geomChildPath)
 
@@ -1287,6 +1304,38 @@ def transformBlockMesh(fullCaseSetupDict):
 
     
    
+def transformGroundGeom(geomDict,fullCaseSetupDict):
+    #tilt ground-zone surfaces to follow the domain (roll about x then pitch about y, about
+    #REFCOR), same convention as transformBlockMesh. no translation, ground moves with the mesh
+    grndGeoms = [g for g in geomDict.keys() if g.startswith('GRND')]
+    if len(grndGeoms) == 0:
+        return
+    domain_roll = math.radians(float(fullCaseSetupDict['BC_SETUP']['DOMAIN_ROLL'][0]))
+    domain_pitch = math.radians(float(fullCaseSetupDict['BC_SETUP']['DOMAIN_PITCH'][0]))
+    REFCOR = fullCaseSetupDict['BC_SETUP']['REFCOR']
+    pivot = [float(REFCOR[0]), float(REFCOR[1]), float(REFCOR[2])]
+    print('\t\t\tTilting ground zone surfaces to match domain (roll %s, pitch %s)...' %
+          (math.degrees(domain_roll), math.degrees(domain_pitch)))
+    for geom in grndGeoms:
+        localPath = os.path.join('constant','triSurface',geom)
+        if not os.path.exists(localPath):
+            print('\t\t\t\tWARNING! %s not found, skipping tilt.' % (geom))
+            continue
+        #read the untilted source (master via symlink, or the local copy in a child case)
+        srcPath = os.path.realpath(localPath)
+        d = os.path.dirname(localPath)
+        tmp1 = os.path.join(d,'_grndtilt1_'+geom)
+        tmp2 = os.path.join(d,'_grndtilt2_'+geom)
+        #roll about x then pitch about y, both about REFCOR (matches transformBlockmeshPoints)
+        transformGeometryPreservePID(srcPath,outputFile=tmp1,rotation_rvec=[domain_roll,0,0],pivot=pivot)
+        transformGeometryPreservePID(tmp1,outputFile=tmp2,rotation_rvec=[0,domain_pitch,0],pivot=pivot)
+        if os.path.islink(localPath):
+            os.remove(localPath)
+        os.replace(tmp2,localPath)
+        if os.path.exists(tmp1):
+            os.remove(tmp1)
+        print('\t\t\t\t%s tilted about REFCOR.' % (geom))
+
 
 def transformParts(geom,geomFilePath, transformAmount,childCaseName, rotation_rvec=None, pivot=None):
     if isinstance(transformAmount, (list, tuple, np.ndarray)):

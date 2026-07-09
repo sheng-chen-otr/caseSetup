@@ -70,7 +70,7 @@ PR_MODULES = args.modules
 updateCaseSetupFlag = False
 
 #available addon keywords
-addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG']
+addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG','GRND']
 
 
 #getting default values from template
@@ -134,6 +134,7 @@ def main():
         writeOptions(templateLoc,geomDict,fullCaseSetupDict)
         writeMRFG(templateLoc,geomDict,fullCaseSetupDict)
         createTopoSet(templateLoc,geomDict,fullCaseSetupDict)
+        createGroundPatch(templateLoc,geomDict,fullCaseSetupDict)
         writeSRFProperties(templateLoc,fullCaseSetupDict)
         writeSurfaces(templateLoc, geomDict,fullCaseSetupDict)
         writeCorneringRelativeFields(fullCaseSetupDict)
@@ -154,7 +155,8 @@ def main():
             else:
                 makeScripts(templateLoc,fullCaseSetupDict)
                 copyScripts(templateLoc, fullCaseSetupDict,case)
-        
+            #tilt the base ground zones (child points are tilted+heaved in transformGeom)
+            transformGroundGeom(geomDict,fullCaseSetupDict)
             
         
         #copy over the pvPostSetup
@@ -261,7 +263,7 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                     'REF':"",
                     'REFX':""
                     }
-    noSnappyGeom = ['SMP']
+    noSnappyGeom = ['SMP','GRND']
     
     for geom in geomDict.keys():
         if geom.startswith(tuple(noSnappyGeom)):
@@ -969,6 +971,7 @@ def getGeometry(fullCaseSetupDict,writeCaseSetupDict):
     writeCaseSetupDict = checkMRF(geomDict,writeCaseSetupDict)
     writeCaseSetupDict = checkRotation(geomDict,writeCaseSetupDict)
     writeCaseSetupDict = checkInternalDomain(geomDict,writeCaseSetupDict)
+    writeCaseSetupDict = checkGround(geomDict,writeCaseSetupDict)
     writeCaseSetupDict,fullCaseSetupDict = checkRefinements(geomDict,writeCaseSetupDict,fullCaseSetupDict)
 
     return writeCaseSetupDict,geomDict,fullCaseSetupDict
@@ -1146,9 +1149,47 @@ def checkInternalDomain(geomDict,writeCaseSetupDict):
             
         
     return writeCaseSetupDict
+def checkGround(geomDict,writeCaseSetupDict):
+    global updateCaseSetupFlag
+    #getting ground zone default module
+    grndConfigRead = configparser.ConfigParser()
+    grndConfigRead.optionxform = str
+    try:
+        grndConfigRead.read_file(open("%s/defaultBCTemplates/defaultGrnd" % (templateLoc)))
+    except:
+        print('ERROR! defaultGrnd template is invalid!')
+        exit()
+
+    for geom in geomDict.keys():
+        if geom.startswith('GRND'):
+            grndName = stripExt(geom)
+            if grndName in writeCaseSetupDict.keys():
+                tempDict = {}
+                for defaultGrndVar in grndConfigRead.items('GRND_SETUP'):
+                    defaultVar = defaultGrndVar[0]
+                    defaultVal = defaultGrndVar[1]
+                    try:
+                        tempDict[defaultVar] = writeCaseSetupDict[grndName][defaultVar]
+                    except:
+                        updateCaseSetupFlag = True
+                        tempDict[defaultVar] = [str(defaultVal)]
+
+                writeCaseSetupDict[grndName] = tempDict
+
+            else:
+                try:
+                    writeCaseSetupDict[grndName] = {}
+                    for var in list(grndConfigRead.items('GRND_SETUP')):
+                        var = list(var)
+                        writeCaseSetupDict[grndName][var[0]] = [var[1]]
+                    updateCaseSetupFlag = True
+                except:
+                    print('ERROR! defaultGrnd section header is not [GRND_SETUP]!')
+                    exit()
+
+    return writeCaseSetupDict
 def checkRotation(geomDict,writeCaseSetupDict):
     global updateCaseSetupFlag
-
     #getting wheel default module
     rotationConfigRead = configparser.ConfigParser()
     rotationConfigRead.optionxform = str

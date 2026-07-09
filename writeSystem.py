@@ -36,7 +36,7 @@ dictDict = {'solverType':{'steady':steadyTurb,'transient':transientTurb},
 
 foList = ['averageFieldsDict','cptMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
 coeffList = ['forceCoeffs','forceCoeffsExport','forceCoeffSetup']
-prefixToIgnore = ['IDOM','SMP','REFX','REF','MRFG','POR'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
+prefixToIgnore = ['IDOM','SMP','REFX','REF','MRFG','POR','GRND'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
 
 forceVecDict = {'drag':{'default':'1 0 0'},
                 'lift':{'default':'0 0 1'},
@@ -621,6 +621,42 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                         'low':'lowReynolds',
                         'ally':'allReynolds'
                         }
+    #ground zones split the z-min ground into belt/plate patches (groundZone-NAME). map the
+    #user's GRND_TYPE to a wall/slip BC, matching wind-tunnel belt/plate conditions
+    groundZoneDict = {'moving':'NAME{category wall; type noSlip; patches ("NAME.*"); options {wallFunction WALL_MODEL; motion moving;} values {INITIAL_CONDITIONS}}',
+                      'noslip':'NAME{category wall; type noSlip; patches ("NAME.*"); options {wallFunction WALL_MODEL; motion stationary;} values {$:initialConditions;}}',
+                      'stationary':'NAME{category wall; type noSlip; patches ("NAME.*"); options {wallFunction WALL_MODEL; motion stationary;} values {$:initialConditions;}}',
+                      'slip':'NAME{category wall; type slip; patches ("NAME.*"); values {$:initialConditions;}}'
+                      }
+    for section in fullCaseSetupDict.keys():
+        if section.split('-')[0] != 'GRND':
+            continue
+        grndType = fullCaseSetupDict[section]['GRND_TYPE'][0].lower()
+        if grndType not in groundZoneDict.keys():
+            print('ERROR! Invalid GRND_TYPE in %s' % (section))
+            sys.exit('Valid ground types are: %s' % (list(groundZoneDict.keys())))
+        try:
+            grndWallModel = wallFunctionDict[fullCaseSetupDict[section]['GRND_WALL_MODEL'][0].lower()]
+        except:
+            print('ERROR! Wall model in %s not valid, available wall models:' % (section))
+            for model in wallFunctionDict.keys():
+                print(model)
+            sys.exit()
+        print('\t\t\tgroundZone-%s (%s)' % (section,grndType))
+        #moving belt velocity: default matches the freestream, else the user vector
+        if grndType == 'moving':
+            if fullCaseSetupDict[section]['GRND_VEL'][0].lower() == 'default':
+                initialConditions = '$:initialConditions;'
+            else:
+                grndVel = fullCaseSetupDict[section]['GRND_VEL']
+                initialConditions = 'U uniform (%1.4f %1.4f %1.4f); p uniform 0; k uniform 0.24; omega uniform 1.78; nut uniform 0; nuTilda uniform 0.05;' % (float(grndVel[0]),float(grndVel[1]),float(grndVel[2]))
+        else:
+            initialConditions = '$:initialConditions;'
+        patchString = groundZoneDict[grndType].replace('WALL_MODEL',grndWallModel)\
+                                              .replace('INITIAL_CONDITIONS',initialConditions)\
+                                              .replace('NAME','groundZone-%s' % (section))
+        caseSetupStringArray.append(patchString)
+
     for geom in geomDict.keys():
         print('\t\t\t%s' % (geom.split('.')[0]))
         geomPrefix = geom.split('-')[0]
@@ -846,7 +882,95 @@ actions
         f.write(topoSetDict)
     return True
 
-        
+
+def hasGroundZones(fullCaseSetupDict):
+    #True when any ground-zone surface is defined. ground zones split the z-min patch into
+    #belt/plate regions and work for both the snappy and ansaMesh flows
+    for section in fullCaseSetupDict.keys():
+        if section.split('-')[0] == 'GRND':
+            return True
+    return False
+
+
+def createGroundPatch(templateLoc,geomDict,fullCaseSetupDict):
+    #carve the z-min ground into user-defined belt/plate regions. for each closed GRND surface,
+    #grab the z-min faces sitting under it and move them into their own patch (groundZone-NAME).
+    #createPatchDict runs after decomposePar so the solver sees the split patches. works for both
+    #the snappy and ansaMesh flows
+    if not hasGroundZones(fullCaseSetupDict):
+        return False
+
+    #main fluid domain point, outside every ground box, seeds surfaceToCell's inside/outside test
+    locInMesh = fullCaseSetupDict['GLOBAL_REFINEMENT']['LOC_IN_MESH']
+    outsidePoint = '(%s %s %s)' % (locInMesh[0], locInMesh[1], locInMesh[2])
+    cellSetTemplate = '    {name CELL_SET; type cellSet; action new; source surfaceToCell; file "SURF_FILE"; outsidePoints (OUTSIDE_POINT); includeCut false; includeInside true; includeOutside false; nearDistance -1; curvature -100;}\n'
+    faceNewTemplate = '    {name FACE_SET; type faceSet; action new; source cellToFace; set CELL_SET; option all;}\n'
+    faceSubsetTemplate = '    {name FACE_SET; type faceSet; action subset; source patchToFace; patch ".*z-min.*";}\n'
+    patchTemplate = '    {name FACE_SET; patchInfo {type wall;} constructFrom set; set FACE_SET;}\n'
+
+    actions = []
+    patches = []
+    for geom in geomDict:
+        if not geom.startswith('GRND'):
+            continue
+        geomName = geom.split('.')[0]
+        cellSet = '%s_cells' % (geomName)
+        faceSet = 'groundZone-%s' % (geomName)
+        surfFile = 'constant/triSurface/%s' % (geom.replace('.gz',''))
+        print('\t\tAdding ground zone: %s (from %s)' % (faceSet,surfFile))
+        actions.append(cellSetTemplate.replace('CELL_SET',cellSet).replace('SURF_FILE',surfFile).replace('OUTSIDE_POINT',outsidePoint))
+        actions.append(faceNewTemplate.replace('FACE_SET',faceSet).replace('CELL_SET',cellSet))
+        actions.append(faceSubsetTemplate.replace('FACE_SET',faceSet))
+        patches.append(patchTemplate.replace('FACE_SET',faceSet))
+
+    if not actions:
+        return False
+
+    header = '''/*--------------------------------*- C++ -*----------------------------------*\\
+| =========                 |                                                 |
+| \\\\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\\\    /   O peration     | Version:  v2206                                 |
+|   \\\\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\\\/     M anipulation  |                                                 |
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      OBJECT;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+'''
+
+    print('\tWriting out system/topoSetDictGround for ground zones...')
+    topoSetDictGround = header.replace('OBJECT','topoSetDict') + '''
+actions
+(
+%s);
+
+// ************************************************************************* //
+''' % (''.join(actions))
+
+    print('\tWriting out system/createPatchDict for ground zones...')
+    createPatchDict = header.replace('OBJECT','createPatchDict') + '''
+pointSync false;
+
+patches
+(
+%s);
+
+// ************************************************************************* //
+''' % (''.join(patches))
+
+    os.makedirs('system', exist_ok=True)
+    with open('system/topoSetDictGround', 'w') as f:
+        f.write(topoSetDictGround)
+    with open('system/createPatchDict', 'w') as f:
+        f.write(createPatchDict)
+    return True
+
+
 def writeBlockMesh(templateLoc, fullCaseSetupDict):
     print('\n\tWriting out blockMeshDict...')
     simSym = fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_SYM'][0]

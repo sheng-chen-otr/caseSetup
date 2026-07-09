@@ -55,6 +55,8 @@
 
           "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions; MPI='/usr/bin/mpirun'; FOAM_EXEC='~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec'; caseTemplates='~/openFoam/scripts/caseSetup/caseSetup-dev/zeroTemplates'; if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; fi;",
 
+          "groundPatch":"if [ $? != 0 ]; then exit 1; fi; if [ -f system/topoSetDictGround ]; then echo 'building ground zones...'; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec topoSet -parallel -dict system/topoSetDictGround >> log.topoSetGround; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createPatch -parallel -overwrite -dict system/createPatchDict >> log.createPatch; fi;",
+
           "createZeroDir":"if [ $? != 0 ]; then exit 1; fi; echo 'creating zero directories...'; if [[ -f 'constant/turbulencePropertiesSolve' ]]; then cp constant/turbulencePropertiesSolve constant/turbulenceProperties; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec createZeroDirectory -parallel -templateDir \"$caseTemplates\" >> log.createZeroDirectory; fi;",
 
           "topoSet":"if [ $? != 0 ]; then exit 1; fi; if [ -f system/topoSetDict ]; then echo 'running topoSet...'; $MPI ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec topoSet -parallel >> log.topoSet; fi;",

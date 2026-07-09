@@ -6,3 +6,4 @@ cp -r setupTemplates dist/.
 cp -r zeroTemplates dist/.
 cp -r meshUtilities dist/.
 cp -r documentation dist/.
+cp -r rideHeightUtilities dist/.

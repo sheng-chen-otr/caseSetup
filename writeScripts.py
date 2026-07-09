@@ -94,6 +94,11 @@ def makeScripts(templateLoc,fullCaseSetupDict):
                 #(system/topoSetDict, written by createTopoSet) before the solver runs.
                 if hasTopoSetRegions(fullCaseSetupDict):
                     solveScriptArray.append(clusterDict['solve']['topoSet'])
+            elif 'groundPatch' in line:
+                #split the z-min ground into user belt/plate patches (topoSetDictGround +
+                #createPatchDict) after decomposePar, before createZeroDirectory needs them
+                if hasGroundZones(fullCaseSetupDict):
+                    solveScriptArray.append(clusterDict['solve']['groundPatch'])
             elif 'solve' in line:
                 if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_TYPE'][0].lower() == 'steady':
                     solveScriptArray.append(clusterDict['solve']['solve']['steady'])

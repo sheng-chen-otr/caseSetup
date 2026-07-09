@@ -28,6 +28,8 @@
  "solve":{
           "preamble":". $WM_PROJECT_DIR/bin/tools/RunFunctions;CORES=$(grep -i 'numberOfSubdomains' system/decomposeParDict | grep -v '//' | tr -cd '0-9'); caseTemplates='/path/to/zeroTemplates'; if [ $? != 0 ]; then exit 1; fi; if [[ -f 'system/controlDictPotential' ]]; then cp system/controlDictPotential system/controlDict; cp system/fvSolutionPotential system/fvSolution; fi;",
 
+          "groundPatch":"if [ $? != 0 ]; then exit 1; fi; if [ -f system/topoSetDictGround ]; then echo 'building ground zones...';mpirun -np $CORES topoSet -parallel -dict system/topoSetDictGround >> log.topoSetGround;mpirun -np $CORES createPatch -parallel -overwrite -dict system/createPatchDict >> log.createPatch; fi;",
+
           "createZeroDir":"if [ $? != 0 ]; then exit 1; fi; echo 'creating zero directories...'; if [[ -f 'constant/turbulencePropertiesSolve' ]]; then cp constant/turbulencePropertiesSolve constant/turbulenceProperties;mpirun -np $CORES createZeroDirectory -parallel -templateDir \"$caseTemplates\" >> log.createZeroDirectory; fi;",
 
           "topoSet":"if [ $? != 0 ]; then exit 1; fi; if [ -f system/topoSetDict ]; then echo 'running topoSet...'; topoSet -parallel >> log.topoSet; fi;",
