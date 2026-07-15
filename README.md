@@ -15,8 +15,8 @@ two bigger features beyond the basic straight-line case:
 
 | Aspect | Support |
 |--------|---------|
-| **OpenFOAM Versions** | v2012 - v2212 (newer versions untested, should work though) |
-| **Operating Systems** | Ubuntu 22.XX (Linux preferred); Windows/macOS untested |
+| **OpenFOAM Versions** | v2012 - v2606 (newer versions untested, should work though) |
+| **Operating Systems** | Ubuntu 22.XX (preferred); Windows/macOS untested |
 | **Python** | 3.8+ |
 
 ---
