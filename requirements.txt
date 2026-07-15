@@ -1,0 +1,13 @@
+numpy
+pandas
+matplotlib
+scipy
+Pillow
+pyvista
+imageio
+imageio-ffmpeg
+python-pptx
+openpyxl
+gspread
+google-auth
+
