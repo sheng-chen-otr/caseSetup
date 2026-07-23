@@ -17,6 +17,7 @@ from datetime import datetime
 from copy import deepcopy
 
 import geometryIO
+import configValidation
 
 updateCaseSetupFlag = False
 
@@ -193,6 +194,10 @@ def _load_suspension_hardpoints_cfg(hardpointPath):
             v = str(val).strip()
             if v != '':
                 cornerPidKeywords[c].append(v)
+
+    unitsOk, unitsMessage = configValidation.checkHardpointUnitConsistency(corners)
+    if not unitsOk:
+        raise ValueError(unitsMessage)
 
     return corners, cornerPidKeywords
 
