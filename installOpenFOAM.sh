@@ -232,20 +232,23 @@ EOF
     local logFile="$foamDir/log.Allwmake.${prec}Int${LABEL_SIZE}"
     log "Building OpenFOAM ($prec) - this can take a long time. Log: $logFile"
     if [[ "$DRY_RUN" -eq 0 ]]; then
-        (
-            set -e
-            # OpenFOAM's etc/bashrc references many vars before defining them and
-            # is not `set -u` safe, so disable nounset only while sourcing it.
-            set +u
-            # shellcheck disable=SC1091
-            source "$foamDir/etc/bashrc"
-            set -u
-            log "  Platform: \${WM_OPTIONS:-unknown}"
-            if [[ -x "$WM_THIRD_PARTY_DIR/Allwmake" ]]; then
-                ( cd "$WM_THIRD_PARTY_DIR" && ./Allwmake -j "$JOBS" -q ) 2>&1 | tee "$foamDir/log.ThirdParty.${prec}Int${LABEL_SIZE}"
-            fi
-            ( cd "$WM_PROJECT_DIR" && ./Allwmake -j "$JOBS" -q -s ) 2>&1 | tee "$logFile"
-        )
+        # OpenFOAM's etc/bashrc (via etc/config.sh/setup) defines and unsets helper
+        # functions; sourcing it from inside a shell function corrupts bash's
+        # function-context stack ("pop_var_context: head of shell_variables not a
+        # function context"). It is also not `set -u` safe. So run the source and
+        # build at the TOP LEVEL of a fresh, non-strict bash process.
+        FOAM_DIR="$foamDir" TP_LOG="$foamDir/log.ThirdParty.${prec}Int${LABEL_SIZE}" \
+        BUILD_LOG="$logFile" BUILD_JOBS="$JOBS" \
+        bash <<'FOAMBUILD'
+set -e
+# shellcheck disable=SC1091
+source "$FOAM_DIR/etc/bashrc"
+echo "  Platform: ${WM_OPTIONS:-unknown}"
+if [ -x "$WM_THIRD_PARTY_DIR/Allwmake" ]; then
+    ( cd "$WM_THIRD_PARTY_DIR" && ./Allwmake -j "$BUILD_JOBS" -q ) 2>&1 | tee "$TP_LOG"
+fi
+( cd "$WM_PROJECT_DIR" && ./Allwmake -j "$BUILD_JOBS" -q -s ) 2>&1 | tee "$BUILD_LOG"
+FOAMBUILD
     fi
 }
 
