@@ -232,23 +232,33 @@ EOF
     local logFile="$foamDir/log.Allwmake.${prec}Int${LABEL_SIZE}"
     log "Building OpenFOAM ($prec) - this can take a long time. Log: $logFile"
     if [[ "$DRY_RUN" -eq 0 ]]; then
-        # OpenFOAM's etc/bashrc (via etc/config.sh/setup) defines and unsets helper
-        # functions; sourcing it from inside a shell function corrupts bash's
-        # function-context stack ("pop_var_context: head of shell_variables not a
-        # function context"). It is also not `set -u` safe. So run the source and
-        # build at the TOP LEVEL of a fresh, non-strict bash process.
-        FOAM_DIR="$foamDir" TP_LOG="$foamDir/log.ThirdParty.${prec}Int${LABEL_SIZE}" \
-        BUILD_LOG="$logFile" BUILD_JOBS="$JOBS" \
-        bash <<'FOAMBUILD'
-set -e
+        # OpenFOAM's etc/bashrc (via etc/config.sh/setup) defines helper functions
+        # and toggles bash's variable-context stack. Two things break it here:
+        #   1. sourcing it from inside a shell function or with `set -u` active
+        #      -> "WM_PROJECT_DIR: unbound variable".
+        #   2. having `set -e` active WHILE it is sourced -> bash unwinds a
+        #      function mid-run and the context stack desyncs ->
+        #      "pop_var_context: head of shell_variables not a function context".
+        # So write a standalone build script and run it in a fresh bash: source
+        # the bashrc with strict mode OFF, enable `set -e` only for the build.
+        local buildScript; buildScript="$(mktemp "${TMPDIR:-/tmp}/foamBuild.XXXXXX.sh")"
+        cat > "$buildScript" <<'FOAMBUILD'
+#!/usr/bin/env bash
+# Sourced OpenFOAM env: strict mode must be OFF here (see installOpenFOAM.sh).
 # shellcheck disable=SC1091
 source "$FOAM_DIR/etc/bashrc"
 echo "  Platform: ${WM_OPTIONS:-unknown}"
+set -e
 if [ -x "$WM_THIRD_PARTY_DIR/Allwmake" ]; then
     ( cd "$WM_THIRD_PARTY_DIR" && ./Allwmake -j "$BUILD_JOBS" -q ) 2>&1 | tee "$TP_LOG"
 fi
 ( cd "$WM_PROJECT_DIR" && ./Allwmake -j "$BUILD_JOBS" -q -s ) 2>&1 | tee "$BUILD_LOG"
 FOAMBUILD
+        FOAM_DIR="$foamDir" TP_LOG="$foamDir/log.ThirdParty.${prec}Int${LABEL_SIZE}" \
+        BUILD_LOG="$logFile" BUILD_JOBS="$JOBS" \
+        bash "$buildScript" && local buildRc=0 || local buildRc=$?
+        rm -f "$buildScript"
+        [[ "$buildRc" -eq 0 ]] || die "OpenFOAM build ($prec) failed. See $logFile"
     fi
 }
 
