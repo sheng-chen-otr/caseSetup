@@ -36,7 +36,8 @@ PARAVIEW_FLAVOR="osmesa-MPI-Linux-Python3.9-x86_64"
 OF_SOURCE_BASE="https://dl.openfoam.com/source"
 PV_FILES_BASE="https://www.paraview.org/files"
 
-CLUSTERDICT_PRECISION="DP"           # which build the clusterDicts source (DP is standard)
+MESH_PRECISION="DP"                  # meshing is ALWAYS double precision (snappyHexMesh robustness)
+CLUSTERDICT_PRECISION="DP"           # solve/export precision the clusterDicts source (DP or SP)
 INJECT_FOAM_SOURCE=1                 # prepend a `source .../etc/bashrc` into clusterDict commands
 
 INSTALL_DEPS=0
@@ -78,7 +79,9 @@ Options:
   --paraview-series vX.Y     ParaView series dir on paraview.org. (default: $PARAVIEW_SERIES)
   --paraview-flavor STR      ParaView binary flavor. (default: $PARAVIEW_FLAVOR)
   --clusterdict-precision DP|SP
-                             Which OpenFOAM build the clusterDicts source. (default: DP)
+                             SOLVE/EXPORT precision the clusterDicts source. (default: DP)
+                             Meshing is always double precision regardless of this value;
+                             a DP build is therefore always produced.
   --no-foam-source           Do not inject a 'source .../etc/bashrc' into clusterDicts.
   --install-deps             apt-get install build prerequisites (Ubuntu/Debian, needs sudo).
   --skip-openfoam            Skip the OpenFOAM build stage.
@@ -120,6 +123,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 PREFIX="${PREFIX%/}"
+
+# Normalise precisions to upper-case.
+for i in "${!PRECISIONS[@]}"; do
+    PRECISIONS[$i]="$(printf '%s' "${PRECISIONS[$i]}" | tr '[:lower:]' '[:upper:]')"
+done
+MESH_PRECISION="$(printf '%s' "$MESH_PRECISION" | tr '[:lower:]' '[:upper:]')"
+CLUSTERDICT_PRECISION="$(printf '%s' "$CLUSTERDICT_PRECISION" | tr '[:lower:]' '[:upper:]')"
+
+# Meshing always runs in double precision, so a DP build must always exist.
+if ! printf '%s\n' "${PRECISIONS[@]}" | grep -qx "$MESH_PRECISION"; then
+    PRECISIONS=("$MESH_PRECISION" "${PRECISIONS[@]}")
+fi
+# The requested solve/export precision must also be built.
+if ! printf '%s\n' "${PRECISIONS[@]}" | grep -qx "$CLUSTERDICT_PRECISION"; then
+    PRECISIONS+=("$CLUSTERDICT_PRECISION")
+fi
+
 OF_ROOT="$PREFIX/OpenFOAM"
 PV_ROOT="$PREFIX/ParaView"
 PV_DIRNAME="ParaView-${PARAVIEW_VERSION}-${PARAVIEW_FLAVOR}"
@@ -312,6 +332,17 @@ rewrite_clusterdicts() {
     while IFS= read -r d; do dicts+=("$d"); done < <(find "$REPO_DIR/setupTemplates" -path '*/defaultCluster/*/clusterDict' -type f | sort)
     [[ "${#dicts[@]}" -gt 0 ]] || { warn "No clusterDict files found under $REPO_DIR/setupTemplates."; return 0; }
 
+    # Determine the OpenFOAM version the OTR-family templates should point at:
+    # the first requested version, else the first already-installed build.
+    local first_version=""
+    if [[ "${#VERSIONS[@]}" -gt 0 ]]; then
+        first_version="$(normalise_version "${VERSIONS[0]}")"
+    else
+        local b
+        b="$(find "$OF_ROOT" -maxdepth 1 -type d -name 'OpenFOAM-v*' 2>/dev/null | sort | head -n1 || true)"
+        [[ -n "$b" ]] && first_version="${b##*/OpenFOAM-}"
+    fi
+
     log "Rewriting ${#dicts[@]} clusterDict file(s):"
     printf '  %s\n' "${dicts[@]}"
 
@@ -320,13 +351,16 @@ rewrite_clusterdicts() {
         log "  zeroTemplates -> $REPO_DIR/zeroTemplates"
         log "  postUtilities -> $REPO_DIR/postUtilities"
         log "  pvbatch       -> $pvbatch"
-        [[ "$INJECT_FOAM_SOURCE" -eq 1 ]] && log "  foam source    -> per-template etc/bashrc ($CLUSTERDICT_PRECISION build)"
+        [[ "$INJECT_FOAM_SOURCE" -eq 1 ]] && log "  foam source (simple templates) -> per-template etc/bashrc (mesh=$MESH_PRECISION, solve=$CLUSTERDICT_PRECISION)"
+        log "  OTR templates -> OpenFOAM root $OF_ROOT/OpenFOAM-\$VERSION, VERSION=${first_version:-<unchanged>}, solve SP toggle from $CLUSTERDICT_PRECISION (mesh/export stay DP)"
         return 0
     fi
 
     REPO_DIR="$REPO_DIR" PVBATCH="$pvbatch" OF_ROOT="$OF_ROOT" \
     INJECT_FOAM_SOURCE="$INJECT_FOAM_SOURCE" \
+    MESH_PRECISION="$MESH_PRECISION" \
     CLUSTERDICT_PRECISION="$CLUSTERDICT_PRECISION" \
+    FIRST_VERSION="$first_version" \
     python3 - "${dicts[@]}" <<'PYEOF'
 import os, re, sys
 
@@ -334,9 +368,18 @@ repo   = os.environ["REPO_DIR"]
 pvbatch = os.environ["PVBATCH"]
 of_root = os.environ["OF_ROOT"]
 inject  = os.environ.get("INJECT_FOAM_SOURCE", "0") == "1"
+mesh_prec  = os.environ.get("MESH_PRECISION", "DP")
+solve_prec = os.environ.get("CLUSTERDICT_PRECISION", "DP")
+first_ver  = os.environ.get("FIRST_VERSION", "")
 
 zero_tpl = f"{repo}/zeroTemplates"
 post_dir = f"{repo}/postUtilities"
+
+# Marker identifying the advanced OTR-family templates (otr, otr2606). These
+# already carry their own per-block "precision" logic and reference the OpenFOAM
+# install through ~/openFoam/CODEHOST/OFSource/$VERSION plus $FOAM_EXEC, so they
+# are handled differently from the simple $WM_PROJECT_DIR / PATH templates.
+OTR_OF_HOME = "~/openFoam/CODEHOST/OFSource/$VERSION"
 
 # Pick a default etc/bashrc for foam-source injection (primary = first version dir found).
 def bashrc_for(path):
@@ -366,13 +409,55 @@ def rewrite(text, path):
     # any .../pvbatch -> installed pvbatch
     text = re.sub(TOKEN + "pvbatch", pvbatch, text)
 
+    is_otr = OTR_OF_HOME in text
+
+    if is_otr:
+        # OTR family: repoint the OpenFOAM home and version, and set the solve
+        # precision toggle. Meshing and export stay double precision (the mesh
+        # and export "precision" blocks keep SP=FALSE), while the solve block's
+        # SP=TRUE/FALSE follows the requested solve precision.
+        #   ~/openFoam/CODEHOST/OFSource/$VERSION -> <of_root>/OpenFOAM-$VERSION
+        # The $VERSION shell variable is preserved and set via VERSION=... below.
+        text = text.replace(OTR_OF_HOME, f"{of_root}/OpenFOAM-$VERSION")
+        if first_ver:
+            text = re.sub(r"VERSION=[A-Za-z]*\d{4}", f"VERSION={first_ver}", text)
+        solve_sp = "TRUE" if solve_prec.upper() == "SP" else "FALSE"
+        # Target only the SOLVE precision block (identified by its echo) so the
+        # meshing/export blocks are left at DP. Non-greedy [^"]*? stays inside
+        # the same JSON string value; idempotent across re-runs.
+        text = re.sub(
+            r'("precision":"SP=)(?:TRUE|FALSE)(;[^"]*?Running Solve Script)',
+            lambda m: m.group(1) + solve_sp + m.group(2),
+            text,
+        )
+        # The OTR templates source OpenFOAM through their own precision blocks,
+        # so the generic bashrc injection below is intentionally skipped.
+        return text
+
     if inject:
         br = bashrc_for(path)
         if br:
-            # Idempotent: strip a prior injected source, then prepend the new one.
+            # Meshing must run in double precision (snappyHexMesh robustness); the
+            # solve/export blocks use the requested solve precision. Each preamble is
+            # classified by its content: the solve preamble defines 'caseTemplates',
+            # the export preamble mentions its export controlDict / log line, and the
+            # meshing preamble (and anything else) defaults to DP.
+            def _repl(m):
+                tail = m.string[m.end(): m.end() + 240]
+                if ("caseTemplates" in tail
+                        or "Removing old logs" in tail
+                        or "controlDictExport" in tail):
+                    prec = solve_prec
+                else:
+                    prec = mesh_prec
+                return (f". {br} WM_PRECISION_OPTION={prec} ; "
+                        f". $WM_PROJECT_DIR/bin/tools/RunFunctions")
+
+            # Idempotent: an optional previously injected source (with or without a
+            # WM_PRECISION_OPTION override) is consumed by the leading group.
             text = re.sub(
-                r"(\. [^;]*etc/bashrc ; )?\. \$WM_PROJECT_DIR/bin/tools/RunFunctions",
-                f". {br} ; . $WM_PROJECT_DIR/bin/tools/RunFunctions",
+                r"(\. [^;]*etc/bashrc[^;]* ; )?\. \$WM_PROJECT_DIR/bin/tools/RunFunctions",
+                _repl,
                 text,
             )
     return text

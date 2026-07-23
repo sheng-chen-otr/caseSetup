@@ -1,6 +1,7 @@
 [GLOBAL_POST_PRO]
 ISOQ = 2000
 ISOCPT = 0
+ISOWALLDIST = 0
 SLICES = True
 XSLICE = default
 YSLICE = default

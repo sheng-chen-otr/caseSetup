@@ -1,0 +1,77 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  www.openfoam.com
+    \\  /    A nd           | isoWallDistanceDict
+     \\/     M anipulation  |
+-------------------------------------------------------------------------------
+Description
+    Computes a registered 'wallDistance' volScalarField (distance to the nearest
+    wall patch). It is added to the sampled surfaces 'fields' list so the value
+    is interpolated onto the iso*.vtp surfaces, allowing pvPost to Threshold-out
+    near-wall (boundary-layer) triangles from the Q / Cpt iso surfaces.
+
+    Self-contained: builds the distance directly with the 'meshWave'
+    patchDistMethod, so it does NOT depend on a 'wallDist' entry in fvSchemes.
+    Only wired into the export controlDict when [GLOBAL_POST_PRO] ISOWALLDIST > 0.
+\*---------------------------------------------------------------------------*/
+
+wallDistanceField
+{
+    type            coded;
+    libs            (utilityFunctionObjects);
+    name            wallDistanceField;
+
+    executeControl  timeStep;
+    executeInterval 1;
+    writeControl    timeStep;
+
+    codeInclude
+    #{
+        #include "patchDistMethod.H"
+        #include "wallPolyPatch.H"
+    #};
+
+    codeExecute
+    #{
+        const fvMesh& mesh = this->mesh();
+
+        // Build the field once; the mesh (and hence wall distance) is static.
+        if (!mesh.foundObject<volScalarField>("wallDistance"))
+        {
+            const labelHashSet wallPatchIDs
+            (
+                mesh.boundaryMesh().findPatchIDs<wallPolyPatch>()
+            );
+
+            volScalarField* wdPtr = new volScalarField
+            (
+                IOobject
+                (
+                    "wallDistance",
+                    mesh.time().timeName(),
+                    mesh,
+                    IOobject::NO_READ,
+                    IOobject::NO_WRITE
+                ),
+                mesh,
+                dimensionedScalar("wallDistance", dimLength, 0)
+            );
+
+            dictionary pdmDict;
+            pdmDict.add("method", "meshWave");
+
+            autoPtr<patchDistMethod> pdm
+            (
+                patchDistMethod::New(pdmDict, mesh, wallPatchIDs)
+            );
+            pdm->correct(*wdPtr);
+
+            // Hand ownership to the object registry so downstream function
+            // objects (e.g. surfaces) can look 'wallDistance' up.
+            wdPtr->store();
+        }
+    #};
+}
+
+// ************************************************************************* //

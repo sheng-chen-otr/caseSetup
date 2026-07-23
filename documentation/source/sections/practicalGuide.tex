@@ -23,6 +23,57 @@ which snappyHexMesh
 which pvbatch
 \end{lstlisting}
 
+\subsubsection{Automated OpenFOAM and ParaView installation}
+
+The repository provides \codeword{installOpenFOAM.sh} to automate a full local toolchain. The script downloads and compiles one or more ESI OpenFOAM versions from source in both double (DP) and single (SP) precision, downloads a matching ParaView binary release, and rewrites every \codeword{clusterDict} under \codeword{setupTemplates/} so that the \codeword{zeroTemplates}, \codeword{postUtilities} and \codeword{pvbatch} paths point at this repository and the freshly installed toolchain. Each requested OpenFOAM version is verified to exist on the ESI download server before anything is downloaded, so a mistyped version fails before continuing.
+
+Compilation of ESI OpenFOAM is only supported on Linux, either native or through WSL. The ParaView download and the \codeword{clusterDict} rewrite work on any POSIX shell, so the script can also be used on other systems purely to wire up paths.
+
+The most common usage builds a single version and installs the build prerequisites on an Ubuntu or Debian system:
+\begin{lstlisting}
+./installOpenFOAM.sh --versions "v2406" --install-deps
+\end{lstlisting}
+
+To build several versions into a chosen install root using a large number of parallel jobs:
+\begin{lstlisting}
+./installOpenFOAM.sh --versions "v2306 v2606" --prefix $HOME/openFoam --jobs 16
+\end{lstlisting}
+
+The precisions built and the integer label size can be selected explicitly. The following builds double precision only with 64-bit labels, which is useful for very large meshes:
+\begin{lstlisting}
+./installOpenFOAM.sh --versions "v2406" --precision "DP" --label-size 64
+\end{lstlisting}
+
+A specific ParaView release can be requested when the default does not match the local cluster. The version, series directory and binary flavour are all configurable:
+\begin{lstlisting}
+./installOpenFOAM.sh --versions "v2606" \
+    --paraview-version 5.12.0 \
+    --paraview-series v5.12 \
+    --paraview-flavor osmesa-MPI-Linux-Python3.10-x86_64
+\end{lstlisting}
+
+When ParaView is already available system-wide, or a headless machine only needs the solver, the ParaView stage can be skipped while still building OpenFOAM and rewriting the dictionaries:
+\begin{lstlisting}
+./installOpenFOAM.sh --versions "v2406" --skip-paraview
+\end{lstlisting}
+
+If OpenFOAM and ParaView are already installed and only the \codeword{clusterDict} paths need to be repointed at the current repository checkout, both build stages can be skipped. This is the fastest way to fix the paths after moving or cloning the repository:
+\begin{lstlisting}
+./installOpenFOAM.sh --skip-openfoam --skip-paraview
+\end{lstlisting}
+
+The \codeword{clusterDict} rewrite normally also injects a \codeword{source} of the appropriate OpenFOAM \codeword{etc/bashrc} into the generated commands, matching each template to a build by the version tag in its directory name where present. This behaviour can be disabled when the environment is loaded by other means, such as a cluster module system:
+\begin{lstlisting}
+./installOpenFOAM.sh --versions "v2606" --clusterdict-precision DP --no-foam-source
+\end{lstlisting}
+
+Finally, the effect of any invocation can be previewed without downloading, building or modifying files using \codeword{--dry-run}, which prints the actions and the paths that would be written:
+\begin{lstlisting}
+./installOpenFOAM.sh --versions "v2306 v2406" --dry-run
+\end{lstlisting}
+
+A full list of options, including all defaults, is available through \codeword{./installOpenFOAM.sh --help}. As with any generated configuration, the rewritten \codeword{clusterDict} files and the built solver should be validated with a small sample case before production use.
+
 \subsubsection{Windows through WSL}
 
 Native Windows execution is not tested. The recommended Windows approach is Windows Subsystem for Linux (WSL), preferably with an Ubuntu distribution. Install WSL and the Linux distribution using Microsoft's current instructions, then perform the Linux setup inside the WSL terminal. Install Python, the required build tools, ESI OpenFOAM and ParaView inside WSL rather than mixing Windows and Linux executables.
