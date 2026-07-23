@@ -9,6 +9,172 @@ two bigger features beyond the basic straight-line case:
 - double wishbone + pushrod kinematic solver - works out the per-component transforms (translation, rotation, pivot) from a ride-height input and deforms the geometry so it follows the actual suspension motion, not just a vertical wheel shift.
 - cornering (SRF) - solves the whole domain in a single rotating frame so the car follows a steady curved path. the rotating-frame solver, BCs, per-wheel rolling speeds and post fields are all set up automatically, and it ties into the ride-height study for per-point radius/direction.
 
+### Fan pressure-jump condition
+
+The `FAN` geometry prefix adds an ESI OpenFOAM `fan` pressure-jump condition for a planar fan disk. This is useful for modelling a fan in front of a radiator without resolving the blades. Use a separate `POR` geometry for the radiator porous region if a radiator pressure drop is also required. The FAN disk must be a single, approximately planar circular ASCII OBJ/STL surface and is currently supported through the snappyHexMesh path.
+
+Example:
+
+```ini
+[GEOMETRY]
+GEOM = body.obj.gz,1,8,5,1.1,high
+  POR-radiator.obj.gz,1,10,6,1.4,high
+  FAN-radiator-fan.obj.gz,1,10,0,1.0,high
+
+[FAN-radiator-fan]
+FAN_MODEL = fan
+FAN_CENTER = default
+FAN_DIRECTION = default
+FAN_TARGET_GEOMETRY = POR-radiator
+FAN_DIAMETER = default
+FAN_PRESSURE_RISE = 250
+SAMPLE_FAN = True
+```
+
+`FAN_CENTER` and `FAN_DIAMETER` can be calculated automatically from the disk. With `FAN_DIRECTION = default`, the surface normal is oriented toward `FAN_TARGET_GEOMETRY`; an explicit direction overrides the target. `FAN_PRESSURE_RISE` is in Pa. `SAMPLE_FAN` is retained in the generated setup metadata, but dedicated FAN reporting is not yet implemented. Validate the generated `fan` boundary condition with the installed ESI OpenFOAM release (`of2206` or `of2606`) before production runs.
+
+---
+
+## Customizing post-processing views and variables
+
+The ParaView post-processing configuration is controlled by the `pvPostSetup` file in the case directory. When a case is generated, the default file is copied from `postUtilities/default/pvPostSetup`. Edit the copied case file rather than the repository default when changing one case.
+
+The main switches are:
+
+```ini
+[PV_POST_MAIN]
+CAMERA_VIEWS = default
+VARIABLE_DICT = default
+
+[SURFACE]
+VIEWS = default
+VARIABLES = default
+
+[SLICE]
+VIEWS = default
+VARIABLES = default
+LIC_VARIABLES = default
+
+[ISO_SURFACE]
+VIEWS = default
+VARIABLES = default
+```
+
+`default` uses the built-in settings. To use custom settings, replace `VARIABLE_DICT` and/or `CAMERA_VIEWS` with paths to JSON-style dictionary files. The path must be readable from the directory where `pvPost.py` is run.
+
+### Adding or changing a plotted variable
+
+Copy [postUtilities/default/defaultVariables](postUtilities/default/defaultVariables) to a custom file, for example `myVariables`, and change the relevant entries. Variables are grouped by output type: `surfaceVariables`, `sliceVariables`, and `isoVariables`. Each variable has an equation, label, display range, and ParaView colour map.
+
+For example, this entry adds a normalized mean streamwise velocity variable to the surface and slice dictionaries:
+
+```json
+"UMeanStreamwise": {
+  "equation": "UMean_X/UREF",
+  "label": "Umean,x/Uref",
+  "range": [0, 1.2],
+  "color": "Viridis (matplotlib)"
+}
+```
+
+The variable name (`UMeanStreamwise`) is the name used in `pvPostSetup`. The equation may reference fields exported by OpenFOAM and the reference tokens `UREF`, `LREF`, and `WREF`; these tokens are replaced automatically using the case reference values. The field used by the equation must exist in the exported EnSight data.
+
+Select the new variable for a plot by changing the corresponding `pvPostSetup` section. Multiple names are separated by spaces:
+
+```ini
+[PV_POST_MAIN]
+VARIABLE_DICT = myVariables
+
+[SURFACE]
+VARIABLES = CpMean UMeanStreamwise CfMean
+
+[SLICE]
+VARIABLES = CpMean UMeanStreamwise
+LIC_VARIABLES = UMean
+```
+
+The available variable groups and their display settings are defined in the custom variable file; the `VARIABLES` entries only select which names are rendered.
+
+### Adding or changing camera views
+
+Copy [postUtilities/default/defaultViews](postUtilities/default/defaultViews) to a custom JSON file, for example `myViews`. Each view contains:
+
+```json
+"DriverSide": {
+  "pp": 1,
+  "campos": "[0,-LREF*10,0]",
+  "focalpos": "[1.18,0,0.85]",
+  "viewup": "[0,0,1]",
+  "parallelscale": "WREF/2"
+}
+```
+
+`campos` is the camera position, `focalpos` is the point being viewed, `viewup` defines the top direction, and `parallelscale` controls the orthographic zoom. The expressions can use `LREF`, `WREF`, `CREF`, and `FREF`. Then select the custom views and names in `pvPostSetup`:
+
+```ini
+[PV_POST_MAIN]
+CAMERA_VIEWS = myViews
+
+[GEOM]
+VIEWS = DriverSide
+
+[SURFACE]
+VIEWS = DriverSide FrontLeft
+
+[SLICE]
+VIEWS = DriverSide
+
+[ISO_SURFACE]
+VIEWS = DriverSide
+```
+
+The view names in `VIEWS` must exactly match keys in the custom view file. If a custom view file is not specified, the built-in views are generated automatically from the case reference dimensions.
+
+### Front- and rear-wing pressure sections
+
+`pvPost` can extract `CpMean` where a y-normal plane intersects the front or rear wing surface. Enable either section in the case `pvPostSetup` file. The default patch patterns are `frontWing.*` and `rearWing.*`, and matching is case-insensitive.
+
+```ini
+[FRONT_WING_PRESSURE]
+ENABLE = True
+PATCH_PATTERN = frontWing.*
+NORMAL = default
+Y_RANGE = default
+N_PLANES = 11
+VARIABLE = CpMean
+OUTPUT_DIR = postProcessing/wingPressure
+
+[REAR_WING_PRESSURE]
+ENABLE = True
+PATCH_PATTERN = rearWing.*
+NORMAL = default
+Y_RANGE = default
+N_PLANES = 11
+VARIABLE = CpMean
+OUTPUT_DIR = postProcessing/wingPressure
+```
+
+With `NORMAL = default`, the plane normal is the SAE y direction `(0 1 0)`. `Y_RANGE = default` samples from `CREF_y - 0.5 WREF` to `CREF_y + 0.5 WREF`; use two values such as `[-0.4,0.4]` for an explicit range. `N_PLANES` controls the number of evenly spaced planes. An explicit normal can be supplied as three values, for example `NORMAL = 0 1 0`.
+
+Each intersection is written as a CSV file containing `x`, `y`, `z`, and `CpMean` columns under `OUTPUT_DIR`. The feature is disabled by default and produces CSV data only; it does not change the existing surface, slice, or LIC image generation.
+
+When using a generated cluster case, enable the required sections in the case copy of `pvPostSetup` before submitting the post-processing job. The standard `postPro` workflow runs `pvPost.py` first, which creates the CSV files when the sections are enabled, and then runs `postRun.py --wingPressure` to create the plots. No additional cluster setting is required beyond enabling the relevant section. The generated cluster command is available in the `post` section of the selected `clusterDict` template.
+
+For local/manual processing, run `postRun.py` with `--wingPressure` after `pvPost.py` has completed. The selected cases are supplied with `--trial` in the same way as force plots:
+
+```bash
+python postUtilities/postRun.py --wingPressure --trial case001 case002 --saveFormat png
+```
+
+For each selected case, `postRun.py` reads the front- and rear-wing CSV files, plots `CpMean` against `x` for every available y plane, and writes separate plots to that case's `postProcessing/wingPressure` directory:
+
+```text
+frontWing_CpMean_vs_x.png
+rearWing_CpMean_vs_x.png
+```
+
+The Cp axis is inverted following the conventional aerodynamic pressure-coefficient presentation. Cases without enabled wing extraction or without matching CSV files are reported and skipped.
+
 ---
 
 ## Compatibility
@@ -209,6 +375,39 @@ python caseSetup.py
 #  --postProDict          Copy post-processing config
 #  --rideHeightMode       INTERNAL ONLY (used by caseSetup when re-running child cases)
 ```
+
+### Creating a custom setup template from an existing template
+
+Use `--setup` to select a directory under `setupTemplates`. To create a custom setup based on an existing one, copy the complete setup directory rather than only its `defaultSetup` subdirectory. The other directories contain the matching boundary-condition, OpenFOAM dictionary, post-processing, refinement, and cluster templates used by `caseSetup`.
+
+For example, create a local setup called `mySetup` from the repository's `default` setup:
+
+```bash
+cd /path/to/caseSetup-dev
+cp -R setupTemplates/default setupTemplates/mySetup
+```
+
+Then edit the copied default settings:
+
+```text
+setupTemplates/mySetup/defaultSetup/
+```
+
+Typical files to customise include:
+
+- `defaultModules` and `defaultOrder` — which setup modules are available and their order.
+- `defaultGlobalControl`, `defaultGlobalSimControl`, and `defaultTitles` — general run and case defaults.
+- `defaultGlobalRefinement` and `defaultGeometry` — mesh and geometry defaults.
+- `defaultPVPost` and `defaultPost` — post-processing defaults.
+- `defaultRideHeight` and `defaultCornering` — optional motion and cornering defaults.
+
+Run the case using the copied template:
+
+```bash
+python caseSetup.py --setup mySetup
+```
+
+The value passed to `--setup` must match the directory name exactly. Keep the complete directory layout from the source template, including `defaultBCTemplates`, `defaultDicts`, `defaultPost`, `defaultRefinements`, and `defaultCluster`. If the custom template is intended for a cluster, update its `defaultCluster/slurm/clusterDict` paths and commands for that machine. Existing generated cases are not changed when the template is edited; regenerate or rerun `caseSetup` as appropriate.
 
 ### utilities.py - core geometry & kinematics engine
 

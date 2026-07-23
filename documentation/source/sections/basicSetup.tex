@@ -30,6 +30,31 @@ The \codeword{DEFAULT_MODULES} line controls the settings that are available. If
         \end{lstlisting}
     \end{itemize}
 \end{itemize}
+
+\subsection{Creating a Custom Setup Template}
+The setup selected by \codeword{caseSetup --setup} is a directory under \codeword{setupTemplates}. To make a custom setup based on an existing setup, copy the complete source directory, including its \codeword{defaultSetup}, \codeword{defaultBCTemplates}, \codeword{defaultDicts}, \codeword{defaultPost}, \codeword{defaultRefinements} and \codeword{defaultCluster} directories.
+
+For example, to create \codeword{mySetup} from the repository's \codeword{default} setup:
+\begin{lstlisting}
+    cd /path/to/caseSetup
+    cp -R setupTemplates/default setupTemplates/mySetup
+\end{lstlisting}
+
+Edit the copied files in \codeword{setupTemplates/mySetup/defaultSetup/}. The most commonly changed files are:
+\begin{itemize}
+    \item \codeword{defaultModules} and \codeword{defaultOrder} - available modules and their order;
+    \item \codeword{defaultGlobalControl}, \codeword{defaultGlobalSimControl} and \codeword{defaultTitles} - general case and run defaults;
+    \item \codeword{defaultGlobalRefinement} and \codeword{defaultGeometry} - mesh and geometry defaults;
+    \item \codeword{defaultPVPost} and \codeword{defaultPost} - post-processing defaults;
+    \item \codeword{defaultRideHeight} and \codeword{defaultCornering} - optional ride-height and cornering defaults.
+\end{itemize}
+
+Select the copied setup by passing its directory name:
+\begin{lstlisting}
+    python caseSetup.py --setup mySetup
+\end{lstlisting}
+The value supplied to \codeword{--setup} must match the directory name exactly. For cluster use, update the copied \codeword{defaultCluster/slurm/clusterDict} with the machine-specific paths and commands. Changes to a template apply to cases generated or regenerated afterward; they do not modify existing generated cases automatically.
+
 Each geometry that is required in this run and is in its own file should be listed here, the settings shown above will be applied to all geometries in that file. If a different settings are required to be applied, that geometry should be broken out into it's own file. A common example is wheels. 
 
 \subsection{Rotating Geometries}

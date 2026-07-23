@@ -14,6 +14,7 @@ from estimateStatisticalError import *
 
 #import paraview modules
 from paraview.simple import *
+from paraview import servermanager
 from paraview.numpy_support import vtk_to_numpy
 
 
@@ -229,6 +230,10 @@ def main():
         if pvPostSetupDict['PV_POST_MAIN']['SLICE_LIC_IMG'].lower() == 'true':
             exportTimes['LICSlice'] = generateLICSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],varDict,viewsDict)
 
+        exportTimes['wingPressure'] = generateWingPressureCSVs(
+            source, selections, pvPostSetupDict, varDict
+        )
+
     print('\tTotal Export Times (s):')
     for key in exportTimes.keys():
         print('\t\t%s: %s' % (key,str(round(exportTimes[key],3))))
@@ -283,6 +288,145 @@ def getRequiredFields(varDict, extraFields=None):
         for f in extraFields:
             fields.add(componentSuffix.sub('', f))
     return fields
+
+
+def generateWingPressureCSVs(source, selections, pvPostSetupDict, varDict):
+    """Write Cp samples where configurable wing patches intersect spanwise planes."""
+    begin = time.time()
+    wingSections = (
+        ('FRONT_WING_PRESSURE', 'frontWing'),
+        ('REAR_WING_PRESSURE', 'rearWing'),
+    )
+    generated = 0
+
+    for sectionName, wingName in wingSections:
+        if sectionName not in pvPostSetupDict:
+            continue
+        setup = pvPostSetupDict[sectionName]
+        if setup.get('ENABLE', 'False').strip().lower() != 'true':
+            continue
+
+        pattern = setup.get('PATCH_PATTERN', '%s.*' % wingName).strip()
+        selectors = selectWingSelectors(selections, pattern)
+        if not selectors:
+            print('\n\tWARNING! No %s patches matched PATCH_PATTERN=%s; skipping.\n' %
+                  (wingName, pattern))
+            continue
+
+        normal = parseWingNormal(setup.get('NORMAL', 'default'))
+        yValues = parseWingPlaneLocations(setup.get('Y_RANGE', 'default'),
+                                           setup.get('N_PLANES', '11'))
+        variable = setup.get('VARIABLE', 'CpMean').strip()
+        if variable not in varDict.get('surfaceVariables', {}):
+            print('\n\tWARNING! %s is not defined in surfaceVariables; skipping %s pressure extraction.\n' %
+                  (variable, wingName))
+            continue
+
+        wingSurface = ExtractBlock(Input=source)
+        wingSurface.Selectors = selectors
+        wingSurface.UpdatePipeline()
+        calculator = Calculator(registrationName='%sPressureCalculator' % wingName,
+                                Input=wingSurface)
+        calculator.Function = str(varDict['surfaceVariables'][variable]['equation'])
+        calculator.ResultArrayName = variable
+        calculator.UpdatePipeline()
+
+        outputDir = setup.get('OUTPUT_DIR', 'postProcessing/wingPressure').strip()
+        os.makedirs(outputDir, exist_ok=True)
+        for planeIndex, yValue in enumerate(yValues):
+            plane = Slice(Input=calculator, SliceType='Plane')
+            plane.SliceType.Normal = normal
+            plane.SliceType.Origin = [float(CREF[0]), float(yValue), float(CREF[2])]
+            plane.Triangulatetheslice = 0
+            plane.UpdatePipeline()
+
+            fetched = servermanager.Fetch(plane)
+            rows = wingIntersectionRows(fetched, variable)
+            fileName = '%s_%s_%s.csv' % (wingName, variable, format(float(yValue), '.6g'))
+            filePath = os.path.join(outputDir, fileName)
+            pd.DataFrame(rows, columns=['x', 'y', 'z', variable]).to_csv(filePath, index=False)
+            print('\t\tWrote %s wing pressure samples: %s (%d points)' %
+                  (wingName, filePath, len(rows)))
+            generated += 1
+            Delete(plane)
+
+        Delete(calculator)
+        Delete(wingSurface)
+
+    if generated:
+        print('\tWing pressure CSV generation time (s): %s' %
+              round(time.time() - begin, 3))
+    return time.time() - begin
+
+
+def selectWingSelectors(selections, pattern):
+    """Return ExtractBlock selectors matching an OpenFOAM patch regex."""
+    try:
+        matcher = re.compile(pattern, re.IGNORECASE)
+    except re.error as error:
+        print('\n\tWARNING! Invalid wing PATCH_PATTERN %s: %s\n' % (pattern, error))
+        return []
+
+    selected = []
+    for selector in selections:
+        patchName = selector.rsplit('/Root/', 1)[-1]
+        candidates = (patchName, patchName.replace('-', ''))
+        if any(matcher.search(candidate) for candidate in candidates):
+            selected.append(selector)
+    return selected
+
+
+def parseWingNormal(value):
+    """Parse the default SAE y-normal or an explicit three-component normal."""
+    if value.strip().lower() == 'default':
+        return [0.0, 1.0, 0.0]
+    try:
+        normal = np.asarray([float(token) for token in value.split()], dtype=float)
+    except ValueError:
+        sys.exit('ERROR! Wing pressure NORMAL must be default or three numeric values.')
+    if normal.size != 3 or np.linalg.norm(normal) <= np.finfo(float).eps:
+        sys.exit('ERROR! Wing pressure NORMAL must contain three non-zero components.')
+    return (normal / np.linalg.norm(normal)).tolist()
+
+
+def parseWingPlaneLocations(yRange, nPlanes):
+    """Return fixed-y locations, defaulting to 11 planes across +/- WREF/2."""
+    if yRange.strip().lower() == 'default':
+        try:
+            count = int(nPlanes)
+        except ValueError:
+            sys.exit('ERROR! Wing pressure N_PLANES must be a positive integer.')
+        if count < 1:
+            sys.exit('ERROR! Wing pressure N_PLANES must be a positive integer.')
+        return np.linspace(float(CREF[1]) - 0.5 * float(WREF),
+                           float(CREF[1]) + 0.5 * float(WREF), count)
+
+    tokens = yRange.replace('[', '').replace(']', '').replace(',', ' ').split()
+    if len(tokens) != 2:
+        sys.exit('ERROR! Wing pressure Y_RANGE must be default or [Y_MIN,Y_MAX].')
+    try:
+        yMin, yMax = [float(token) for token in tokens]
+        count = int(nPlanes)
+    except ValueError:
+        sys.exit('ERROR! Wing pressure Y_RANGE and N_PLANES must be numeric.')
+    if yMax <= yMin or count < 1:
+        sys.exit('ERROR! Wing pressure Y_RANGE must increase and N_PLANES must be positive.')
+    return np.linspace(yMin, yMax, count)
+
+
+def wingIntersectionRows(polyData, variable):
+    """Extract point coordinates and a calculated pressure array from VTK output."""
+    if polyData is None or polyData.GetNumberOfPoints() == 0:
+        return []
+    pointData = polyData.GetPointData()
+    array = pointData.GetArray(variable)
+    if array is None:
+        return []
+    points = vtk_to_numpy(polyData.GetPoints().GetData())
+    values = vtk_to_numpy(array)
+    if values.ndim > 1:
+        values = values[:, 0]
+    return np.column_stack((points, values)).tolist()
 
 
 def getVariableDicts(variablePaths, viewsPath):

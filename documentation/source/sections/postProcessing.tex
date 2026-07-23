@@ -111,6 +111,79 @@ A variable requested here that is not defined in the variable dictionary, or not
 \subsection{Variables and Camera Views}
 The variable dictionary defines every plottable variable as an equation over the OpenFOAM fields, together with a display label, a value range and a ParaView colour preset. The tokens \codeword{UREF}, \codeword{LREF} and \codeword{WREF} in the equations are substituted with the case reference values before evaluation, so coefficients such as \codeword{CpMean} and \codeword{CptMean} are normalised consistently with the rest of the case. To use a custom set, point \codeword{VARIABLE_DICT} (and, if needed, \codeword{CAMERA_VIEWS}) at your own file.
 
+To customise one case, copy the default variable and view files from \codeword{postUtilities/default/} to new files, then reference those files from the case's \codeword{pvPostSetup}. Do not modify the repository defaults unless the change should apply to every future case. For example:
+\begin{lstlisting}
+    [PV_POST_MAIN]
+    VARIABLE_DICT = myVariables
+    CAMERA_VIEWS = myViews
+
+    [SURFACE]
+    VIEWS = DriverSide FrontLeft
+    VARIABLES = CpMean UMeanStreamwise CfMean
+
+    [SLICE]
+    VIEWS = DriverSide
+    VARIABLES = CpMean UMeanStreamwise
+    LIC_VARIABLES = UMean
+\end{lstlisting}
+
+Each custom variable file contains the three top-level groups \codeword{surfaceVariables}, \codeword{sliceVariables} and \codeword{isoVariables}. Add a variable to the required groups using an equation, label, display range and colour map. The following entry adds a normalised streamwise mean velocity variable:
+\begin{lstlisting}
+    "UMeanStreamwise": {
+        "equation": "UMean_X/UREF",
+        "label": "Umean,x/Uref",
+        "range": [0, 1.2],
+        "color": "Viridis (matplotlib)"
+    }
+\end{lstlisting}
+The name \codeword{UMeanStreamwise} is used in the \codeword{VARIABLES} lists. The equation must reference fields present in the exported EnSight solution. A requested variable that is missing from the dictionary or solution is reported and skipped.
+
+Custom camera-view files use one JSON object per view. The camera position is \codeword{campos}, the point being viewed is \codeword{focalpos}, \codeword{viewup} defines the upward direction, and \codeword{parallelscale} controls the orthographic zoom. Reference tokens can be used in the expressions:
+\begin{lstlisting}
+    "DriverSide": {
+        "pp": 1,
+        "campos": "[0,-LREF*10,0]",
+        "focalpos": "[1.18,0,0.85]",
+        "viewup": "[0,0,1]",
+        "parallelscale": "WREF/2"
+    }
+\end{lstlisting}
+The name in each \codeword{VIEWS} list must exactly match a key in the custom view file. When \codeword{CAMERA_VIEWS = default}, built-in views are generated automatically from the case reference dimensions.
+
+\subsection{Front- and Rear-Wing Pressure Sections}
+\codeword{pvPost} can extract the mean pressure coefficient where y-normal planes intersect the front or rear wing surface. Enable either section in the case's \codeword{pvPostSetup} file:
+\begin{lstlisting}
+    [FRONT_WING_PRESSURE]
+    ENABLE = True
+    PATCH_PATTERN = frontWing.*
+    NORMAL = default
+    Y_RANGE = default
+    N_PLANES = 11
+    VARIABLE = CpMean
+    OUTPUT_DIR = postProcessing/wingPressure
+
+    [REAR_WING_PRESSURE]
+    ENABLE = True
+    PATCH_PATTERN = rearWing.*
+    NORMAL = default
+    Y_RANGE = default
+    N_PLANES = 11
+    VARIABLE = CpMean
+    OUTPUT_DIR = postProcessing/wingPressure
+\end{lstlisting}
+The default patch patterns are case-insensitive regular expressions. The default \codeword{NORMAL} is the SAE y direction, \codeword{(0 1 0)}. \codeword{Y_RANGE = default} samples from \codeword{CREF_y - 0.5 WREF} to \codeword{CREF_y + 0.5 WREF}; an explicit range can be supplied as two values, for example \codeword{[-0.4,0.4]}. \codeword{N_PLANES} controls the number of evenly spaced planes. A different three-component plane normal can be supplied instead of \codeword{default}.
+
+Each intersection is written as a CSV file containing \codeword{x}, \codeword{y}, \codeword{z} and \codeword{CpMean} columns under \codeword{OUTPUT_DIR}. Both sections are disabled by default. This feature writes CSV data only and does not alter the existing surface, slice or LIC image generation.
+
+For a generated cluster case, enable the required sections in the case copy of \codeword{pvPostSetup} before submitting the post-processing job. The standard \codeword{postPro} workflow runs \codeword{pvPost.py} first, creating the CSV files when the sections are enabled, and then runs \codeword{postRun.py --wingPressure} to create the plots. No additional cluster setting is required beyond enabling the relevant section; the command is included in the \codeword{post} section of the selected \codeword{clusterDict} template.
+
+For local or manual processing, run \codeword{postRun.py} after \codeword{pvPost.py} has completed. The selected cases are supplied with \codeword{--trial}:
+\begin{lstlisting}
+    python postUtilities/postRun.py --wingPressure \
+        --trial case001 case002 --saveFormat png
+\end{lstlisting}
+For each selected case, \codeword{postRun.py} reads the available wing CSV files, plots \codeword{CpMean} against \codeword{x} for each y plane, and writes \codeword{frontWing_CpMean_vs_x.png} and \codeword{rearWing_CpMean_vs_x.png} under \codeword{postProcessing/wingPressure}. The pressure-coefficient axis is inverted using the conventional aerodynamic presentation. Cases without enabled wing extraction or matching CSV files are reported and skipped.
+
 \subsection{Half-Symmetry Cases}
 When the case is built on half symmetry (\codeword{SIM_SYM}\,=\,\codeword{half}), \codeword{pvPost} automatically reflects the body surface, the internal volume and the iso-surfaces about the symmetry plane so the rendered images show the full car.
 

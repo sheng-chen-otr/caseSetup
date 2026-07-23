@@ -3,7 +3,7 @@
 \usepackage[T1]{fontenc}
 \usepackage{tgadventor}
 \usepackage{hyperref}
-\renewcommand*\familydefault{\sfdefault} %% Only if the base font of the document is to be sans serif
+%\renewcommand*\familydefault{\sfdefault} %% Only if the base font of the document is to be sans serif
 \usepackage{titling}
 \usepackage{appendix}
 \usepackage{graphicx}
@@ -62,7 +62,7 @@
 \def\@maketitle{
 \vspace{5cm}
 \begin{center}
-\includegraphics[width = 80mm]{figures/otrLogo.png}\\[8ex]
+% \includegraphics[width = 80mm]{figures/otrLogo.png}\\[8ex]
 {\Huge \bfseries \sffamily \@title }\\[4ex] 
 {\Large  \@author}\\[4ex] 
 \@date\\[8ex]
@@ -80,7 +80,7 @@
 \small \noindent This document covers the use of caseSetup for external automotive aerodynamics cases.\newline
 
 
-\noindent \textit{All materials within this  module is confidential, do not copy, share or distribute in any manner without explicit permission from Ontario Tech Racing.}
+%\noindent \textit{All materials within this  module is confidential, do not copy, share or distribute in any manner without explicit permission from Ontario Tech Racing.}
 \newpage
 %% Front Matter %%
 \newpage
@@ -90,6 +90,8 @@
 %% Main Matter %%
 \newpage
 \include{sections/introduction}
+\include{sections/theory}
+\include{sections/practicalGuide}
 \include{sections/basicSetup}
 \include{sections/prefix}
 \include{sections/rideHeight}

@@ -64,7 +64,7 @@ The ride-height file is a comma separated table where each row is one suspension
     5,-10,-10,-10,-10,0,0
 \end{lstlisting}
 \begin{itemize}
-    \item \codeword{point} [\codeword{int}] - unique index for the state, referenced by \codeword{RUN_RH_POINTS} and used to name the child case, for example \codeword{001\_2} (\codeword{int})
+    \item \codeword{point} [\codeword{int}] - unique index for the state, referenced by \codeword{RUN_RH_POINTS} and used to name the child case, for example \codeword{001_2} (\codeword{int})
 
     \item \codeword{fl}, \codeword{fr}, \codeword{rl}, \codeword{rr} [[\codeword{float}]] - front-left, front-right, rear-left and rear-right wheel vertical displacements, negative values typically indicate compression (bump) and positive values rebound (droop) (\codeword{float})
 
@@ -209,7 +209,7 @@ For each ride-height point and corner the solver produces a transform for every 
 
     \item \codeword{TIE} - rotates as its outer end follows the wheel, about the tie rod inner mount, and when steering the inner end slides along the rack axis
 \end{itemize}
-For every transformed geometry a log is written next to the output file, \codeword{*.susp\_pid\_transform.json} and \codeword{*.susp\_pid\_transform.csv}, listing each part, the keyword it matched, and the applied translation and rotation. Inspect these to confirm the expected parts were moved.
+For every transformed geometry a log is written next to the output file, \codeword{*.susp_pid_transform.json} and \codeword{*.susp_pid_transform.csv}, listing each part, the keyword it matched, and the applied translation and rotation. Inspect these to confirm the expected parts were moved.
 
 \subsection{Workflow Summary}
 \begin{itemize}
@@ -219,7 +219,7 @@ For every transformed geometry a log is written next to the output file, \codewo
 
     \item Ensure the geometry part names contain the PID keywords from the hardpoint file.
 
-    \item Run \codeword{caseSetup} as normal. Child cases named \codeword{<case>\_<point>} are created, the geometry is deformed, and \codeword{caseSetup} is re-run automatically inside each child.
+    \item Run \codeword{caseSetup} as normal. Child cases named \codeword{<case>_<point>} are created, the geometry is deformed, and \codeword{caseSetup} is re-run automatically inside each child.
 
     \item Each child case is then a standard, ready to mesh case at that suspension state.
 \end{itemize}

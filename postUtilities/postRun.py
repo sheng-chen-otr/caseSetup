@@ -38,6 +38,8 @@ def main():
                        help='Generate case summary')
     parser.add_argument('--forces', action='store_true', 
                        help='Plot force coefficients')
+    parser.add_argument('--wingPressure', action='store_true',
+                       help='Plot Cp versus x from wing pressure intersection CSV files')
     
     # Add force plotting specific arguments
     parser.add_argument('-p', '--plotData', default=['Cd','Cl','CoP'],
@@ -69,6 +71,82 @@ def main():
         casePathDict = getCaseData(casePathDict)
         casePathDict = makePandasArrays(args,casePathDict)
         plotData(args,caseLoc,casePathDict)
+
+    if args.wingPressure:
+        casePathDict, caseLoc = setCasePaths(args.trial,casePath)
+        plotWingPressure(args, casePathDict, caseLoc)
+
+    if not args.summary and not args.forces and not args.wingPressure:
+        parser.print_help()
+
+
+def plotWingPressure(args, casePathDict, caseLoc):
+    """Plot Cp against x for every selected case and wing pressure CSV set."""
+    for case, caseInfo in casePathDict.items():
+        casePath = caseInfo['path']
+        pressurePath = os.path.join(casePath, 'postProcessing', 'wingPressure')
+        if not os.path.isdir(pressurePath):
+            print('\tNo wing pressure directory found for %s, skipping.' % case)
+            continue
+
+        for wingName in ('frontWing', 'rearWing'):
+            csvFiles = glob.glob(os.path.join(pressurePath,
+                                              '%s_CpMean_*.csv' % wingName))
+            if not csvFiles:
+                print('\tNo %s CpMean CSV files found for %s, skipping.' %
+                      (wingName, case))
+                continue
+
+            csvFiles.sort(key=wingPressureYValue)
+            fig, ax = plt.subplots(figsize=[10, 6], frameon=True)
+            plotted = 0
+            for csvPath in csvFiles:
+                try:
+                    pressureData = pd.read_csv(csvPath)
+                    requiredColumns = {'x', 'CpMean'}
+                    if not requiredColumns.issubset(pressureData.columns):
+                        print('\tWARNING! %s does not contain x and CpMean columns; skipping.' %
+                              csvPath)
+                        continue
+                    pressureData = pressureData.dropna(subset=['x', 'CpMean'])
+                    pressureData = pressureData.sort_values('x')
+                    if pressureData.empty:
+                        continue
+                    yValue = pressureData['y'].mean() if 'y' in pressureData else wingPressureYValue(csvPath)
+                    ax.plot(pressureData['x'], pressureData['CpMean'],
+                            marker='.', linewidth=1.0, markersize=3,
+                            label='y = %+.4g m' % yValue)
+                    plotted += 1
+                except Exception as error:
+                    print('\tWARNING! Unable to read %s: %s' % (csvPath, error))
+
+            if not plotted:
+                plt.close(fig)
+                continue
+
+            ax.set_xlabel('x (m)')
+            ax.set_ylabel('$C_p$')
+            ax.set_title('%s - %s pressure distribution' % (case, wingName))
+            ax.grid(True, alpha=0.3)
+            ax.invert_yaxis()
+            ax.legend(loc='best', fontsize=8)
+            fig.tight_layout()
+
+            outputPath = os.path.join(pressurePath,
+                                      '%s_CpMean_vs_x.%s' %
+                                      (wingName, args.saveFormat))
+            fig.savefig(outputPath, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            print('\tWrote %s' % outputPath)
+
+
+def wingPressureYValue(csvPath):
+    """Extract the y coordinate from a wing CSV filename for sorting."""
+    stem = os.path.splitext(os.path.basename(csvPath))[0]
+    try:
+        return float(stem.rsplit('_', 1)[-1])
+    except ValueError:
+        return 0.0
 
 
 def isCaseComplete(casePath):

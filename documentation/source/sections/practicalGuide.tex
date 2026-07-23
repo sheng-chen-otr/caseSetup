@@ -1,0 +1,151 @@
+\section{Practical Guide}
+
+This chapter collects the installation, execution, verification and troubleshooting information needed for a reproducible caseSetup workflow. The examples use the repository layout shown in the introduction. Commands should be run from the caseSetup repository unless stated otherwise.
+
+\subsection{Installation and environment setup}
+
+caseSetup requires Python 3 and the packages listed in \codeword{requirements.txt}. The generated case must also be run with a compatible ESI OpenFOAM installation. The repository currently targets the ESI releases \codeword{of2206} and \codeword{of2606}. ParaView post-processing requires \codeword{pvbatch} or \codeword{pvpython}; the regular system Python interpreter cannot import \codeword{paraview.simple}.
+
+\subsubsection{Linux}
+
+Create an isolated Python environment and install the project requirements:
+\begin{lstlisting}
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+\end{lstlisting}
+
+Load the ESI OpenFOAM environment in each shell used for meshing or solving. The exact command depends on the local installation. Check the installation before creating a case:
+\begin{lstlisting}
+which blockMesh
+which snappyHexMesh
+which pvbatch
+\end{lstlisting}
+
+\subsubsection{Windows through WSL}
+
+Native Windows execution is not tested. The recommended Windows approach is Windows Subsystem for Linux (WSL), preferably with an Ubuntu distribution. Install WSL and the Linux distribution using Microsoft's current instructions, then perform the Linux setup inside the WSL terminal. Install Python, the required build tools, ESI OpenFOAM and ParaView inside WSL rather than mixing Windows and Linux executables.
+
+The repository can be accessed through the mounted Windows drives under \codeword{/mnt}, but case files and temporary solver data should preferably be stored inside the WSL Linux filesystem for better I/O performance. Windows and WSL paths are not interchangeable: use Linux paths in shell commands and in generated case configuration. The WSL workflow is untested and should be validated with a small sample case before production use. In particular, verify file permissions, symbolic links, line endings, OpenFOAM availability and ParaView batch support.
+
+\subsection{Recommended case workflow}
+
+A standard case proceeds through the following stages:
+\begin{enumerate}
+    \item Prepare and inspect the geometry in the reference mesh directory.
+    \item Select a setup template and create the case directory.
+    \item Write or edit the \codeword{caseSetup} input, exposing only the modules that need to differ from the defaults.
+    \item Run \codeword{caseSetup.py} to link geometry and write the OpenFOAM dictionaries.
+    \item Inspect the generated patches, boundary conditions, reference values and turbulence settings.
+    \item Generate the mesh and check mesh quality before solving.
+    \item Run the initialization and solver stages, locally or through the selected cluster template.
+    \item Check residuals, force histories, mass balance and \codeword{yPlus}.
+    \item Average the converged solution and run \codeword{pvPost.py} through \codeword{pvbatch} when images or CSV data are required.
+    \item Run \codeword{postRun.py} for force summaries, uncertainty estimates and optional wing-pressure plots.
+\end{enumerate}
+
+Do not treat a successfully completed command as proof that the case is physically or numerically valid. The generated dictionaries and solver logs must be inspected after each major stage.
+
+\subsection{Input and unit conventions}
+
+The main input file is divided into modules such as \codeword{GLOBAL_SIM_CONTROL}, \codeword{BC_SETUP}, geometry sections, ride-height sections, cornering sections and post-processing sections. The detailed module descriptions are provided in the basic setup and post-processing chapters. Values should be checked against the units shown beside each input. In particular:
+\begin{itemize}
+    \item velocities are in \codeword{m/s};
+    \item lengths and geometry coordinates are in the case length unit, normally \codeword{m};
+    \item pressures and FAN pressure rises are in \codeword{Pa};
+    \item angles are in degrees where explicitly labelled; and
+    \item reference area, length and centre must use the same coordinate system as the geometry.
+\end{itemize}
+
+The SAE coordinate convention used by the setup should be confirmed before assigning drag, lift, yaw, pitch and roll directions. A sign error in a reference vector can produce plausible-looking but incorrectly signed coefficients.
+
+\subsection{Potential Examples}
+
+\subsubsection{Straight-line external aerodynamics}
+
+Begin with the default template and a minimal geometry list. Set the inlet speed, reference area and reference length, select the moving or stationary ground condition, and leave the remaining modules at their defaults for the first test. Generate the case, inspect the boundary-condition file and complete a coarse mesh before increasing refinement.
+
+\subsubsection{Ride-height study}
+
+Remove the default ride-height module from \codeword{DEFAULT_MODULES}, define the ride-height points and run the base case setup first. The tool creates child cases and applies the calculated translations, pitch and roll. Check the transformation logs and verify that each child has the intended geometry before submitting the study.
+
+\subsubsection{Cornering case}
+
+Enable the cornering module and provide the turn radius, yaw direction and wheel or ground settings required by the case. Confirm that the relative velocity fields and SRF settings are present in the generated case. Force directions and post-processing variables must be interpreted in the rotating-frame context.
+
+\subsubsection{FAN and POR radiator case}
+
+Use a separate planar \codeword{FAN} disk and radiator \codeword{POR} region. Confirm that the fan surface is a single approximately planar disk, that its normal points toward the target geometry, and that the generated pressure-jump boundary condition matches the installed ESI OpenFOAM version. Dedicated FAN reporting is not currently implemented.
+
+\subsection{Verification and validation}
+
+Verification checks whether the numerical setup is solving the intended equations. Validation checks whether the result agrees with measurements or a trusted reference. At minimum, record the following for every case:
+\begin{itemize}
+    \item mesh cell count, quality statistics and refinement settings;
+    \item solver, OpenFOAM release, template name and caseSetup revision;
+    \item turbulence model, wall model and local \codeword{yPlus} distribution;
+    \item residual histories and force or moment histories;
+    \item time-step or pseudo-time settings for transient cases;
+    \item averaging start and end times or iterations; and
+    \item reference area, length, centre, velocity and coefficient directions.
+\end{itemize}
+
+Residual reduction alone is not a convergence criterion for external aerodynamics. Inspect the stability of drag, lift, moments and relevant component forces over the averaging interval. Also check continuity or mass imbalance and make sure the averaging window excludes initialization and startup transients.
+
+Use at least one mesh-sensitivity study and, for transient or hybrid calculations, a time-step or sampling-sensitivity study. Compare integrated forces, pressure distributions and important flow features rather than only residual values. For experimental comparison, document blockage, ground and wheel conditions, Reynolds number, reference quantities and uncertainty; otherwise an apparently large CFD error may be a difference in test definition.
+
+\subsection{Interpreting results}
+
+The coefficient summary and post-processing outputs should be interpreted together. Integrated coefficients can conceal local errors, so compare them with surface pressure, wall shear, wake structure and component-level forces. The pressure coefficient is conventionally defined as
+\begin{equation}
+    C_p = \frac{p-p_\infty}{\frac{1}{2}\rho U_\infty^2}.
+\end{equation}
+
+Use the wing-pressure extraction to compare $C_p$ against streamwise position at each selected spanwise plane. Confirm that the extracted CSV files correspond to the intended geometry and that missing sections have been reported rather than silently treated as zero pressure. For wall shear and force interpretation, inspect the local \codeword{yPlus} field and the chosen wall treatment.
+
+\subsection{Cluster and automation checklist}
+
+Before submitting a cluster job:
+\begin{enumerate}
+    \item Confirm that the selected cluster template loads the intended OpenFOAM release.
+    \item Check the requested core count against the decomposition settings.
+    \item Verify that geometry links and custom setup files are visible on compute nodes.
+    \item Confirm that the solver command, restart state and output directory are correct.
+    \item Enable the required sections in the case copy of \codeword{pvPostSetup} before post-processing.
+    \item Review the solver log and post-processing log after the job finishes.
+\end{enumerate}
+
+A failed job should be restarted only after identifying whether the cause was a numerical instability, an invalid dictionary, a missing file, a resource limit or an environment problem. Preserve the original log when making a restart.
+
+\subsection{Reproducibility and provenance}
+
+A case should be reproducible without relying on an individual's shell history. Store the input file, generated \codeword{fullCaseSetupDict}, selected template, mesh statistics, solver logs and post-processing configuration with the case record. Also record the caseSetup Git revision, OpenFOAM release, ParaView version, Python environment and any local template modifications.
+
+Do not overwrite repository defaults to customize one case. Copy the relevant template or post-processing file into a case-specific location and record the change. For a completed study, retain the exact geometry archive, ride-height table, cluster submission settings and post-processing command-line arguments.
+
+\subsection{Extending the framework}
+
+The framework can be extended with new setup modules, geometry prefixes, solver templates, function objects, ParaView variables and post-processing commands. New extensions should follow the existing template-driven pattern:
+\begin{enumerate}
+    \item define the input syntax and defaults;
+    \item add validation and a clear error message for invalid values;
+    \item write the generated dictionary without changing unrelated modules;
+    \item add a minimal example and document units and limitations; and
+    \item test both the generated text and a complete case using the target OpenFOAM release.
+\end{enumerate}
+
+A new turbulence or wall model must be mapped in the solver-selection dictionaries and supplied with compatible field templates, initial fields, boundary conditions and solver settings. A template file by itself does not make a model selectable. Custom models should be marked as version-dependent and validated with the installed ESI release.
+
+\subsection{Troubleshooting}
+
+\begin{itemize}
+    \item \textbf{Missing geometry:} check the reference directory, file extension, compression and symbolic-link targets. Confirm that compute nodes can resolve the same paths.
+    \item \textbf{Invalid module or option:} compare the spelling and case of the input key with the documented module. The error message lists valid choices for many selectors.
+    \item \textbf{Mesh failure:} inspect surface closure, normals, scale, refinement transitions, layer settings and mesh-quality output. Reduce the problem to one geometry or a coarse refinement when isolating the cause.
+    \item \textbf{Unexpected forces:} verify reference vectors, moving-ground and wheel motion, patch names, pressure reference and force-coefficient surfaces.
+    \item \textbf{Poor wall resolution:} inspect local \codeword{yPlus} rather than only a global average, then change the first-cell height or wall model consistently.
+    \item \textbf{Missing ParaView data:} run \codeword{pvPost.py} with \codeword{pvbatch}, verify that the requested fields were exported, and check that the selected variable exists in the custom dictionary.
+    \item \textbf{FAN failure:} verify disk planarity, normal direction, target geometry, pressure-rise units and the generated pressure-jump dictionary against the ESI release.
+    \item \textbf{WSL issue:} check Linux permissions, line endings, symbolic links, mounted-drive performance and that all commands resolve to WSL installations rather than Windows executables.
+\end{itemize}

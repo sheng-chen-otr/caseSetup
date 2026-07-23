@@ -56,6 +56,43 @@ Notice the prefix \codeword{ROTA}, it lets \codeword{caseSetup} know that this g
     \item \codeword{WH_AXIS} [[\codeword{float,m}]] [[\codeword{float,m}]] [[\codeword{float,m}]] - wheel axis of rotation from, using right hand rule with respect to the global coordinate system (\codeword{x} \codeword{y} \codeword{z}, \codeword{default})
     \item \codeword{WH_AXIS} [\codeword{bool}] - activate rotating wall or use no-slip condition (\codeword{true}, \codeword{false})
 \end{itemize}
+
+\subsection{Fan Pressure-Jump Condition}
+The prefix \codeword{FAN} defines a geometry-driven circular fan disk in a snappyHexMesh case. The disk is meshed as a baffle/face zone and is assigned the ESI OpenFOAM \codeword{fan} pressure-jump condition. This is intended for applications such as an electric fan mounted upstream of a radiator. It is independent of the \codeword{POR} radiator model: a radiator may be represented by a porous volume, while the fan is represented by a separate planar disk.
+
+The FAN geometry must be a single, approximately planar circular surface in an ASCII OBJ or STL file. It should not contain the fan frame, motor, blades, radiator, or other solids. The geometry file is supplied in the normal \codeword{[GEOMETRY]} section, using the \codeword{FAN-} prefix. FAN geometry is currently handled by the snappyHexMesh path; ANSA fan meshing is not enabled.
+
+For example, the following setup places a fan disk upstream of a porous radiator. With \codeword{default} values, the center and equivalent circular diameter are calculated from the disk, and the disk normal is oriented toward the target radiator geometry.
+
+\begin{lstlisting}
+    [GEOMETRY]
+    GEOM = body.obj.gz,1,8,5,1.1,high
+            POR-radiator.obj.gz,1,10,6,1.4,high
+            FAN-radiator-fan.obj.gz,1,10,0,1.0,high
+
+    [FAN-radiator-fan]
+    FAN_MODEL = fan
+    FAN_CENTER = default
+    FAN_DIRECTION = default
+    FAN_TARGET_GEOMETRY = POR-radiator
+    FAN_DIAMETER = default
+    FAN_PRESSURE_RISE = 250
+    SAMPLE_FAN = True
+\end{lstlisting}
+
+The FAN configuration block is exposed automatically the first time the geometry is encountered. The available settings are:
+\begin{itemize}
+    \item \codeword{FAN_MODEL} [\codeword{str}] - ESI fan model selector. Use \codeword{fan} (\codeword{pressureJump} is accepted as an alias).
+    \item \codeword{FAN_CENTER} [\codeword{float,m}] - disk center in global coordinates, or \codeword{default} to use the area-weighted surface centroid.
+    \item \codeword{FAN_DIRECTION} [\codeword{float}] - three-component direction vector, or \codeword{default} to orient the disk normal toward \codeword{FAN_TARGET_GEOMETRY}. Explicit direction takes precedence over the target geometry.
+    \item \codeword{FAN_TARGET_GEOMETRY} [\codeword{str}] - geometry name without its extension. Required when \codeword{FAN_DIRECTION = default}; for example, \codeword{POR-radiator}.
+    \item \codeword{FAN_DIAMETER} [\codeword{float,m}] - disk diameter, or \codeword{default} to calculate the equivalent circular diameter from surface area.
+    \item \codeword{FAN_PRESSURE_RISE} [\codeword{float,Pa}] - constant pressure jump applied by the ESI fan condition. The example applies a 250 Pa pressure rise. Pressure curves are not currently accepted by the \codeword{caseSetup} configuration; only one scalar value is supported.
+    \item \codeword{SAMPLE_FAN} [\codeword{bool}] - fan sampling switch retained in the setup metadata; FAN reporting is not yet implemented.
+\end{itemize}
+
+The generated pressure boundary uses the ESI syntax \codeword{type fan}, \codeword{patchType cyclic}, and a constant \codeword{jumpTable}. The pressure-rise sign follows the resolved FAN direction. If the fan accelerates flow in the opposite direction, provide an explicit \codeword{FAN_DIRECTION} or reverse the target geometry arrangement before running the case. Verify the generated boundary condition with the installed ESI OpenFOAM release (\codeword{of2206} or \codeword{of2606}) before production use.
+
 Using \codeword{default} option will trigger the automatic calculation but manual input of values is still possible. To speed up \codeword{caseSetup} it is recommended to copy the values output by the calculation in the termial and input them into the caseSetup if coordinates and axis values are not expected to change for subsequent runs.
 
 
