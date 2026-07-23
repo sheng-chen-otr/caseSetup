@@ -234,8 +234,12 @@ EOF
     if [[ "$DRY_RUN" -eq 0 ]]; then
         (
             set -e
+            # OpenFOAM's etc/bashrc references many vars before defining them and
+            # is not `set -u` safe, so disable nounset only while sourcing it.
+            set +u
             # shellcheck disable=SC1091
             source "$foamDir/etc/bashrc"
+            set -u
             log "  Platform: \${WM_OPTIONS:-unknown}"
             if [[ -x "$WM_THIRD_PARTY_DIR/Allwmake" ]]; then
                 ( cd "$WM_THIRD_PARTY_DIR" && ./Allwmake -j "$JOBS" -q ) 2>&1 | tee "$foamDir/log.ThirdParty.${prec}Int${LABEL_SIZE}"
