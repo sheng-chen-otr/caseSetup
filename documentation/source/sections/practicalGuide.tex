@@ -169,6 +169,78 @@ Before submitting a cluster job:
 
 A failed job should be restarted only after identifying whether the cause was a numerical instability, an invalid dictionary, a missing file, a resource limit or an environment problem. Preserve the original log when making a restart.
 
+\subsection{Customising the clusterDict}
+
+The execution scripts are not hand-written. For each case, \codeword{caseSetup.py} reads the \codeword{clusterDict} of the selected template from \codeword{setupTemplates/<template>/defaultCluster/slurm/clusterDict} and assembles the \codeword{meshingScript}, \codeword{solveScript}, \codeword{exportScript} and \codeword{postScript} files in the case directory. Editing the \codeword{clusterDict} is therefore the supported way to build a customised cluster or local workflow. The automated installer described earlier only rewrites specific paths inside these files; the structure below is what a user edits by hand.
+
+\subsubsection{Structure}
+
+A \codeword{clusterDict} is a single JSON object. Its top-level keys are the workflow stages, and each stage is itself an object whose values are shell-command fragments:
+\begin{lstlisting}
+{
+  "snappyHexMesh": {
+     "preamble":   "...clean logs, set CORES...",
+     "blockMesh":  "...; blockMesh >> log.blockMesh;",
+     "snappyHexMesh": "...; mpirun -np $CORES snappyHexMesh -parallel -overwrite >> log.snappyHexMesh;"
+  },
+  "solve":  { "preamble": "...", "solve": { "steady": "...", "transient": "..." } },
+  "export": { "export": "...", "exportEnsight": "..." },
+  "post":   { "forces": "...", "postPro": "..." }
+}
+\end{lstlisting}
+
+The stage keys map to the generated scripts as follows:
+\begin{itemize}
+    \item \codeword{snappyHexMesh} or \codeword{ansaMesh} builds \codeword{meshingScript}. The mesher is chosen from the case \codeword{TEMPLATE_TYPE}: an \codeword{ansa} template uses the \codeword{ansaMesh} block, otherwise the \codeword{snappyHexMesh} block is used.
+    \item \codeword{solve} builds \codeword{solveScript}.
+    \item \codeword{export} builds \codeword{exportScript}.
+    \item \codeword{post} builds \codeword{postScript}.
+\end{itemize}
+
+Within a stage, the command fragments are concatenated in the order they appear, separated by newlines, to form the script. The key names are labels for readability and ordering; only their order and contents matter. Because the fragments are joined verbatim, each fragment normally ends with a semicolon and typically begins with an error guard such as \codeword{if [ $? != 0 ]; then exit 1; fi;} so that a failure in one step stops the script.
+
+\subsubsection{Conditional and nested keys}
+
+A few keys inside the \codeword{solve} stage are selected by the case configuration rather than always emitted, and they use a nested object:
+\begin{itemize}
+    \item \codeword{solve.initialize} contains \codeword{initializePotential} and \codeword{initializeSteady}; the entry matching \codeword{SIM_INIT} is inserted, and initialization is skipped entirely for cornering cases.
+    \item \codeword{solve.solve} contains \codeword{steady} and \codeword{transient}; the entry matching \codeword{SIM_TYPE} is inserted.
+    \item \codeword{solve.topoSet} is inserted only when the case defines porous or MRF cell zones.
+    \item \codeword{solve.groundPatch} is inserted only when the case defines ground belt or plate patches.
+\end{itemize}
+
+Any other key in a stage is always included. Keep these reserved names and their nested structure when editing, otherwise the corresponding step will be omitted or a lookup will fail.
+
+\subsubsection{Environment and precision}
+
+The commands run in whatever environment the script establishes. The simple templates assume OpenFOAM is already sourced and refer to \codeword{$WM_PROJECT_DIR}; the installer can inject a \codeword{source} of the correct \codeword{etc/bashrc} into each stage. The OTR templates instead carry an explicit \codeword{precision} command at the start of each stage that sources OpenFOAM with a chosen precision. In both cases the meshing stage must run in double precision for \codeword{snappyHexMesh} robustness, while the solve stage may run in double or single precision. When writing a custom stage, source OpenFOAM the same way as the neighbouring commands in that template and keep meshing in double precision.
+
+\subsubsection{Adding a custom command}
+
+To add a step, insert a new key into the relevant stage. For example, to run \codeword{checkMesh} again and write a quality report immediately after meshing, add a key to the \codeword{snappyHexMesh} block after the existing \codeword{checkMesh} entry:
+\begin{lstlisting}
+"customReport":"if [ $? != 0 ]; then exit 1; fi; echo 'writing mesh report...'; mpirun -np $CORES checkMesh -parallel -writeAllFields >> log.checkMeshReport;"
+\end{lstlisting}
+
+To call an external script of your own after the solver finishes, add a key to the \codeword{solve} or \codeword{post} block. Reference the repository through the same path style used by the neighbouring commands so that the installer and the compute nodes resolve it consistently:
+\begin{lstlisting}
+"customPost":"echo 'running custom analysis...'; python3 /path/to/myAnalysis.py >> log.customPost;"
+\end{lstlisting}
+
+\subsubsection{Building a new template}
+
+For a substantially different workflow, copy an existing template directory rather than editing a shared one:
+\begin{lstlisting}
+cp -r setupTemplates/default setupTemplates/myWorkflow
+\end{lstlisting}
+
+Edit \codeword{setupTemplates/myWorkflow/defaultCluster/slurm/clusterDict} and select the template when creating the case. After editing, validate the JSON and inspect the generated scripts before submitting a job:
+\begin{lstlisting}
+python3 -m json.tool setupTemplates/myWorkflow/defaultCluster/slurm/clusterDict > /dev/null
+\end{lstlisting}
+
+The most common editing mistake is invalid JSON, usually a missing comma between keys, an unescaped double quote inside a command, or a trailing comma after the last key. Validate the file, generate a case, and read the resulting \codeword{meshingScript}, \codeword{solveScript}, \codeword{exportScript} and \codeword{postScript} to confirm the commands and their order before running anything on a cluster.
+
 \subsection{Reproducibility and provenance}
 
 A case should be reproducible without relying on an individual's shell history. Store the input file, generated \codeword{fullCaseSetupDict}, selected template, mesh statistics, solver logs and post-processing configuration with the case record. Also record the caseSetup Git revision, OpenFOAM release, ParaView version, Python environment and any local template modifications.
