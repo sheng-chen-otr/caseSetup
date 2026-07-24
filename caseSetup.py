@@ -289,9 +289,9 @@ def writeSnappy(geomDict,fullCaseSetupDict):
         snappyDict[sec] = []
         
     #setting up the geometries
-    geometryStrings = {'GEOM':'\tGEOM_NAME {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
-                       'FAN':'\tGEOM_NAME {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
-                       'POR':'\tGEOM_NAME {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
+    geometryStrings = {'GEOM':'\tGEOM_NAME.obj {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
+                       'FAN':'\tGEOM_NAME.obj {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
+                       'POR':'\tGEOM_NAME.obj {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'REF':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'REFX':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'MRFG':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
@@ -304,10 +304,10 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                                        },
                                'REF':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n',
                                }
-    refinementSurfaceStrings = {'GEOM': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); regions{#include"snappyRefinementDict"}}\n',
-                                'GEOMX': '\tGEOM_NAME {level (GEOMX_LEVEL_MIN GEOMX_LEVEL_MAX); regions{#include"snappyRefinementDict"}}\n',
-                                'POR': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; cellZone GEOM_NAME_INTERNAL; cellZoneInside insidePoint; insidePoint (POR_POINT);}\n',
-                                'FAN': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; faceType baffle;}\n',
+    refinementSurfaceStrings = {'GEOM': '\tGEOM_NAME.obj {level (GEOM_LEVEL GEOM_LEVEL); regions{#include"snappyRefinementDict"}}\n',
+                                'GEOMX': '\tGEOM_NAME.obj {level (GEOMX_LEVEL_MIN GEOMX_LEVEL_MAX); regions{#include"snappyRefinementDict"}}\n',
+                                'POR': '\tGEOM_NAME.obj {level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; cellZone GEOM_NAME_INTERNAL; cellZoneInside insidePoint; insidePoint (POR_POINT);}\n',
+                                'FAN': '\tGEOM_NAME.obj{level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; faceType baffle;}\n',
                                 'MRFG': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); faceZone toint-GEOM_NAME; cellZone fluid-GEOM_NAME; cellZoneInside insidePoint; insidePoint (MRF_POINT);}\n',
                                 
                                 }
