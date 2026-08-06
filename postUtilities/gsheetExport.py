@@ -93,7 +93,7 @@ def get_trial_number(case_name=None, case_path=None):
 
     raise ValueError(f"No numeric trial number found in case name: {case_name}")
 
-TARGET_COLUMNS = ["B","F", "G", "H", "M","N", "O", "P", "Q", "R", "S", "T", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO"]
+TARGET_COLUMNS = ["B","F", "G", "H", "M","N", "O", "P", "Q", "R", "S", "T", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AR", "AS", "AT", "AU", "AV", "AW", "AX", "AY"]
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CREDENTIALS_FILE = PROJECT_DIR / "credentials.json"
 
@@ -192,6 +192,16 @@ def main():
     fw_cl = ""
     rw_cd = ""
     rw_cl = ""
+    underbody_cd = ""
+    underbody_cl = ""
+    diff_cd = ""
+    diff_cl = ""
+    main_body_cd = ""
+    main_body_cl = ""
+    fr_wh_cd = ""
+    fr_wh_cl = ""
+    rr_wh_cd = ""
+    rr_wh_cl = ""
     for part in coeff_files:
         part_lower = part.lower()
         if part_lower.startswith("fw") and fw_cd == "":
@@ -202,7 +212,27 @@ def main():
             rw_data = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
             rw_cd = rw_data["cd"]
             rw_cl = rw_data["cl"]
-        if fw_cd != "" and rw_cd != "":
+        elif part_lower.startswith("underbody") and underbody_cd == "":
+            underbody_data = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
+            underbody_cd = underbody_data["cd"]
+            underbody_cl = underbody_data["cl"]
+        elif part_lower.startswith("diff") and diff_cd == "":
+            diff_data = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
+            diff_cd = diff_data["cd"]
+            diff_cl = diff_data["cl"]
+        elif part_lower.startswith(("trial", "main-body")) and main_body_cd == "":
+            main_body_data = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
+            main_body_cd = main_body_data["cd"]
+            main_body_cl = main_body_data["cl"]
+        elif "fr-wh-lhs" in part_lower and fr_wh_cd == "":
+            fr_wh_data = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
+            fr_wh_cd = fr_wh_data["cd"]
+            fr_wh_cl = fr_wh_data["cl"]
+        elif "rr-wh-lhs" in part_lower and rr_wh_cd == "":
+            rr_wh_data = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
+            rr_wh_cd = rr_wh_data["cd"]
+            rr_wh_cl = rr_wh_data["cl"]
+        if fw_cd != "" and rw_cd != "" and underbody_cd != "" and diff_cd != "" and main_body_cd != "" and fr_wh_cd != "" and rr_wh_cd != "":
             break
 
     data_to_write = [
@@ -230,6 +260,16 @@ def main():
         fw_cl,
         rw_cd,
         rw_cl,
+        underbody_cd,
+        underbody_cl,
+        diff_cd,
+        diff_cl,
+        main_body_cd,
+        main_body_cl,
+        fr_wh_cd,
+        fr_wh_cl,
+        rr_wh_cd,
+        rr_wh_cl,
     ]
 
     trial_number = get_trial_number()
