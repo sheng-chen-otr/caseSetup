@@ -40,6 +40,8 @@ def main():
                        help='Plot force coefficients')
     parser.add_argument('--wingPressure', action='store_true',
                        help='Plot Cp versus x from wing pressure intersection CSV files')
+    parser.add_argument('--wingPressureOverlayCases', nargs='*', default=[],
+                       help='Additional case names or paths to overlay on wing pressure plots')
     
     # Add force plotting specific arguments
     parser.add_argument('-p', '--plotData', default=['Cd','Cl','CoP'],
@@ -81,64 +83,115 @@ def main():
 
 
 def plotWingPressure(args, casePathDict, caseLoc):
-    """Plot Cp against x as scatter-only, one figure per y-station file."""
+    """Plot per-wing, per-y scatter overlays for pressure and profile coordinates."""
+    overlayCaseMap = resolveOverlayCaseMap(casePathDict, args.wingPressureOverlayCases, os.getcwd())
+    if not overlayCaseMap:
+        print('\tNo valid cases found for wing pressure plotting.')
+        return
+
+    colors = plt.get_cmap('tab10').colors
+    markers = ['o', 's', '^', 'D', 'v', 'P', 'X', '<', '>', '*']
+
     for case, caseInfo in casePathDict.items():
         casePath = caseInfo['path']
-        pressurePath = os.path.join(casePath, 'postProcessing', 'wingPressure')
-        if not os.path.isdir(pressurePath):
-            print('\tNo wing pressure directory found for %s, skipping.' % case)
+        outputDir = os.path.join(casePath, 'postProcessing', 'wingPressure')
+        if not os.path.isdir(outputDir):
+            print('\tNo wing pressure directory found for %s, skipping output location.' % case)
             continue
 
         for wingName in ('frontWing', 'rearWing'):
-            csvFiles = glob.glob(os.path.join(pressurePath,
-                                              '%s_CpMean_*.csv' % wingName))
-            if not csvFiles:
-                print('\tNo %s CpMean CSV files found for %s, skipping.' %
-                      (wingName, case))
+            caseWingFiles = {}
+            yTargets = set()
+            for idxCase, (caseLabel, thisCasePath) in enumerate(overlayCaseMap.items()):
+                csvFiles = glob.glob(os.path.join(thisCasePath,
+                                                  'postProcessing',
+                                                  'wingPressure',
+                                                  '%s_CpMean_*.csv' % wingName))
+                if not csvFiles:
+                    continue
+                fileMap = {}
+                for csvPath in csvFiles:
+                    yVal = wingPressureYValue(csvPath)
+                    yKey = format(float(yVal), '.8g')
+                    fileMap[yKey] = csvPath
+                    yTargets.add(float(yVal))
+                caseWingFiles[caseLabel] = {
+                    'path': thisCasePath,
+                    'index': idxCase,
+                    'files': fileMap,
+                }
+
+            if not caseWingFiles or not yTargets:
+                print('\tNo %s CpMean CSV files found for selected cases, skipping.' % wingName)
                 continue
 
-            csvFiles.sort(key=wingPressureYValue)
-            plotted = 0
-            for idx, csvPath in enumerate(csvFiles):
-                try:
-                    pressureData = pd.read_csv(csvPath)
-                    requiredColumns = {'x', 'CpMean'}
-                    if not requiredColumns.issubset(pressureData.columns):
-                        print('\tWARNING! %s does not contain x and CpMean columns; skipping.' %
-                              csvPath)
-                        continue
-                    pressureData = pressureData.dropna(subset=['x', 'CpMean'])
-                    pressureData = pressureData.sort_values('x')
-                    if pressureData.empty:
-                        continue
-                    yValue = pressureData['y'].mean() if 'y' in pressureData else wingPressureYValue(csvPath)
+            for yVal in sorted(yTargets):
+                yKey = format(float(yVal), '.8g')
+                fig, axes = plt.subplots(1, 2, figsize=[14, 6], frameon=True)
+                pressureAx, profileAx = axes
+                plottedPressure = 0
+                plottedProfile = 0
 
-                    fig, ax = plt.subplots(figsize=[10, 6], frameon=True)
-                    ax.scatter(pressureData['x'], pressureData['CpMean'],
-                               marker='.', s=18)
-                    ax.set_xlabel('x (m)')
-                    ax.set_ylabel('$C_p$')
-                    ax.set_title('%s - %s pressure distribution (y = %+.4g m)' %
-                                 (case, wingName, yValue))
-                    ax.grid(True, alpha=0.3)
-                    ax.invert_yaxis()
-                    fig.tight_layout()
+                for caseLabel, caseData in caseWingFiles.items():
+                    csvPath = caseData['files'].get(yKey)
+                    if csvPath is None:
+                        continue
+                    try:
+                        df = pd.read_csv(csvPath)
+                    except Exception as error:
+                        print('\tWARNING! Unable to read %s: %s' % (csvPath, error))
+                        continue
 
-                    yTag = format(float(yValue), '.8g')
-                    outputPath = os.path.join(
-                        
-                        '%s_CpMean_vs_x_y_%03d_%s.%s' %
-                        (wingName, idx, yTag, args.saveFormat)
-                    )
-                    fig.savefig(outputPath, dpi=300, bbox_inches='tight')
+                    color = colors[caseData['index'] % len(colors)]
+                    marker = markers[caseData['index'] % len(markers)]
+
+                    if {'x', 'CpMean'}.issubset(df.columns):
+                        pData = df.dropna(subset=['x', 'CpMean']).sort_values('x')
+                        if not pData.empty:
+                            pressureAx.scatter(pData['x'], pData['CpMean'], s=18,
+                                               marker=marker, color=color,
+                                               label=caseLabel, alpha=0.9)
+                            plottedPressure += 1
+
+                    if {'x', 'z'}.issubset(df.columns):
+                        profileData = df.dropna(subset=['x', 'z']).sort_values('x')
+                        if not profileData.empty:
+                            profileAx.scatter(profileData['x'], profileData['z'], s=18,
+                                              marker=marker, color=color,
+                                              label=caseLabel, alpha=0.9)
+                            plottedProfile += 1
+
+                if not plottedPressure and not plottedProfile:
                     plt.close(fig)
-                    print('\tWrote %s' % outputPath)
-                    plotted += 1
-                except Exception as error:
-                    print('\tWARNING! Unable to read %s: %s' % (csvPath, error))
+                    continue
 
-            if not plotted:
-                continue
+                pressureAx.set_xlabel('x (m)')
+                pressureAx.set_ylabel('$C_p$')
+                pressureAx.set_title('%s pressure (y = %+.4g m)' % (wingName, yVal))
+                pressureAx.grid(True, alpha=0.3)
+                pressureAx.invert_yaxis()
+
+                profileAx.set_xlabel('x (m)')
+                profileAx.set_ylabel('z (m)')
+                profileAx.set_title('%s profile (x-z points, y = %+.4g m)' % (wingName, yVal))
+                profileAx.grid(True, alpha=0.3)
+
+                if plottedPressure:
+                    pressureAx.legend(loc='best', fontsize=8)
+                if plottedProfile:
+                    profileAx.legend(loc='best', fontsize=8)
+
+                overlayTag = sanitizeOverlayTag(overlayCaseMap.keys())
+                outputPath = os.path.join(
+                    outputDir,
+                    '%s_overlay_%s_y_%s.%s' %
+                    (wingName, overlayTag, yKey, args.saveFormat)
+                )
+                fig.suptitle('%s wing overlays at y = %+.4g m' % (wingName, yVal), fontsize=11)
+                fig.tight_layout()
+                fig.savefig(outputPath, dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                print('\tWrote %s' % outputPath)
 
 
 def wingPressureYValue(csvPath):
@@ -148,6 +201,69 @@ def wingPressureYValue(csvPath):
         return float(stem.rsplit('_', 1)[-1])
     except ValueError:
         return 0.0
+
+
+def resolveOverlayCaseMap(primaryCasePathDict, overlayCaseArgs, cwd):
+    """Resolve case labels to case paths for primary and overlay wing-pressure plots."""
+    caseMap = OrderedDict()
+
+    for caseLabel, caseInfo in primaryCasePathDict.items():
+        casePath = os.path.abspath(caseInfo['path'])
+        if os.path.isdir(casePath):
+            caseMap[caseLabel] = casePath
+
+    if not overlayCaseArgs:
+        return caseMap
+
+    parentPath = os.path.dirname(os.path.abspath(cwd))
+    for token in overlayCaseArgs:
+        tokenPath = os.path.expanduser(token)
+        candidates = []
+        if os.path.isabs(tokenPath):
+            candidates.append(tokenPath)
+        else:
+            candidates.append(os.path.abspath(tokenPath))
+            candidates.append(os.path.abspath(os.path.join(parentPath, tokenPath)))
+
+        resolved = None
+        for candidate in candidates:
+            if os.path.isdir(candidate):
+                resolved = candidate
+                break
+
+        if resolved is None:
+            print('\tWARNING! Could not resolve overlay case %s; skipping.' % token)
+            continue
+
+        duplicate = False
+        for existingPath in caseMap.values():
+            if os.path.abspath(existingPath) == os.path.abspath(resolved):
+                duplicate = True
+                break
+        if duplicate:
+            continue
+
+        overlayLabel = os.path.basename(os.path.abspath(resolved))
+        label = overlayLabel
+        counter = 2
+        while label in caseMap:
+            label = '%s_%d' % (overlayLabel, counter)
+            counter += 1
+        caseMap[label] = resolved
+
+    return caseMap
+
+
+def sanitizeOverlayTag(caseLabels):
+    """Create a compact filename-safe tag from plotted case labels."""
+    labels = list(caseLabels)
+    if not labels:
+        return 'none'
+    if len(labels) == 1:
+        base = labels[0]
+    else:
+        base = '%s_plus_%d' % (labels[0], len(labels) - 1)
+    return re.sub(r'[^A-Za-z0-9_\-\.]+', '_', base)
 
 
 def isCaseComplete(casePath):
