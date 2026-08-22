@@ -81,7 +81,7 @@ def main():
 
 
 def plotWingPressure(args, casePathDict, caseLoc):
-    """Plot Cp against x for every selected case and wing pressure CSV set."""
+    """Plot Cp against x as scatter-only, one figure per y-station CSV."""
     for case, caseInfo in casePathDict.items():
         casePath = caseInfo['path']
         pressurePath = os.path.join(casePath, 'postProcessing', 'wingPressure')
@@ -98,8 +98,6 @@ def plotWingPressure(args, casePathDict, caseLoc):
                 continue
 
             csvFiles.sort(key=wingPressureYValue)
-            fig, ax = plt.subplots(figsize=[10, 6], frameon=True)
-            plotted = 0
             for csvPath in csvFiles:
                 try:
                     pressureData = pd.read_csv(csvPath)
@@ -112,32 +110,29 @@ def plotWingPressure(args, casePathDict, caseLoc):
                     pressureData = pressureData.sort_values('x')
                     if pressureData.empty:
                         continue
+
                     yValue = pressureData['y'].mean() if 'y' in pressureData else wingPressureYValue(csvPath)
-                    ax.plot(pressureData['x'], pressureData['CpMean'],
-                            marker='.', linewidth=1.0, markersize=3,
-                            label='y = %+.4g m' % yValue)
-                    plotted += 1
+                    fig, ax = plt.subplots(figsize=[10, 6], frameon=True)
+                    ax.scatter(pressureData['x'], pressureData['CpMean'],
+                               marker='.', s=18)
+                    ax.set_xlabel('x (m)')
+                    ax.set_ylabel('$C_p$')
+                    ax.set_title('%s - %s pressure distribution (y = %+.4g m)' %
+                                 (case, wingName, yValue))
+                    ax.grid(True, alpha=0.3)
+                    ax.invert_yaxis()
+                    fig.tight_layout()
+
+                    outputPath = os.path.join(
+                        pressurePath,
+                        '%s_CpMean_vs_x_y_%s.%s' %
+                        (wingName, format(float(yValue), '.6g'), args.saveFormat)
+                    )
+                    fig.savefig(outputPath, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                    print('\tWrote %s' % outputPath)
                 except Exception as error:
                     print('\tWARNING! Unable to read %s: %s' % (csvPath, error))
-
-            if not plotted:
-                plt.close(fig)
-                continue
-
-            ax.set_xlabel('x (m)')
-            ax.set_ylabel('$C_p$')
-            ax.set_title('%s - %s pressure distribution' % (case, wingName))
-            ax.grid(True, alpha=0.3)
-            ax.invert_yaxis()
-            ax.legend(loc='best', fontsize=8)
-            fig.tight_layout()
-
-            outputPath = os.path.join(pressurePath,
-                                      '%s_CpMean_vs_x.%s' %
-                                      (wingName, args.saveFormat))
-            fig.savefig(outputPath, dpi=300, bbox_inches='tight')
-            plt.close(fig)
-            print('\tWrote %s' % outputPath)
 
 
 def wingPressureYValue(csvPath):
