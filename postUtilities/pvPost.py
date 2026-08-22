@@ -527,9 +527,46 @@ def normalizeWingPressureCsv(filePath, variables, yValue):
     xColumn = findColumn(pointAliases['x'])
     yColumn = findColumn(pointAliases['y'])
     zColumn = findColumn(pointAliases['z'])
-    validVariables = [variable for variable in variables if variable in rawData.columns]
-    if xColumn is None or not validVariables:
+    if xColumn is None:
         return 0
+
+    def extractVariableSeries(variableName):
+        # Scalar column exists directly.
+        if variableName in rawData.columns:
+            return pd.to_numeric(rawData[variableName], errors='coerce')
+
+        # Some writers export vector components as Name:0/1/2 or Name_0/1/2.
+        componentColumns = []
+        for idx in range(3):
+            for candidate in (
+                '%s:%d' % (variableName, idx),
+                '%s_%d' % (variableName, idx),
+                '%s %d' % (variableName, idx),
+            ):
+                if candidate in rawData.columns:
+                    componentColumns.append(candidate)
+                    break
+
+        # Alternate naming style with axis letters.
+        if not componentColumns:
+            for axis in ('X', 'Y', 'Z'):
+                for candidate in (
+                    '%s_%s' % (variableName, axis),
+                    '%s%s' % (variableName, axis),
+                    '%s:%s' % (variableName, axis),
+                ):
+                    if candidate in rawData.columns:
+                        componentColumns.append(candidate)
+                        break
+
+        if componentColumns:
+            compArrays = [pd.to_numeric(rawData[col], errors='coerce') for col in componentColumns]
+            sqSum = compArrays[0] * 0.0
+            for comp in compArrays:
+                sqSum = sqSum + comp.pow(2)
+            return np.sqrt(sqSum)
+
+        return None
 
     exportData = pd.DataFrame()
     exportData['x'] = pd.to_numeric(rawData[xColumn], errors='coerce')
@@ -541,8 +578,15 @@ def normalizeWingPressureCsv(filePath, variables, yValue):
         exportData['z'] = np.nan
     else:
         exportData['z'] = pd.to_numeric(rawData[zColumn], errors='coerce')
-    for variable in validVariables:
-        exportData[variable] = pd.to_numeric(rawData[variable], errors='coerce')
+    validVariables = []
+    for variable in variables:
+        series = extractVariableSeries(variable)
+        if series is not None:
+            exportData[variable] = series
+            validVariables.append(variable)
+
+    if not validVariables:
+        return 0
 
     exportData = exportData.dropna(subset=['x'])
     exportData = exportData.dropna(subset=validVariables, how='all').sort_values('x')

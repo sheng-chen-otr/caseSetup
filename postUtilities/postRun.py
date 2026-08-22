@@ -42,7 +42,7 @@ def main():
                        help='Plot variable versus x from wing intersection CSV files')
     parser.add_argument('--wingCases', nargs='*', default=[],
                        help='Additional case names or paths to overlay on wing plots')
-    parser.add_argument('--wingVariables', nargs='*', default=[],
+    parser.add_argument('--wingVariables', nargs='*', default=[],   
                        help='Wing variable columns to plot (default: all available)')
     
     # Add force plotting specific arguments
