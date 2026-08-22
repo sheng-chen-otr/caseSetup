@@ -34,7 +34,7 @@ ISO_VALUES = default
 
 [FRONT_WING_PRESSURE]
 ENABLE = False
-PATCH_PATTERN = frontWing.*
+PATCH_PATTERN = .*fw.*
 NORMAL = default
 Y_RANGE = default
 N_PLANES = 11
@@ -43,7 +43,7 @@ OUTPUT_DIR = postProcessing/wingPressure
 
 [REAR_WING_PRESSURE]
 ENABLE = False
-PATCH_PATTERN = rearWing.*
+PATCH_PATTERN = .*rw.*
 NORMAL = default
 Y_RANGE = default
 N_PLANES = 11
