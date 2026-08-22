@@ -14,8 +14,6 @@ from estimateStatisticalError import *
 
 #import paraview modules
 from paraview.simple import *
-from paraview import servermanager
-from paraview.numpy_support import vtk_to_numpy
 
 
 parser = argparse.ArgumentParser(
@@ -339,22 +337,35 @@ def generateWingPressureCSVs(source, selections, pvPostSetupDict, varDict):
 
         outputDir = setup.get('OUTPUT_DIR', 'postProcessing/wingPressure').strip()
         os.makedirs(outputDir, exist_ok=True)
-        for planeIndex, yValue in enumerate(yValues):
-            plane = Slice(Input=calculator, SliceType='Plane')
-            plane.SliceType.Normal = normal
-            plane.SliceType.Origin = [float(CREF[0]), float(yValue), float(CREF[2])]
-            plane.Triangulatetheslice = 0
-            plane.UpdatePipeline()
+        plotOnIntersectionCurves = globals().get('PlotOnIntersectionCurves')
+        if plotOnIntersectionCurves is None:
+            sys.exit('ERROR! PlotOnIntersectionCurves filter is not available in this ParaView build.')
 
-            fetched = servermanager.Fetch(plane)
-            rows = wingIntersectionRows(fetched, variable)
+        for yValue in yValues:
+            profile = plotOnIntersectionCurves(Input=calculator)
+            setIntersectionPlane(profile, normal,
+                                 [float(CREF[0]), float(yValue), float(CREF[2])])
+            profile.UpdatePipeline()
+
             fileName = '%s_%s_%s.csv' % (wingName, variable, format(float(yValue), '.6g'))
             filePath = os.path.join(outputDir, fileName)
-            pd.DataFrame(rows, columns=['x', 'y', 'z', variable]).to_csv(filePath, index=False)
+            SaveData(filePath, proxy=profile)
+
+            rows = normalizeWingPressureCsv(filePath, variable, yValue)
+            if rows == 0:
+                print('\t\tWARNING! %s did not contain %s data at y=%+.4g; removing %s' %
+                      (wingName, variable, yValue, filePath))
+                try:
+                    os.remove(filePath)
+                except OSError:
+                    pass
+                Delete(profile)
+                continue
+
             print('\t\tWrote %s wing pressure samples: %s (%d points)' %
-                  (wingName, filePath, len(rows)))
+                  (wingName, filePath, rows))
             generated += 1
-            Delete(plane)
+            Delete(profile)
 
         Delete(calculator)
         Delete(wingSurface)
@@ -420,19 +431,80 @@ def parseWingPlaneLocations(yRange, nPlanes):
     return np.linspace(yMin, yMax, count)
 
 
-def wingIntersectionRows(polyData, variable):
-    """Extract point coordinates and a calculated pressure array from VTK output."""
-    if polyData is None or polyData.GetNumberOfPoints() == 0:
-        return []
-    pointData = polyData.GetPointData()
-    array = pointData.GetArray(variable)
-    if array is None:
-        return []
-    points = vtk_to_numpy(polyData.GetPoints().GetData())
-    values = vtk_to_numpy(array)
-    if values.ndim > 1:
-        values = values[:, 0]
-    return np.column_stack((points, values)).tolist()
+def setIntersectionPlane(profileProxy, normal, origin):
+    """Set plane orientation/origin for PlotOnIntersectionCurves across PV variants."""
+    applied = False
+
+    try:
+        profileProxy.SliceType.Normal = list(normal)
+        profileProxy.SliceType.Origin = list(origin)
+        applied = True
+    except Exception:
+        pass
+
+    # Property names can differ between ParaView versions; try common alternates.
+    for propName, value in (
+        ('Normal', list(normal)),
+        ('PlaneNormal', list(normal)),
+        ('Origin', list(origin)),
+        ('PlaneOrigin', list(origin)),
+    ):
+        try:
+            setattr(profileProxy, propName, value)
+            applied = True
+        except Exception:
+            pass
+
+    if not applied:
+        print('\t\tWARNING! Could not explicitly set PlotOnIntersectionCurves plane properties.')
+
+
+def normalizeWingPressureCsv(filePath, variable, yValue):
+    """Normalize intersection CSV headers to x,y,z,<variable> for downstream plots."""
+    try:
+        rawData = pd.read_csv(filePath)
+    except Exception:
+        return 0
+
+    if rawData.empty:
+        return 0
+
+    pointAliases = {
+        'x': ('x', 'Points:0', 'Points_0', 'Point X'),
+        'y': ('y', 'Points:1', 'Points_1', 'Point Y'),
+        'z': ('z', 'Points:2', 'Points_2', 'Point Z'),
+    }
+
+    def findColumn(options):
+        for option in options:
+            if option in rawData.columns:
+                return option
+        return None
+
+    xColumn = findColumn(pointAliases['x'])
+    yColumn = findColumn(pointAliases['y'])
+    zColumn = findColumn(pointAliases['z'])
+    if xColumn is None or variable not in rawData.columns:
+        return 0
+
+    exportData = pd.DataFrame()
+    exportData['x'] = pd.to_numeric(rawData[xColumn], errors='coerce')
+    if yColumn is None:
+        exportData['y'] = float(yValue)
+    else:
+        exportData['y'] = pd.to_numeric(rawData[yColumn], errors='coerce').fillna(float(yValue))
+    if zColumn is None:
+        exportData['z'] = np.nan
+    else:
+        exportData['z'] = pd.to_numeric(rawData[zColumn], errors='coerce')
+    exportData[variable] = pd.to_numeric(rawData[variable], errors='coerce')
+
+    exportData = exportData.dropna(subset=['x', variable]).sort_values('x')
+    if exportData.empty:
+        return 0
+
+    exportData.to_csv(filePath, index=False)
+    return len(exportData)
 
 
 def getVariableDicts(variablePaths, viewsPath):
