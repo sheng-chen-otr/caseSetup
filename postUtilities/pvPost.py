@@ -455,11 +455,9 @@ def parseWingVariables(setup, varDict):
                 cleaned = cleaned.split(commentMarker, 1)[0]
         cleaned = cleaned.replace('[', ' ').replace(']', ' ')
         cleaned = cleaned.strip().strip('"').strip("'")
-        tokens = [
-            token.strip().strip('"').strip("'")
-            for token in re.split(r'[\s,]+', cleaned)
-            if token.strip()
-        ]
+        # Extract variable-like identifiers directly so unusual separators (e.g. full-width
+        # commas) still split correctly.
+        tokens = re.findall(r'[A-Za-z_][A-Za-z0-9_]*', cleaned)
     else:
         tokens = [setup.get('VARIABLE', 'CpMean').strip()]
 
