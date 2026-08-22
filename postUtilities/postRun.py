@@ -450,20 +450,19 @@ def readChildSummaryCsv(summaryPath):
     return dict(zip(keys, vals))
 
 
-def roundSummaryForceValues(summaryDf, decimals=3):
-    """Round force/coefficient summary fields to a fixed decimal precision."""
+def formatSummaryNumericValues(summaryDf, decimals=3):
+    """Format all numeric summary fields to a fixed decimal precision."""
     if summaryDf.empty:
         return summaryDf
 
-    baseForceCols = {'Cd', 'Cl', 'Cl/Cd', '%Front', 'Cd CI', 'Cl CI'}
     rowIdx = summaryDf.index[0]
     for col in summaryDf.columns:
-        isPartForce = col.endswith(' CL') or col.endswith(' CD')
-        if (col in baseForceCols) or isPartForce:
-            try:
-                summaryDf.at[rowIdx, col] = round(float(summaryDf.at[rowIdx, col]), decimals)
-            except Exception:
-                pass
+        try:
+            numericValue = float(summaryDf.at[rowIdx, col])
+            if np.isfinite(numericValue):
+                summaryDf.at[rowIdx, col] = ('%%.%df' % decimals) % numericValue
+        except Exception:
+            pass
     return summaryDf
 
 
@@ -545,7 +544,7 @@ def generate_summary():
 
         summary = pd.DataFrame(columns=rowNames)
         summary.loc[-1] = data
-        summary = roundSummaryForceValues(summary, decimals=3)
+        summary = formatSummaryNumericValues(summary, decimals=3)
         print("\n\n")
         for col in summary.columns:
             print('{:>100s}{:>30s}'.format(col, str(summary[col].values[0])))
@@ -592,7 +591,7 @@ def generate_summary():
 
     summary = pd.DataFrame(columns=rowNames)
     summary.loc[-1] = data
-    summary = roundSummaryForceValues(summary, decimals=3)
+    summary = formatSummaryNumericValues(summary, decimals=3)
     print("\n\n")
     for col in summary.columns:
         print('{:>100s}{:>30s}'.format(col, str(summary[col].values[0])))
