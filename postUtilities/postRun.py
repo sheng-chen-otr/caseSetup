@@ -175,6 +175,7 @@ def plotWingPressure(args, casePathDict, caseLoc):
                 profileAx.set_ylabel('z (m)')
                 profileAx.set_title('%s profile (x-z points, y = %+.4g m)' % (wingName, yVal))
                 profileAx.grid(True, alpha=0.3)
+                profileAx.set_aspect('equal', adjustable='box')
 
                 if plottedPressure:
                     pressureAx.legend(loc='best', fontsize=8)
