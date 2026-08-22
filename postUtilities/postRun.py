@@ -505,7 +505,7 @@ def generate_summary():
         meanNumeric = numericFrame.mean(axis=0, skipna=True)
         first = childRows[0]
 
-        rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
+        rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI','Cl(f)','Cl(r)','Cs(f)','Cs(r)']
         data = [
             job,
             parentCaseName,
@@ -530,6 +530,10 @@ def generate_summary():
             meanNumeric.get('%Front', np.nan),
             meanNumeric.get('Cd CI', np.nan),
             meanNumeric.get('Cl CI', np.nan),
+            meanNumeric.get('Cl(f)', meanNumeric.get('clf', np.nan)),
+            meanNumeric.get('Cl(r)', meanNumeric.get('clr', np.nan)),
+            meanNumeric.get('Cs(f)', meanNumeric.get('csf', np.nan)),
+            meanNumeric.get('Cs(r)', meanNumeric.get('csr', np.nan)),
         ]
 
         baseSet = set(rowNames)
@@ -566,8 +570,8 @@ def generate_summary():
     runDate, runTime, version, solver = getOfVersion(casePath)
     refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
 
-    rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
-    data = [job, case, solver, version, runDate, runTime, numCells, mesher, sym.lower(), refArea, avgData['endTime'], simType.lower(), movingGround, rotatingWheels, turbModel, inletMag, yaw, avgData['cd'], avgData['cl'], avgData['cl/cd'], avgData['cop'], avgData['cd_ci'], avgData['cl_ci']]
+    rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI','Cl(f)','Cl(r)','Cs(f)','Cs(r)']
+    data = [job, case, solver, version, runDate, runTime, numCells, mesher, sym.lower(), refArea, avgData['endTime'], simType.lower(), movingGround, rotatingWheels, turbModel, inletMag, yaw, avgData['cd'], avgData['cl'], avgData['cl/cd'], avgData['cop'], avgData['cd_ci'], avgData['cl_ci'], avgData.get('clf', np.nan), avgData.get('clr', np.nan), avgData.get('csf', np.nan), avgData.get('csr', np.nan)]
 
     corneringInfo = getCorneringInfo(fullCaseSetupDict, casePath, case)
     for label, value in corneringInfo.items():
