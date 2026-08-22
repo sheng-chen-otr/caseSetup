@@ -127,7 +127,7 @@ def plotWingPressure(args, casePathDict, caseLoc):
 
             for yVal in sorted(yTargets):
                 yKey = format(float(yVal), '.8g')
-                fig, axes = plt.subplots(1, 2, figsize=[14, 6], frameon=True)
+                fig, axes = plt.subplots(2, 1, figsize=[14, 6], frameon=True)
                 pressureAx, profileAx = axes
                 plottedPressure = 0
                 plottedProfile = 0
