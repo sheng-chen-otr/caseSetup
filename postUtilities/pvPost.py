@@ -306,7 +306,7 @@ def generateWingPressureCSVs(source, selections, pvPostSetupDict, varDict):
         if setup.get('ENABLE', 'False').strip().lower() != 'true':
             continue
 
-        pattern = setup.get('PATCH_PATTERN', '%s.*' % wingName).strip()
+        pattern = setup.get('PATCH_PATTERN', '%s' % wingName).strip()
         selectors = selectWingSelectors(selections, pattern)
         if not selectors:
             print('\n\tWARNING! No %s patches matched PATCH_PATTERN=%s; skipping.\n' %
