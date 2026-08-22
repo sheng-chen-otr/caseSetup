@@ -356,7 +356,7 @@ def selectWingPressureVariables(requestedVariables, availableVariables, wingName
 def isCaseComplete(casePath):
     #a case is done when the solver wrote a standalone "End" line in its log. more robust
     #than comparing latest time vs endTime (residualControl can stop steady early)
-    for logName in ('log.simpleFoam', 'log.pisoFoam'):
+    for logName in ('log.simpleFoam', 'log.pisoFoam', 'log.SRFSimpleFoam', 'log.SRFPimpleFoam'):
         logPath = os.path.join(casePath, logName)
         if not os.path.isfile(logPath):
             continue
@@ -422,165 +422,163 @@ def getCorneringInfo(fullCaseSetupDict, casePath, case):
     return info
 
 
+def discoverRideHeightChildCases(parentPath, parentCaseName):
+    """Return child case directory names matching parentCaseName_# pattern."""
+    pattern = re.compile(r'^%s_\d+$' % re.escape(parentCaseName))
+    children = []
+    try:
+        for entry in os.listdir(parentPath):
+            if not pattern.match(entry):
+                continue
+            if os.path.isdir(os.path.join(parentPath, entry)):
+                children.append(entry)
+    except Exception:
+        return []
+    return sorted(children)
+
+
+def readChildSummaryCsv(summaryPath):
+    """Read summary.csv written as key,value rows and return a dict."""
+    try:
+        table = pd.read_csv(summaryPath, header=None)
+    except Exception:
+        return None
+    if table.shape[1] < 2:
+        return None
+    keys = table.iloc[:, 0].astype(str).str.strip()
+    vals = table.iloc[:, 1]
+    return dict(zip(keys, vals))
+
+
 def generate_summary():
-        
-    caseSetupPath="%s/fullCaseSetupDict" % (casePath)
+    caseSetupPath = "%s/fullCaseSetupDict" % (casePath)
     fullCaseSetupDict = configparser.ConfigParser()
     fullCaseSetupDict.optionxform = str
     fullCaseSetupDict.read_file(open(caseSetupPath))
-    configSections = fullCaseSetupDict.sections()
-    rideHeightSetup = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RIDE_HEIGHT']
-   
 
-    if rideHeightSetup.lower() == 'true' and not '_' in os.path.basename(os.getcwd()):
-        print('Detected ride height map, averaging map values!')
-        runPoints = fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RH_POINTS']
-        caseName = os.path.basename(os.getcwd())
-        rhCases = []
-        #rhAvgData = pd.DataFrame(columns=['CD','CL','CLF','CLR','CSF','CSR','CI-CD','CI-CL'])
-        rhAvgData = pd.DataFrame()
-        for point in runPoints:
-            if point == ' ':
+    parentCaseName = os.path.basename(os.getcwd())
+    childCases = discoverRideHeightChildCases(os.getcwd(), parentCaseName)
+
+    if len(childCases) > 0:
+        print('Detected ride height map by child directories, averaging child summaries!')
+        childRows = []
+        for child in childCases:
+            childPath = os.path.join(os.getcwd(), child)
+            if not isCaseComplete(childPath):
+                print('\tWARNING! Child case %s is incomplete, skipping.' % child)
                 continue
-            rideHeightDir = "%s_%s" % (caseName,point)
-            if not os.path.isdir(rideHeightDir):
-                print('\tWARNING! Ride height point %s not found (%s), skipping from average.' % (point, rideHeightDir))
+
+            summaryPath = os.path.join(childPath, 'summary.csv')
+            if not os.path.isfile(summaryPath):
+                print('\tWARNING! Child case %s missing summary.csv, skipping.' % child)
                 continue
-            if not isCaseComplete(os.path.join(os.getcwd(), rideHeightDir)):
-                print('\tWARNING! Ride height point %s (%s) is not complete (no "End" in solve log), skipping from average.' % (point, rideHeightDir))
+
+            summaryDict = readChildSummaryCsv(summaryPath)
+            if not summaryDict:
+                print('\tWARNING! Child case %s has unreadable summary.csv, skipping.' % child)
                 continue
-            rhCases.append(rideHeightDir)
-        if len(rhCases) < 1:
-            print('\tNo complete ride height points to average; skipping parent summary.')
+
+            childRows.append(summaryDict)
+
+        if len(childRows) < 1:
+            print('\tNo valid child summaries found; skipping parent summary.')
             return
-        porousDict = {}
-        partsDict = {}
-        for case in rhCases:
-            rhPath = os.path.join(os.getcwd(),case)
-            try:
-                coeffFiles = getCoeffPaths(rhPath)
-                for part in coeffFiles:
-                   
-                    if part != 'all':
-                        partAverage,partAverageArray = averageCoeffs(fullCaseSetupDict,case,part,coeffFiles)
-                        partAverage = pd.DataFrame([partAverage])
-                        partsDict[case] = {} #prepare to collect the forces for parts
-                        partsDict[case][part] = partAverage
-                avgData,averagedArray = averageCoeffs(fullCaseSetupDict,case,'all',coeffFiles)
-                numCells,mesher,sym = cellCount(fullCaseSetupDict,os.getcwd(),case)
-                inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,os.getcwd(),case)
-                runDate,runTime,version,solver = getOfVersion(rhPath)
-                refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
-                caseAvgData = pd.DataFrame([avgData])
-                #rhAvgData = pd.concat([rhAvgData,averagedArray],axis=0)
-                rhAvgData = pd.concat([rhAvgData,caseAvgData],axis=0)
-            except Exception as E:
-                print('\t\tUnable to average: %s' % (case))
-                #print(E)
-            
-            try:
-                porousData = getPorousData(path,case)
-            except Exception as e:
-                print('\tUnable to get porous media data, skipping...')
-                print(e)
-            if len(porousData.keys()) < 1:
-                porousDict = {}
-            else:
-                porousDict[case] = porousData
-        #average all the part data
-        avgPartDict = {}
-        for part in partsDict[list(partsDict.keys())[0]].keys():
-            avgPartDict[part] = pd.concat([partsDict[case][part] for case in partsDict.keys()]).mean(axis=0).round(3)
-           
-        
-        
 
-        
-        rhMeans = rhAvgData.mean(axis=0).round(3)
-        #average all the porous media data
-        if len(porousDict.keys()) < 1:
-            print('\t\tNo porous data to average!')
-            avgPorous = None
-        else:
-            #get the names of all the porous media data
-            porousKeys = porousDict[porousDict.keys()[0]].keys()
-            porousArray = pd.DataFrame(columns=porousKeys)
-            for case in porousDict.keys():
-                casePorousArray = pd.DataFrame.from_dict(porousDict[case])
-                porousArray = pd.concat([porousArray,casePorousArray])
-            avgPorous = porousArray.mean(axis=0).round(3)
+        summaryFrame = pd.DataFrame(childRows)
+        numericFrame = summaryFrame.apply(pd.to_numeric, errors='coerce')
+        meanNumeric = numericFrame.mean(axis=0, skipna=True)
+        first = childRows[0]
 
-        #default datas
         rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
-        data = [job,caseName,solver,version,'N/A','N/A','N/A',mesher,sym.lower(),refArea,'N/A',simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,rhMeans['cd'],rhMeans['cl'],rhMeans['cl/cd'],rhMeans['cop'],rhMeans['cd_ci'],rhMeans['cl_ci']]
-        if len(avgPartDict.keys()) > 0:
-            for part in avgPartDict.keys():
-                partVarDict = {'CL':'cl',
-                               'CD':'cd'}
-                
-                for varkey in partVarDict.keys():
-                    rowNames.append(part + ' ' + varkey)
-                    data.append(avgPartDict[part][partVarDict[varkey]])
-        if avgPorous != None:
-            for col in avgPorous.index:
-                rowNames.append(col)
-            for val in avgPorous:
-                data.append(val)
+        data = [
+            job,
+            parentCaseName,
+            first.get('Solver', 'N/A'),
+            first.get('Version', 'N/A'),
+            'N/A',
+            'N/A',
+            'N/A',
+            first.get('Mesher', 'N/A'),
+            str(first.get('Symmetry', 'N/A')).lower(),
+            meanNumeric.get('Ref. Area (m^2)', np.nan),
+            meanNumeric.get('Iterations', np.nan),
+            str(first.get('Simulation Type', 'N/A')).lower(),
+            first.get('Moving Ground', 'N/A'),
+            first.get('Rotating Wheels', 'N/A'),
+            first.get('Turbulence Model', 'N/A'),
+            meanNumeric.get('Velocity', np.nan),
+            meanNumeric.get('Yaw', np.nan),
+            meanNumeric.get('Cd', np.nan),
+            meanNumeric.get('Cl', np.nan),
+            meanNumeric.get('Cl/Cd', np.nan),
+            meanNumeric.get('%Front', np.nan),
+            meanNumeric.get('Cd CI', np.nan),
+            meanNumeric.get('Cl CI', np.nan),
+        ]
 
-        summary = pd.DataFrame(columns=rowNames)
-        summary.loc[-1] = data
-        print("\n\n")
-        for col in summary.columns:
-            print('{:>100s}{:>30s}'.format(col,str(summary[col].values[0])))
-            
-        summary = summary.transpose()
-        summary.to_csv("%s/summary.csv"% (casePath),header=False)
-                
-    else:
-        case = os.path.basename(casePath)
-        coeffFiles = getCoeffPaths(casePath)
-        partsDict = {}
-        for part in coeffFiles:
-            if part != 'all':
-                partsDict[part],avgDataArray = averageCoeffs(fullCaseSetupDict,case,part,coeffFiles)
-        avgData,allDataArray = averageCoeffs(fullCaseSetupDict,case,'all',coeffFiles)
-        
-        numCells,mesher,sym = cellCount(fullCaseSetupDict,casePath,case)
-        inletMag,lastTime,yaw,movingGround,rotatingWheels,simType,turbModel = bcParser(fullCaseSetupDict,path,case)
-        runDate,runTime,version,solver = getOfVersion(casePath)
-        refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
-    
-        #default datas
-        rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
-        data = [job,case,solver,version,runDate,runTime,numCells,mesher,sym.lower(),refArea,avgData['endTime'],simType.lower(),movingGround,rotatingWheels,turbModel,inletMag,yaw,avgData['cd'],avgData['cl'],avgData['cl/cd'],avgData['cop'],avgData['cd_ci'],avgData['cl_ci']]
-        #cornering + per-corner ride-height / steer descriptors for this case
-        corneringInfo = getCorneringInfo(fullCaseSetupDict, casePath, case)
-        for label, value in corneringInfo.items():
-            rowNames.append(label)
+        baseSet = set(rowNames)
+        for column in meanNumeric.index:
+            if column in baseSet:
+                continue
+            value = meanNumeric[column]
+            if pd.isna(value):
+                continue
+            rowNames.append(column)
             data.append(value)
-        for part in partsDict.keys():
-            partVarDict = {'CL':'cl',
-                           'CD':'cd'}
-            
-            for varkey in partVarDict.keys():
-                rowNames.append(part + ' ' + varkey)
-                data.append(partsDict[part][partVarDict[varkey]])
-        try:
-            porousData = getPorousData(path,case)
-            #adding porous data
-            for key in porousData.keys():
-                rowNames.append(str(key))
-                data.append(str(porousData[key]))
-        except Exception as e:
-            print('\tUnable to get porous media data, skipping...')
-            print(e)
+
         summary = pd.DataFrame(columns=rowNames)
         summary.loc[-1] = data
         print("\n\n")
         for col in summary.columns:
-            print('{:>100s}{:>30s}'.format(col,str(summary[col].values[0])))
-            
+            print('{:>100s}{:>30s}'.format(col, str(summary[col].values[0])))
+
         summary = summary.transpose()
-        summary.to_csv("%s/%s/summary.csv"% (path,case),header=False)
+        summary.to_csv("%s/summary.csv" % (casePath), header=False)
+        return
+
+    case = os.path.basename(casePath)
+    coeffFiles = getCoeffPaths(casePath)
+    partsDict = {}
+    for part in coeffFiles:
+        if part != 'all':
+            partsDict[part], avgDataArray = averageCoeffs(fullCaseSetupDict, case, part, coeffFiles)
+    avgData, allDataArray = averageCoeffs(fullCaseSetupDict, case, 'all', coeffFiles)
+
+    numCells, mesher, sym = cellCount(fullCaseSetupDict, casePath, case)
+    inletMag, lastTime, yaw, movingGround, rotatingWheels, simType, turbModel = bcParser(fullCaseSetupDict, path, case)
+    runDate, runTime, version, solver = getOfVersion(casePath)
+    refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
+
+    rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI']
+    data = [job, case, solver, version, runDate, runTime, numCells, mesher, sym.lower(), refArea, avgData['endTime'], simType.lower(), movingGround, rotatingWheels, turbModel, inletMag, yaw, avgData['cd'], avgData['cl'], avgData['cl/cd'], avgData['cop'], avgData['cd_ci'], avgData['cl_ci']]
+
+    corneringInfo = getCorneringInfo(fullCaseSetupDict, casePath, case)
+    for label, value in corneringInfo.items():
+        rowNames.append(label)
+        data.append(value)
+
+    for part in partsDict.keys():
+        partVarDict = {'CL': 'cl', 'CD': 'cd'}
+        for varkey in partVarDict.keys():
+            rowNames.append(part + ' ' + varkey)
+            data.append(partsDict[part][partVarDict[varkey]])
+
+    try:
+        porousData = getPorousData(path, case)
+        for key in porousData.keys():
+            rowNames.append(str(key))
+            data.append(str(porousData[key]))
+    except Exception as e:
+        print('\tUnable to get porous media data, skipping...')
+        print(e)
+
+    summary = pd.DataFrame(columns=rowNames)
+    summary.loc[-1] = data
+    print("\n\n")
+    for col in summary.columns:
+        print('{:>100s}{:>30s}'.format(col, str(summary[col].values[0])))
+
+    summary = summary.transpose()
+    summary.to_csv("%s/%s/summary.csv" % (path, case), header=False)
 
 main()
