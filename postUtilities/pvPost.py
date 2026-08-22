@@ -442,6 +442,9 @@ def parseWingPlaneLocations(yRange, nPlanes):
 def parseWingVariables(setup, varDict):
     """Parse wing pressure variables from setup, supporting VARIABLES and legacy VARIABLE."""
     rawVariables = setup.get('VARIABLES', '').strip()
+    if not rawVariables or rawVariables.lower() == 'default':
+        rawVariables = setup.get('VARIABLE', 'CpMean').strip()
+
     if rawVariables and rawVariables.lower() != 'default':
         # Allow flexible config styles, e.g.:
         # VARIABLES = CpMean CfMean
@@ -459,7 +462,7 @@ def parseWingVariables(setup, varDict):
         # commas) still split correctly.
         tokens = re.findall(r'[A-Za-z_][A-Za-z0-9_]*', cleaned)
     else:
-        tokens = [setup.get('VARIABLE', 'CpMean').strip()]
+        tokens = ['CpMean']
 
     validVariables = []
     available = varDict.get('surfaceVariables', {})
