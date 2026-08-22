@@ -443,7 +443,23 @@ def parseWingVariables(setup, varDict):
     """Parse wing pressure variables from setup, supporting VARIABLES and legacy VARIABLE."""
     rawVariables = setup.get('VARIABLES', '').strip()
     if rawVariables and rawVariables.lower() != 'default':
-        tokens = rawVariables.replace(',', ' ').split()
+        # Allow flexible config styles, e.g.:
+        # VARIABLES = CpMean CfMean
+        # VARIABLES = CpMean, CfMean
+        # VARIABLES = [CpMean, CfMean]
+        # VARIABLES = "CpMean CfMean"
+        # VARIABLES = CpMean CfMean  # comment
+        cleaned = rawVariables
+        for commentMarker in ('#', ';'):
+            if commentMarker in cleaned:
+                cleaned = cleaned.split(commentMarker, 1)[0]
+        cleaned = cleaned.replace('[', ' ').replace(']', ' ')
+        cleaned = cleaned.strip().strip('"').strip("'")
+        tokens = [
+            token.strip().strip('"').strip("'")
+            for token in re.split(r'[\s,]+', cleaned)
+            if token.strip()
+        ]
     else:
         tokens = [setup.get('VARIABLE', 'CpMean').strip()]
 
