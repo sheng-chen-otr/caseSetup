@@ -169,7 +169,7 @@ def plotWingPressure(args, casePathDict, caseLoc):
                 pressureAx.set_ylabel('$C_p$')
                 pressureAx.set_title('%s pressure (y = %+.4g m)' % (wingName, yVal))
                 pressureAx.grid(True, alpha=0.3)
-                pressureAx.invert_yaxis()
+                
 
                 profileAx.set_xlabel('x (m)')
                 profileAx.set_ylabel('z (m)')
