@@ -27,6 +27,9 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument('--meshOnly',
                     action='store_true')  # on/off flag
+
+parser.add_argument('--wingPressure',
+                    action='store_true')  # on/off flag
 args = parser.parse_args()
 PRE_DEF_MESH_LIST = []
 
@@ -69,7 +72,7 @@ def main():
     global UREF,LREF,CREF,FREF,WREF,fullCaseSetupDict,renderView,pvPostSetupDict,RESOLUTION,UMEAN_FIELD
     
 
-    print('''\n\t####\t\tEZ-CFD PARAVIEW POST-PROCESSING V1.0\t\t ####\n\n''')
+    print('''\n\t####\t\tPvPost\t\t ####\n\n''')
 
     # Start timing the script execution
     begin = time.time()
@@ -216,7 +219,10 @@ def main():
     internalVolume.UpdatePipeline()
     if args.meshOnly:
         exportTimes['mesh'] = generateMeshSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],viewsDict)
-        
+    elif args.wingPressure:
+        exportTimes['wingPressure'] = generateWingPressureCSVs(
+            source, selections, pvPostSetupDict, varDict
+        )
     else:
         if pvPostSetupDict['PV_POST_MAIN']['SURFACE_IMG'].lower() == 'true':
             exportTimes['surface'] = generateSurfaceContours(geomSurface,renderView,pvPostSetupDict['SURFACE']['VARIABLES'],pvPostSetupDict['SURFACE']['VIEWS'],varDict,viewsDict)
