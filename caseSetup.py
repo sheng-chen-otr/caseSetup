@@ -75,7 +75,7 @@ addonKeyWords = ['POR','FAN','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG','
 
 #getting default values from template
 def main():
-    titleText = '''\t##############################\n\t\tcaseSetup-v4.2-dev\t\n\t##############################'''
+    titleText = '''\t##############################\n\t\tcaseSetup-v4.2.3\t\n\t##############################'''
     print(titleText)
     getTemplateType(SETUP)
     
@@ -85,6 +85,10 @@ def main():
     if NEWCS == True:
         writeNewCaseSetup(defaultDict)
     else:
+        #copy over the pvPostSetup
+        if args.postProDict:
+            copyPvPostSetup()
+            return
         caseSetupDict,writeCaseSetupDict,fullCaseSetupDict = getCaseSetup(defaultDict)
 
         #srf cornering: force a full (non-symmetric) model in-memory, leaves caseSetup SIM_SYM alone
@@ -159,10 +163,7 @@ def main():
             transformGroundGeom(geomDict,fullCaseSetupDict)
             
         
-        #copy over the pvPostSetup
-
-        if args.postProDict:
-            copyPvPostSetup()
+        
         
         #getClusterType(templateLoc,fullCaseSetupDict)
         print('\nCase setup completed successfully!')

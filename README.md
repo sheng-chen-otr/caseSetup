@@ -254,6 +254,16 @@ The `GEOM` columns are as follows:
 
 NOTE: the `ROTA` prefix is to specify that part will get a rotating wall boundary condition, more information in the `documentation/source/caseSetupTUG.pdf`!
 
+### Standalone GUI authoring
+
+If you want a separate GUI for authoring `caseSetup` files without modifying the main pipeline, launch:
+
+```bash
+python /path/to/caseSetupGui.py --case-dir /path/to/project/CASES/001 --template default
+```
+
+The GUI is standalone: it reads template defaults from `setupTemplates`, writes an explicit `caseSetup` file in the selected case folder, and can optionally run the existing `caseSetup.py -s <template>` flow as a subprocess. Geometry file pickers store the geometry file name only, matching the existing `caseSetup` format. Geometry prefixes such as `ROTA-`, `POR-`, `FAN-`, `REFX-`, `GEOMX-`, `MRFG-`, `IDOM-`, and `GRND-` create their matching addon sections automatically.
+
 5. When all geometry is setup and your `BC_SETUP` is all done, run `caseSetup.py` to finish setting up the case.
 6. Use the `meshingScript`, `solveScript`, `exportScript` to execute each part of the case. 
     
