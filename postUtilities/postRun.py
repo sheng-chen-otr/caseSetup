@@ -38,10 +38,12 @@ def main():
                        help='Generate case summary')
     parser.add_argument('--forces', action='store_true', 
                        help='Plot force coefficients')
-    parser.add_argument('--wingPressure', action='store_true',
-                       help='Plot Cp versus x from wing pressure intersection CSV files')
-    parser.add_argument('--wingPressureOverlayCases', nargs='*', default=[],
-                       help='Additional case names or paths to overlay on wing pressure plots')
+    parser.add_argument('--wingPlots', action='store_true',
+                       help='Plot variable versus x from wing intersection CSV files')
+    parser.add_argument('--wingCases', nargs='*', default=[],
+                       help='Additional case names or paths to overlay on wing plots')
+    parser.add_argument('--wingVariables', nargs='*', default=[],
+                       help='Wing variable columns to plot (default: all available)')
     
     # Add force plotting specific arguments
     parser.add_argument('-p', '--plotData', default=['Cd','Cl','CoP'],
@@ -74,17 +76,17 @@ def main():
         casePathDict = makePandasArrays(args,casePathDict)
         plotData(args,caseLoc,casePathDict)
 
-    if args.wingPressure:
+    if args.wingPlots:
         casePathDict, caseLoc = setCasePaths(args.trial,casePath)
         plotWingPressure(args, casePathDict, caseLoc)
 
-    if not args.summary and not args.forces and not args.wingPressure:
+    if not args.summary and not args.forces and not args.wingPlots:
         parser.print_help()
 
 
 def plotWingPressure(args, casePathDict, caseLoc):
-    """Plot per-wing, per-y scatter overlays for pressure and profile coordinates."""
-    overlayCaseMap = resolveOverlayCaseMap(casePathDict, args.wingPressureOverlayCases, os.getcwd())
+    """Plot per-wing, per-variable, per-y scatter overlays for pressure and profile coordinates."""
+    overlayCaseMap = resolveOverlayCaseMap(casePathDict, args.wingCases, os.getcwd())
     if not overlayCaseMap:
         print('\tNo valid cases found for wing pressure plotting.')
         return
@@ -100,99 +102,114 @@ def plotWingPressure(args, casePathDict, caseLoc):
             continue
 
         for wingName in ('frontWing', 'rearWing'):
-            caseWingFiles = {}
-            yTargets = set()
+            caseWingData = {}
+            variableTargets = set()
             for idxCase, (caseLabel, thisCasePath) in enumerate(overlayCaseMap.items()):
-                csvFiles = glob.glob(os.path.join(thisCasePath,
-                                                  'postProcessing',
-                                                  'wingPressure',
-                                                  '%s_CpMean_*.csv' % wingName))
-                if not csvFiles:
+                variableFileMap = discoverWingVariableCsvs(thisCasePath, wingName)
+                if not variableFileMap:
                     continue
-                fileMap = {}
-                for csvPath in csvFiles:
-                    yVal = wingPressureYValue(csvPath)
-                    yKey = format(float(yVal), '.8g')
-                    fileMap[yKey] = csvPath
-                    yTargets.add(float(yVal))
-                caseWingFiles[caseLabel] = {
+                for variable in variableFileMap.keys():
+                    variableTargets.add(variable)
+                caseWingData[caseLabel] = {
                     'path': thisCasePath,
                     'index': idxCase,
-                    'files': fileMap,
+                    'variableFiles': variableFileMap,
                 }
 
-            if not caseWingFiles or not yTargets:
-                print('\tNo %s CpMean CSV files found for selected cases, skipping.' % wingName)
+            if not caseWingData or not variableTargets:
+                print('\tNo %s wing-pressure CSV files found for selected cases, skipping.' % wingName)
                 continue
 
-            for yVal in sorted(yTargets):
-                yKey = format(float(yVal), '.8g')
-                fig, axes = plt.subplots(2, 1, figsize=[10, 16], frameon=True)
-                pressureAx, profileAx = axes
-                plottedPressure = 0
-                plottedProfile = 0
+            selectedVariables = selectWingPressureVariables(
+                args.wingVariables,
+                sorted(variableTargets),
+                wingName,
+            )
+            if not selectedVariables:
+                continue
 
-                for caseLabel, caseData in caseWingFiles.items():
-                    csvPath = caseData['files'].get(yKey)
-                    if csvPath is None:
-                        continue
-                    try:
-                        df = pd.read_csv(csvPath)
-                    except Exception as error:
-                        print('\tWARNING! Unable to read %s: %s' % (csvPath, error))
-                        continue
+            for variable in selectedVariables:
+                yTargets = set()
+                for caseData in caseWingData.values():
+                    yMap = caseData['variableFiles'].get(variable, {})
+                    for yKey in yMap.keys():
+                        try:
+                            yTargets.add(float(yKey))
+                        except ValueError:
+                            pass
 
-                    color = colors[caseData['index'] % len(colors)]
-                    marker = markers[caseData['index'] % len(markers)]
-
-                    if {'x', 'CpMean'}.issubset(df.columns):
-                        pData = df.dropna(subset=['x', 'CpMean']).sort_values('x')
-                        if not pData.empty:
-                            pressureAx.scatter(pData['x'], pData['CpMean'], s=18,
-                                               marker=marker, color=color,
-                                               label=caseLabel, alpha=0.9)
-                            plottedPressure += 1
-
-                    if {'x', 'z'}.issubset(df.columns):
-                        profileData = df.dropna(subset=['x', 'z']).sort_values('x')
-                        if not profileData.empty:
-                            profileAx.scatter(profileData['x'], profileData['z'], s=18,
-                                              marker=marker, color=color,
-                                              label=caseLabel, alpha=0.9)
-                            plottedProfile += 1
-
-                if not plottedPressure and not plottedProfile:
-                    plt.close(fig)
+                if not yTargets:
                     continue
 
-                pressureAx.set_xlabel('x (m)')
-                pressureAx.set_ylabel('$C_p$')
-                pressureAx.set_title('%s pressure (y = %+.4g m)' % (wingName, yVal))
-                pressureAx.grid(True, alpha=0.3)
-                
+                for yVal in sorted(yTargets):
+                    yKey = format(float(yVal), '.8g')
+                    fig, axes = plt.subplots(2, 1, figsize=[10, 16], frameon=True)
+                    pressureAx, profileAx = axes
+                    plottedPressure = 0
+                    plottedProfile = 0
 
-                profileAx.set_xlabel('x (m)')
-                profileAx.set_ylabel('z (m)')
-                profileAx.set_title('%s profile (x-z points, y = %+.4g m)' % (wingName, yVal))
-                profileAx.grid(True, alpha=0.3)
-                profileAx.set_aspect('equal', adjustable='box')
+                    for caseLabel, caseData in caseWingData.items():
+                        csvPath = caseData['variableFiles'].get(variable, {}).get(yKey)
+                        if csvPath is None:
+                            continue
+                        try:
+                            df = pd.read_csv(csvPath)
+                        except Exception as error:
+                            print('\tWARNING! Unable to read %s: %s' % (csvPath, error))
+                            continue
 
-                if plottedPressure:
-                    pressureAx.legend(loc='best', fontsize=8)
-                if plottedProfile:
-                    profileAx.legend(loc='best', fontsize=8)
+                        color = colors[caseData['index'] % len(colors)]
+                        marker = markers[caseData['index'] % len(markers)]
 
-                overlayTag = sanitizeOverlayTag(overlayCaseMap.keys())
-                outputPath = os.path.join(
-                    outputDir,
-                    '%s_overlay_%s_y_%s.%s' %
-                    (wingName, overlayTag, yKey, args.saveFormat)
-                )
-                fig.suptitle('%s wing overlays at y = %+.4g m' % (wingName, yVal), fontsize=11)
-                fig.tight_layout()
-                fig.savefig(outputPath, dpi=300, bbox_inches='tight')
-                plt.close(fig)
-                print('\tWrote %s' % outputPath)
+                        if {'x', variable}.issubset(df.columns):
+                            pData = df.dropna(subset=['x', variable]).sort_values('x')
+                            if not pData.empty:
+                                pressureAx.scatter(pData['x'], pData[variable], s=18,
+                                                   marker=marker, color=color,
+                                                   label=caseLabel, alpha=0.9)
+                                plottedPressure += 1
+
+                        if {'x', 'z'}.issubset(df.columns):
+                            profileData = df.dropna(subset=['x', 'z']).sort_values('x')
+                            if not profileData.empty:
+                                profileAx.scatter(profileData['x'], profileData['z'], s=18,
+                                                  marker=marker, color=color,
+                                                  label=caseLabel, alpha=0.9)
+                                plottedProfile += 1
+
+                    if not plottedPressure and not plottedProfile:
+                        plt.close(fig)
+                        continue
+
+                    pressureAx.set_xlabel('x (m)')
+                    pressureAx.set_ylabel(variable)
+                    pressureAx.set_title('%s %s (y = %+.4g m)' % (wingName, variable, yVal))
+                    pressureAx.grid(True, alpha=0.3)
+                    if variable.lower().startswith('cp'):
+                        pressureAx.invert_yaxis()
+
+                    profileAx.set_xlabel('x (m)')
+                    profileAx.set_ylabel('z (m)')
+                    profileAx.set_title('%s profile (x-z points, y = %+.4g m)' % (wingName, yVal))
+                    profileAx.grid(True, alpha=0.3)
+                    profileAx.set_aspect('equal', adjustable='box')
+
+                    if plottedPressure:
+                        pressureAx.legend(loc='best', fontsize=8)
+                    if plottedProfile:
+                        profileAx.legend(loc='best', fontsize=8)
+
+                    overlayTag = sanitizeOverlayTag(overlayCaseMap.keys())
+                    outputPath = os.path.join(
+                        outputDir,
+                        '%s_%s_overlay_%s_y_%s.%s' %
+                        (wingName, variable, overlayTag, yKey, args.saveFormat)
+                    )
+                    fig.suptitle('%s %s overlays at y = %+.4g m' % (wingName, variable, yVal), fontsize=11)
+                    fig.tight_layout()
+                    fig.savefig(outputPath, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                    print('\tWrote %s' % outputPath)
 
 
 def wingPressureYValue(csvPath):
@@ -265,6 +282,77 @@ def sanitizeOverlayTag(caseLabels):
     else:
         base = '%s_plus_%d' % (labels[0], len(labels) - 1)
     return re.sub(r'[^A-Za-z0-9_\-\.]+', '_', base)
+
+
+def discoverWingVariableCsvs(casePath, wingName):
+    """Return mapping of variable -> yKey -> csvPath for wing-pressure exports."""
+    pressureDir = os.path.join(casePath, 'postProcessing', 'wingPressure')
+    if not os.path.isdir(pressureDir):
+        return {}
+
+    csvFiles = glob.glob(os.path.join(pressureDir, '%s_*.csv' % wingName))
+    variableMap = {}
+    coordColumns = {'x', 'y', 'z'}
+
+    for csvPath in csvFiles:
+        stem = os.path.splitext(os.path.basename(csvPath))[0]
+        prefix = '%s_' % wingName
+        if not stem.startswith(prefix):
+            continue
+        tail = stem[len(prefix):]
+
+        # New combined format: <wingName>_<y>.csv (variables are columns in the file).
+        isCombined = False
+        try:
+            float(tail)
+            isCombined = True
+        except ValueError:
+            isCombined = False
+
+        if isCombined:
+            try:
+                headerOnly = pd.read_csv(csvPath, nrows=0)
+            except Exception:
+                continue
+            yKey = format(wingPressureYValue(csvPath), '.8g')
+            for column in headerOnly.columns:
+                if column in coordColumns:
+                    continue
+                variableMap.setdefault(column, {})[yKey] = csvPath
+            continue
+
+        # Legacy format: <wingName>_<variable>_<y>.csv
+        if '_' not in tail:
+            continue
+        variable, yToken = tail.rsplit('_', 1)
+        if not variable or not yToken:
+            continue
+        yKey = format(wingPressureYValue(csvPath), '.8g')
+        variableMap.setdefault(variable, {})[yKey] = csvPath
+    return variableMap
+
+
+def selectWingPressureVariables(requestedVariables, availableVariables, wingName):
+    """Resolve requested wing variables; default to all available when none requested."""
+    if not requestedVariables:
+        return availableVariables
+
+    requested = []
+    for token in requestedVariables:
+        for part in token.replace(',', ' ').split():
+            if part and part not in requested:
+                requested.append(part)
+
+    selected = [variable for variable in requested if variable in availableVariables]
+    missing = [variable for variable in requested if variable not in availableVariables]
+    if missing:
+        print('\tWARNING! %s missing requested wing variables: %s' %
+              (wingName, ', '.join(missing)))
+
+    if not selected:
+        print('\tWARNING! No requested variables available for %s. Available: %s' %
+              (wingName, ', '.join(availableVariables)))
+    return selected
 
 
 def isCaseComplete(casePath):

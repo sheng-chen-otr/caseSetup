@@ -295,7 +295,7 @@ def getRequiredFields(varDict, extraFields=None):
 
 
 def generateWingPressureCSVs(source, selections, pvPostSetupDict, varDict):
-    """Write Cp samples where configurable wing patches intersect spanwise planes."""
+    """Write combined wing samples (multiple configured variables) on spanwise planes."""
     begin = time.time()
     wingSections = (
         ('FRONT_WING_PRESSURE', 'frontWing'),
@@ -319,21 +319,28 @@ def generateWingPressureCSVs(source, selections, pvPostSetupDict, varDict):
 
         normal = parseWingNormal(setup.get('NORMAL', 'default'))
         yValues = parseWingPlaneLocations(setup.get('Y_RANGE', 'default'),
-                                           setup.get('N_PLANES', '11'))
-        variable = setup.get('VARIABLE', 'CpMean').strip()
-        if variable not in varDict.get('surfaceVariables', {}):
-            print('\n\tWARNING! %s is not defined in surfaceVariables; skipping %s pressure extraction.\n' %
-                  (variable, wingName))
+                                          setup.get('N_PLANES', '11'))
+        variables = parseWingVariables(setup, varDict)
+        if not variables:
+            print('\n\tWARNING! No valid wing variables configured for %s; skipping.\n' %
+                  (wingName))
             continue
 
         wingSurface = ExtractBlock(Input=source)
         wingSurface.Selectors = selectors
         wingSurface.UpdatePipeline()
-        calculator = Calculator(registrationName='%sPressureCalculator' % wingName,
-                                Input=wingSurface)
-        calculator.Function = str(varDict['surfaceVariables'][variable]['equation'])
-        calculator.ResultArrayName = variable
-        calculator.UpdatePipeline()
+
+        # Build a calculator chain so one intersection export contains all configured variables.
+        calculatorChain = []
+        combinedSource = wingSurface
+        for variable in variables:
+            calculator = Calculator(registrationName='%s_%s_PressureCalculator' % (wingName, variable),
+                                    Input=combinedSource)
+            calculator.Function = str(varDict['surfaceVariables'][variable]['equation'])
+            calculator.ResultArrayName = variable
+            calculator.UpdatePipeline()
+            calculatorChain.append(calculator)
+            combinedSource = calculator
 
         outputDir = setup.get('OUTPUT_DIR', 'postProcessing/wingPressure').strip()
         os.makedirs(outputDir, exist_ok=True)
@@ -342,19 +349,19 @@ def generateWingPressureCSVs(source, selections, pvPostSetupDict, varDict):
             sys.exit('ERROR! PlotOnIntersectionCurves filter is not available in this ParaView build.')
 
         for yValue in yValues:
-            profile = plotOnIntersectionCurves(Input=calculator)
+            profile = plotOnIntersectionCurves(Input=combinedSource)
             setIntersectionPlane(profile, normal,
                                  [float(CREF[0]), float(yValue), float(CREF[2])])
             profile.UpdatePipeline()
 
-            fileName = '%s_%s_%s.csv' % (wingName, variable, format(float(yValue), '.6g'))
+            fileName = '%s_%s.csv' % (wingName, format(float(yValue), '.6g'))
             filePath = os.path.join(outputDir, fileName)
             SaveData(filePath, proxy=profile)
 
-            rows = normalizeWingPressureCsv(filePath, variable, yValue)
+            rows = normalizeWingPressureCsv(filePath, variables, yValue)
             if rows == 0:
-                print('\t\tWARNING! %s did not contain %s data at y=%+.4g; removing %s' %
-                      (wingName, variable, yValue, filePath))
+                print('\t\tWARNING! %s did not contain configured variables at y=%+.4g; removing %s' %
+                      (wingName, yValue, filePath))
                 try:
                     os.remove(filePath)
                 except OSError:
@@ -362,12 +369,13 @@ def generateWingPressureCSVs(source, selections, pvPostSetupDict, varDict):
                 Delete(profile)
                 continue
 
-            print('\t\tWrote %s wing pressure samples: %s (%d points)' %
-                  (wingName, filePath, rows))
+            print('\t\tWrote %s wing combined samples: %s (%d points, vars=%s)' %
+                  (wingName, filePath, rows, ','.join(variables)))
             generated += 1
             Delete(profile)
 
-        Delete(calculator)
+        for calculator in reversed(calculatorChain):
+            Delete(calculator)
         Delete(wingSurface)
 
     if generated:
@@ -431,6 +439,24 @@ def parseWingPlaneLocations(yRange, nPlanes):
     return np.linspace(yMin, yMax, count)
 
 
+def parseWingVariables(setup, varDict):
+    """Parse wing pressure variables from setup, supporting VARIABLES and legacy VARIABLE."""
+    rawVariables = setup.get('VARIABLES', '').strip()
+    if rawVariables and rawVariables.lower() != 'default':
+        tokens = rawVariables.replace(',', ' ').split()
+    else:
+        tokens = [setup.get('VARIABLE', 'CpMean').strip()]
+
+    validVariables = []
+    available = varDict.get('surfaceVariables', {})
+    for variable in tokens:
+        if variable in available and variable not in validVariables:
+            validVariables.append(variable)
+        elif variable:
+            print('\t\tWARNING! Wing variable %s is not defined in surfaceVariables; skipping.' % variable)
+    return validVariables
+
+
 def setIntersectionPlane(profileProxy, normal, origin):
     """Set plane orientation/origin for PlotOnIntersectionCurves across PV variants."""
     applied = False
@@ -459,8 +485,8 @@ def setIntersectionPlane(profileProxy, normal, origin):
         print('\t\tWARNING! Could not explicitly set PlotOnIntersectionCurves plane properties.')
 
 
-def normalizeWingPressureCsv(filePath, variable, yValue):
-    """Normalize intersection CSV headers to x,y,z,<variable> for downstream plots."""
+def normalizeWingPressureCsv(filePath, variables, yValue):
+    """Normalize intersection CSV headers to x,y,z plus configured variables."""
     try:
         rawData = pd.read_csv(filePath)
     except Exception:
@@ -484,7 +510,8 @@ def normalizeWingPressureCsv(filePath, variable, yValue):
     xColumn = findColumn(pointAliases['x'])
     yColumn = findColumn(pointAliases['y'])
     zColumn = findColumn(pointAliases['z'])
-    if xColumn is None or variable not in rawData.columns:
+    validVariables = [variable for variable in variables if variable in rawData.columns]
+    if xColumn is None or not validVariables:
         return 0
 
     exportData = pd.DataFrame()
@@ -497,9 +524,11 @@ def normalizeWingPressureCsv(filePath, variable, yValue):
         exportData['z'] = np.nan
     else:
         exportData['z'] = pd.to_numeric(rawData[zColumn], errors='coerce')
-    exportData[variable] = pd.to_numeric(rawData[variable], errors='coerce')
+    for variable in validVariables:
+        exportData[variable] = pd.to_numeric(rawData[variable], errors='coerce')
 
-    exportData = exportData.dropna(subset=['x', variable]).sort_values('x')
+    exportData = exportData.dropna(subset=['x'])
+    exportData = exportData.dropna(subset=validVariables, how='all').sort_values('x')
     if exportData.empty:
         return 0
 

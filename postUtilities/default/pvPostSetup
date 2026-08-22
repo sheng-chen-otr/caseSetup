@@ -38,6 +38,7 @@ PATCH_PATTERN = .*fw.*
 NORMAL = default
 Y_RANGE = default
 N_PLANES = 11
+VARIABLES = CpMean
 VARIABLE = CpMean
 OUTPUT_DIR = postProcessing/wingPressure
 
@@ -47,6 +48,7 @@ PATCH_PATTERN = .*rw.*
 NORMAL = default
 Y_RANGE = default
 N_PLANES = 11
+VARIABLES = CpMean
 VARIABLE = CpMean
 OUTPUT_DIR = postProcessing/wingPressure
 
