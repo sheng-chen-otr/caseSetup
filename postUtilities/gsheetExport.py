@@ -1,11 +1,9 @@
-import argparse
 import configparser
 import os
 import re
-import sys
-import subprocess
 from pathlib import Path
 from summary import *
+from pathlib import Path
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -95,323 +93,6 @@ def get_trial_number(case_name=None, case_path=None):
 
     raise ValueError(f"No numeric trial number found in case name: {case_name}")
 
-
-def read_summary_csv(case_path):
-    """Read summary.csv (key,value rows) and return a dictionary."""
-    summary_path = Path(case_path) / "summary.csv"
-    if not summary_path.exists():
-        raise FileNotFoundError(f"summary.csv not found at: {summary_path}")
-    summary_df = pd.read_csv(summary_path, header=None)
-    if summary_df.shape[1] < 2:
-        raise ValueError(f"summary.csv is invalid at: {summary_path}")
-    keys = summary_df.iloc[:, 0].astype(str).str.strip()
-    vals = summary_df.iloc[:, 1]
-    return dict(zip(keys, vals))
-
-
-def load_case_setup(case_path):
-    case_setup_path = Path(case_path) / "caseSetup"
-    if not case_setup_path.exists():
-        return None
-    cfg = configparser.ConfigParser()
-    cfg.optionxform = str
-    cfg.read_file(open(case_setup_path))
-    return cfg
-
-
-def parse_float(value, default=""):
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def get_part_coeff(summary_dict, prefix, coeff_key):
-    suffix = f" {coeff_key.upper()}"
-    for key, value in summary_dict.items():
-        if key.lower().startswith(prefix.lower()) and key.endswith(suffix):
-            return value
-    return ""
-
-
-def build_sheet_values_from_summary(summary_dict, case_setup_dict):
-    symmetry = str(summary_dict.get("Symmetry", "")).strip().lower()
-    is_half = "TRUE" if symmetry == "half" else "FALSE"
-
-    density = 1.225
-    wheel_base = ""
-    if case_setup_dict is not None:
-        try:
-            density = parse_float(case_setup_dict['GLOBAL_MATERIAL']['DENSITY'], 1.225)
-        except Exception:
-            density = 1.225
-        try:
-            wheel_base = parse_float(case_setup_dict['BC_SETUP']['REFLEN'], "")
-        except Exception:
-            wheel_base = ""
-
-    fw_cd = get_part_coeff(summary_dict, "fw", "CD")
-    fw_cl = get_part_coeff(summary_dict, "fw", "CL")
-    rw_cd = get_part_coeff(summary_dict, "rw", "CD")
-    rw_cl = get_part_coeff(summary_dict, "rw", "CL")
-
-    return [
-        summary_dict.get("Run Date", ""),
-        summary_dict.get("Solve Time", ""),
-        summary_dict.get("Num. Cells", ""),
-        summary_dict.get("Mesher", ""),
-        is_half,
-        summary_dict.get("Velocity", ""),
-        summary_dict.get("Yaw", ""),
-        density,
-        "0",
-        "0",
-        summary_dict.get("Ref. Area (m^2)", ""),
-        wheel_base,
-        summary_dict.get("Cd", ""),
-        summary_dict.get("Cl", ""),
-        summary_dict.get("Cl(f)", ""),
-        summary_dict.get("Cl(r)", ""),
-        summary_dict.get("Cs(f)", ""),
-        summary_dict.get("Cs(r)", ""),
-        summary_dict.get("Cd CI", ""),
-        summary_dict.get("Cl CI", ""),
-        fw_cd,
-        fw_cl,
-        rw_cd,
-        rw_cl,
-    ]
-
-
-def resolve_job_context(case_path):
-    """Resolve (jobPath, jobName, worksheetName, sheetId) for a given case path,
-    using the same job-root inference rules as main()."""
-    case_path = Path(case_path).resolve()
-    case_name = case_path.name
-
-    if case_path.parent.name == 'CASES':
-        jobPath = case_path.parent.parent
-    elif case_path.parent.parent.name == 'CASES':
-        jobPath = case_path.parent.parent.parent
-    elif '_' in case_name:
-        jobPath = case_path.parents[2]
-    else:
-        jobPath = case_path.parents[1]
-
-    jobName = jobPath.name
-    worksheet_name = '%s - Trials List' % (jobName)
-    gsheet_id = getSheetId(
-        os.path.join(jobPath, '02_reference', 'GSheet', '%s.gsheet' % jobName),
-        jobName=jobName,
-    )
-    return jobPath, jobName, worksheet_name, gsheet_id
-
-
-def _first(value, default=""):
-    """Return the first element of a list/tuple (as produced by caseSetup.py's
-    in-memory caseSetup dict), or the value itself (as returned by configparser
-    when reading a caseSetup file back off disk)."""
-    if isinstance(value, (list, tuple)):
-        return value[0] if len(value) else default
-    if value is None:
-        return default
-    return value
-
-
-def build_setup_time_values(case_setup_dict):
-    """
-    Build the setup-time-known sheet columns (symmetry, velocity, yaw, density,
-    reference area, wheelbase) from a case's caseSetup dict. Result columns (run
-    date, solve time, cell count, Cd, Cl, etc.) are intentionally left out since
-    they are not known until the case has actually run.
-    """
-    try:
-        sim_sym = str(_first(case_setup_dict['GLOBAL_SIM_CONTROL']['SIM_SYM'], '')).strip().lower()
-    except Exception:
-        sim_sym = ''
-    is_half = "TRUE" if sim_sym == 'half' else "FALSE"
-
-    try:
-        velocity = _first(case_setup_dict['BC_SETUP']['INLET_MAG'])
-    except Exception:
-        velocity = ""
-
-    try:
-        yaw = 0 if sim_sym == 'half' else _first(case_setup_dict['BC_SETUP']['YAW'])
-    except Exception:
-        yaw = ""
-
-    try:
-        density = parse_float(_first(case_setup_dict['GLOBAL_MATERIAL']['DENSITY']), 1.225)
-    except Exception:
-        density = 1.225
-
-    try:
-        ref_area = _first(case_setup_dict['BC_SETUP']['REFAREA'])
-    except Exception:
-        ref_area = ""
-
-    try:
-        wheel_base = parse_float(_first(case_setup_dict['BC_SETUP']['REFLEN']), "")
-    except Exception:
-        wheel_base = ""
-
-    return {
-        "M": is_half,
-        "N": velocity,
-        "O": yaw,
-        "P": density,
-        "Q": "0",
-        "R": "0",
-        "S": ref_area,
-        "T": wheel_base,
-    }
-
-
-def write_setup_time_cells(sheet_id, worksheet_name, target_row, values_by_column, jobName):
-    worksheet = get_worksheet(sheet_id, worksheet_name, jobName)
-    for col, value in values_by_column.items():
-        cell = f"{col.upper()}{target_row}"
-        worksheet.update(
-            range_name=cell,
-            values=[[str(value)]],
-            value_input_option="RAW",
-        )
-
-
-def prep_single_case_row(sheet_id, worksheet_name, case_name, job_name, case_setup_dict):
-    """Ensure a row exists for case_name (reserving the next row if missing) and
-    fill in only the setup-time-known columns, leaving result columns untouched."""
-    if case_setup_dict is None:
-        print(f"\t\tWARNING! Unable to read caseSetup for {case_name}; skipping gsheet row prep.")
-        return
-    target_row = get_or_create_trial_row(sheet_id, worksheet_name, case_name, job_name)
-    setup_values = build_setup_time_values(case_setup_dict)
-    write_setup_time_cells(sheet_id, worksheet_name, target_row, setup_values, job_name)
-    print(f"\t\tPrepared gsheet row {target_row} for {case_name}.")
-
-
-def find_ride_height_children(parent_case_path):
-    """Return [(pointNumber, childPath), ...] sorted by ascending point number for
-    <parentName>_<n> child directories directly under the parent case directory."""
-    parent_case_path = Path(parent_case_path)
-    parent_name = parent_case_path.name
-    pattern = re.compile(r'^%s_(\d+)$' % re.escape(parent_name))
-    children = []
-    for child in parent_case_path.iterdir():
-        if not child.is_dir():
-            continue
-        m = pattern.match(child.name)
-        if m:
-            children.append((int(m.group(1)), child))
-    children.sort(key=lambda item: item[0])
-    return children
-
-
-def prep_ride_height_rows(case_path, fullCaseSetupDict, jobName, worksheet_name, gsheet_id):
-    """Ensure the parent row exists first, then the child rows in ascending
-    ride-height-point order, for a ride-height mapping parent case."""
-    case_path = Path(case_path).resolve()
-
-    #parent row first
-    prep_single_case_row(gsheet_id, worksheet_name, case_path.name, jobName, fullCaseSetupDict)
-
-    #then children, in ascending ride-height-point order
-    children = find_ride_height_children(case_path)
-    if not children:
-        print("\t\tWARNING! RUN_RIDE_HEIGHT is True but no child cases were found under: %s" % (case_path))
-        return
-    for pointNumber, childPath in children:
-        childCfg = load_case_setup(childPath)
-        prep_single_case_row(gsheet_id, worksheet_name, childPath.name, jobName, childCfg)
-
-
-def prep_gsheet_rows(case_path, fullCaseSetupDict=None):
-    """
-    Ensure this case's gsheet row exists (and, for a ride-height mapping parent,
-    every child's row as well, in parent-then-ascending-point-number order),
-    pre-filled with the setup-time values already known from caseSetup. Intended
-    to run right after caseSetup, before a case is submitted. Any failure (missing
-    credentials, sheet not found, network error, etc.) is caught and printed as a
-    warning only, so callers (e.g. caseSetup.py) can continue regardless.
-    """
-    case_path = Path(case_path).resolve()
-    try:
-        jobPath, jobName, worksheet_name, gsheet_id = resolve_job_context(case_path)
-        print('\tFound gsheet id: %s' % (gsheet_id))
-
-        if fullCaseSetupDict is None:
-            fullCaseSetupDict = load_case_setup(case_path)
-
-        is_ride_height_parent = False
-        if fullCaseSetupDict is not None and 'RIDE_HEIGHT_SETUP' in fullCaseSetupDict:
-            try:
-                is_ride_height_parent = str(_first(
-                    fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RIDE_HEIGHT'], ''
-                )).strip().lower() == 'true'
-            except Exception:
-                is_ride_height_parent = False
-
-        if is_ride_height_parent:
-            prep_ride_height_rows(case_path, fullCaseSetupDict, jobName, worksheet_name, gsheet_id)
-        else:
-            prep_single_case_row(gsheet_id, worksheet_name, case_path.name, jobName, fullCaseSetupDict)
-    except Exception as e:
-        print('\tWARNING! Unable to prepare gsheet row(s) for %s: %s' % (case_path.name, e))
-
-
-def detect_parent_case_for_child(case_path):
-    """Return parent case path if case is likely parentName_# under parentName folder."""
-    case_path = Path(case_path).resolve()
-    case_name = case_path.name
-    m = re.match(r'^(.*)_\d+$', case_name)
-    if not m:
-        return None
-    parent_name = m.group(1)
-
-    immediate_parent = case_path.parent
-    if immediate_parent.name == parent_name:
-        return immediate_parent
-
-    sibling_parent = case_path.parent / parent_name
-    if sibling_parent.exists() and sibling_parent.is_dir():
-        return sibling_parent
-
-    return None
-
-
-def regenerate_case_summary(case_path):
-    post_run_script = Path(__file__).resolve().parent / 'postRun.py'
-    if not post_run_script.exists():
-        raise FileNotFoundError(f"postRun.py not found at: {post_run_script}")
-    subprocess.run(
-        [sys.executable, str(post_run_script), '--summary'],
-        cwd=str(case_path),
-        check=True,
-    )
-
-
-def push_case_summary(sheet_id, worksheet_name, case_path, job_name):
-    case_path = Path(case_path).resolve()
-    case_name = case_path.name
-    summary_dict = read_summary_csv(case_path)
-    case_setup_dict = load_case_setup(case_path)
-    data_to_write = build_sheet_values_from_summary(summary_dict, case_setup_dict)
-    target_row = get_or_create_trial_row(sheet_id, worksheet_name, case_name, job_name)
-    write_to_sheet_cells(
-        sheet_id,
-        data_to_write,
-        worksheet_name,
-        target_row,
-        TARGET_COLUMNS,
-        jobName=job_name,
-    )
-    print(
-        f"Done. Trial {case_name} mapped to row {target_row}. "
-        f"Wrote {len(data_to_write)} value(s) in columns: "
-        f"{', '.join(col.upper() for col in TARGET_COLUMNS)}."
-    )
-
 TARGET_COLUMNS = ["B","F", "G", "H", "M","N", "O", "P", "Q", "R", "S", "T", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO"]
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_CREDENTIALS_FILE = PROJECT_DIR / "credentials.json"
@@ -473,39 +154,108 @@ def write_to_sheet_cells(
 
 def main():
     global jobName
-    parser = argparse.ArgumentParser(
-        description='Push case summary results to a Google Sheet, or reserve/pre-fill row(s) before a case runs.'
-    )
-    parser.add_argument(
-        '--prep', action='store_true',
-        help='Reserve gsheet row(s) for this case (and its ride-height children, if any, in parent-then-child '
-             'order) and fill in the setup-time values already known from caseSetup, without touching result '
-             'columns. Intended to run right after caseSetup, before the case is submitted.'
-    )
-    args = parser.parse_args()
-
-    case_path = Path(os.getcwd()).resolve()
-    case_name = case_path.name
+    case_path = os.getcwd()
+    case_name = os.path.basename(os.path.normpath(case_path))
+    path = os.path.split(case_path)[0]
     #checking if run in a trial directory
     # if os.path.basename(os.path.split(case_path)[0]) != 'CASES':
     #     sys.exit('ERROR! Please run in a trial directory!')
-
-    if args.prep:
-        prep_gsheet_rows(case_path)
-        return
-
-    jobPath, jobName, WORKSHEET_NAME, gsheetID = resolve_job_context(case_path)
+    
+    if '_' in case_name:
+        jobPath = os.path.abspath(os.path.join(os.getcwd(), "../../../"))
+    else:
+        jobPath = os.path.abspath(os.path.join(os.getcwd(), "../../"))
+    jobName = os.path.basename(jobPath)
+    #jobName = getWorksheetName(case_path)
+    WORKSHEET_NAME = '%s - Trials List' % (jobName)
+    #jobRoot = os.path.abspath(os.path.join(path, os.pardir))
+    
+    gsheetID = getSheetId(os.path.join(jobPath, '02_reference', 'GSheet', '%s.gsheet' % jobName), jobName=jobName)
     print('\tFound gsheet id: %s' % (gsheetID))
+    
+    case_setup_path = Path(case_path) / "caseSetup"
+    if not case_setup_path.exists():
+        raise FileNotFoundError(f"caseSetup file not found at: {case_setup_path}")
 
-    parent_case_path = detect_parent_case_for_child(case_path)
-    if parent_case_path is not None:
-        print(f"Detected ride-height child case. Regenerating parent summary at: {parent_case_path}")
-        regenerate_case_summary(parent_case_path)
+    full_case_setup_dict = configparser.ConfigParser()
+    full_case_setup_dict.optionxform = str
+    full_case_setup_dict.read_file(open(case_setup_path))
 
-    push_case_summary(gsheetID, WORKSHEET_NAME, case_path, jobName)
+    coeff_files = getCoeffPaths(case_path)
+    avg_data,avg_data_array = averageCoeffs(full_case_setup_dict, case_name, "all", coeff_files)
+    num_cells, mesher, _ = cellCount(full_case_setup_dict, case_path, case_name)
+    inlet_mag, _, yaw, _, _, _, _ = bcParser(full_case_setup_dict, path, case_name)
+    symType = full_case_setup_dict['GLOBAL_SIM_CONTROL']['SIM_SYM']
+    wheelBase = full_case_setup_dict['BC_SETUP']['REFLEN']
+    refArea = full_case_setup_dict['BC_SETUP']['REFAREA']
+    isHalf = "TRUE" if symType.lower() == "half" else "FALSE"
+    try:
+        density = full_case_setup_dict['GLOBAL_MATERIAL']['DENSITY']
+    except:
+        density = 1.225
+    run_date, run_time, _, _ = getOfVersion(case_path)
 
-    if parent_case_path is not None:
-        push_case_summary(gsheetID, WORKSHEET_NAME, parent_case_path, jobName)
+    fw_cd = ""
+    fw_cl = ""
+    rw_cd = ""
+    rw_cl = ""
+    for part in coeff_files:
+        part_lower = part.lower()
+        if part_lower.startswith("fw") and fw_cd == "":
+            fw_data,fw_data_array = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
+            fw_cd = fw_data["cd"]
+            fw_cl = fw_data["cl"]
+        elif part_lower.startswith("rw") and rw_cd == "":
+            rw_data,rw_data_array = averageCoeffs(full_case_setup_dict, case_name, part, coeff_files)
+            rw_cd = rw_data["cd"]
+            rw_cl = rw_data["cl"]
+        if fw_cd != "" and rw_cd != "":
+            break
+
+    data_to_write = [
+        run_date,
+        run_time,
+        num_cells,
+        mesher,
+        isHalf,
+        inlet_mag,
+        yaw,
+        density,
+        "0",
+        "0",
+        refArea,
+        wheelBase,
+        avg_data["cd"],
+        avg_data["cl"],
+        avg_data["clf"],
+        avg_data["clr"],
+        avg_data["csf"],
+        avg_data["csr"],
+        avg_data["cd_ci"],
+        avg_data["cl_ci"],
+        fw_cd,
+        fw_cl,
+        rw_cd,
+        rw_cl,
+    ]
+
+    #trial_number = get_trial_number(case_name=case_name)
+    trial_number = case_name
+    target_row = get_or_create_trial_row(gsheetID, WORKSHEET_NAME, trial_number,jobName)
+
+    write_to_sheet_cells(
+        gsheetID,
+        data_to_write,
+        WORKSHEET_NAME,
+        target_row,
+        TARGET_COLUMNS,
+        jobName = jobName
+    )
+    print(
+        f"Done. Trial {trial_number} mapped to row {target_row}. "
+        f"Wrote {len(data_to_write)} value(s) in columns: "
+        f"{', '.join(col.upper() for col in TARGET_COLUMNS)}."
+    )
 
 if __name__ == "__main__":
     main()

@@ -32,26 +32,6 @@ VIEWS = default
 VARIABLES = default
 ISO_VALUES = default
 
-[FRONT_WING_PRESSURE]
-ENABLE = False
-PATCH_PATTERN = .*fw.*
-NORMAL = default
-Y_RANGE = default
-N_PLANES = 11
-VARIABLES = CpMean
-VARIABLE = CpMean
-OUTPUT_DIR = postProcessing/wingPressure
-
-[REAR_WING_PRESSURE]
-ENABLE = False
-PATCH_PATTERN = .*rw.*
-NORMAL = default
-Y_RANGE = default
-N_PLANES = 11
-VARIABLES = CpMean
-VARIABLE = CpMean
-OUTPUT_DIR = postProcessing/wingPressure
-
 [VARIABLES]
 SURFACE_VARIABLES = default
 SLICE_VARIABLES = default
