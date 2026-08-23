@@ -789,10 +789,12 @@ def plotFrhRrhContour(subDf, activeGroups, casePath, includeSideForce=False, fil
         np.linspace(rearVal.min(), rearVal.max(), 100),
     )
 
-    fig, axes = plt.subplots(1, len(metrics), figsize=(6 * len(metrics), 5), squeeze=False)
-    axes = axes[0, :]
+    nCols = 2
+    nRows = int(np.ceil(len(metrics) / float(nCols)))
+    fig, axes = plt.subplots(nRows, nCols, figsize=(6 * nCols, 5 * nRows), squeeze=False)
+    flatAxes = axes.flatten()
 
-    for ax, metric in zip(axes, metrics):
+    for ax, metric in zip(flatAxes, metrics):
         zValues = subDf[metric].to_numpy(dtype=float)
         gridZ = griddata((frontVal, rearVal), zValues, (gridX, gridY), method='cubic')
 
@@ -803,6 +805,10 @@ def plotFrhRrhContour(subDf, activeGroups, casePath, includeSideForce=False, fil
         ax.set_xlabel('Front Ride Height (avg fl/fr)')
         ax.set_ylabel('Rear Ride Height (avg rl/rr)')
         ax.set_title(metric)
+
+    #hide any unused axes (e.g. only 3 metrics in a 2x2 grid)
+    for ax in flatAxes[len(metrics):]:
+        ax.set_visible(False)
 
     fig.suptitle('Front vs Rear Ride Height Sensitivity Contour (roll=0)')
 
