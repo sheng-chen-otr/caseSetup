@@ -475,9 +475,13 @@ def formatSummaryNumericValues(summaryDf, decimals=3):
 
 #ride-height map sensitivity sweeps: groups of ride-height-CSV columns that can each act as a
 #single "swept" variable. 'cols' lists the underlying CSV columns that belong to the group;
-#a group counts as "changing" if ANY of its columns vary across the child cases. A group is only
-#plotted as a sweep if every OTHER group (including STEER_ONLY_GROUP, which is never itself
-#plotted) is constant across the same child cases -- i.e. exactly one variable is changing.
+#a group counts as "changing" if its columns vary within the rows being considered (columns of
+#the same group moving together, e.g. fl==fr, still count as ONE variable). Because the
+#ride-height map can be a full grid (front x rear x yaw x ...), a group is plotted as a sweep for
+#each FIXED-COMBO subset of the other groups (incl. STEER_ONLY_GROUP) where that group varies
+#and at least MIN_SWEEP_POINTS rows are available -- i.e. one figure per single-variable sweep,
+#even if several such sweeps of the same group exist at different fixed values of everything else.
+MIN_SWEEP_POINTS = 3
 RIDE_HEIGHT_SWEEP_GROUPS = OrderedDict([
     ('Front Ride Height', {'cols': ['fl', 'fr'], 'xLabel': 'Front Ride Height (avg fl/fr)'}),
     ('Rear Ride Height', {'cols': ['rl', 'rr'], 'xLabel': 'Rear Ride Height (avg rl/rr)'}),
@@ -552,11 +556,20 @@ def buildSweepDataset(casePath, rhMap):
     return pd.DataFrame(rows)
 
 
-def detectRideHeightSweeps(df):
-    """Return (list of sweep group names, activeGroups dict) for groups whose columns exist in df.
+def detectRideHeightSweeps(df, minPoints=MIN_SWEEP_POINTS):
+    """Return (sweeps, activeGroups).
 
-    A sweep group qualifies when its columns vary across df while every other tracked group
-    (other sweep groups + the steer-only constancy group) stays constant.
+    activeGroups maps sweep-group name -> {'cols', 'xLabel'} for every group whose columns
+    are present in df.
+
+    sweeps is a list of {'name': groupName, 'df': subsetDataFrame} entries. Each entry is a
+    fixed-combo subset of df -- rows where every OTHER group (including the steer-only
+    constancy group) has a single constant value -- within which the named group's columns
+    vary across at least `minPoints` rows. Because the ride-height map can be a full grid
+    (e.g. front x rear combinations), the SAME group can produce several sweep entries at
+    different fixed values of the other variables (front sweep with rear held at 0, another
+    front sweep with rear held at -0.01, etc); each is returned separately so it can be
+    plotted on its own figure.
     """
     activeGroups = OrderedDict()
     for name, spec in RIDE_HEIGHT_SWEEP_GROUPS.items():
@@ -566,32 +579,39 @@ def detectRideHeightSweeps(df):
 
     steerCols = [c for c in RIDE_HEIGHT_STEER_GROUP['cols'] if c in df.columns]
 
-    def groupVaries(cols):
-        return any(df[c].nunique(dropna=True) > 1 for c in cols)
+    def effectiveValue(frame, cols):
+        #columns within a group (e.g. fl/fr) move together for a pure ride-height sweep;
+        #average them into one representative value per row so both columns changing IN STEP
+        #still counts as a single variable (fl == fr -> treated as one axis).
+        return frame[cols].mean(axis=1).round(9)
 
     sweeps = []
     for name, spec in activeGroups.items():
-        if not groupVaries(spec['cols']):
-            continue
-
-        othersConstant = True
+        otherCols = []
         for otherName, otherSpec in activeGroups.items():
-            if otherName == name:
-                continue
-            if groupVaries(otherSpec['cols']):
-                othersConstant = False
-                break
-        if othersConstant and groupVaries(steerCols):
-            othersConstant = False
+            if otherName != name:
+                otherCols.extend(otherSpec['cols'])
+        otherCols.extend(steerCols)
+        otherCols = [c for c in dict.fromkeys(otherCols) if c in df.columns]
 
-        if othersConstant:
-            sweeps.append(name)
+        if otherCols:
+            groupKey = df[otherCols].round(9).apply(tuple, axis=1)
+        else:
+            groupKey = pd.Series(0, index=df.index)
+
+        for _, subIdx in df.groupby(groupKey).groups.items():
+            subDf = df.loc[subIdx].reset_index(drop=True)
+            if len(subDf) < minPoints:
+                continue
+            if effectiveValue(subDf, spec['cols']).nunique(dropna=True) <= 1:
+                continue
+            sweeps.append({'name': name, 'df': subDf})
 
     return sweeps, activeGroups
 
 
-def buildSweepTitle(sweepName, df, activeGroups):
-    """Descriptive title naming the sweep and the constant configuration around it."""
+def _sweepFixedParts(sweepName, df, activeGroups):
+    """List of 'col=value' strings for every OTHER group/steer column held constant in df."""
     fixedParts = []
     for otherName, otherSpec in activeGroups.items():
         if otherName == sweepName:
@@ -605,7 +625,12 @@ def buildSweepTitle(sweepName, df, activeGroups):
         if df[col].nunique(dropna=True) <= 1:
             fixedParts.append('%s=%s' % (col, df[col].iloc[0]))
             break
+    return fixedParts
 
+
+def buildSweepTitle(sweepName, df, activeGroups):
+    """Descriptive title naming the sweep and the constant configuration around it."""
+    fixedParts = _sweepFixedParts(sweepName, df, activeGroups)
     title = '%s Sensitivity Sweep' % sweepName
     if fixedParts:
         title += ' (%s)' % ', '.join(fixedParts)
@@ -627,7 +652,8 @@ def getSweepXValues(sweepName, groupSpec, df):
     return df[col].to_numpy(), groupSpec.get('xLabel', col)
 
 
-def plotRideHeightSweep(df, sweepName, groupSpec, activeGroups, casePath, includeSideForce=False):
+def plotRideHeightSweep(df, sweepName, groupSpec, activeGroups, casePath, includeSideForce=False,
+                         fileSuffix=''):
     """Plot one figure (scatter + connecting line, sorted by x) for a single-variable sweep."""
     xValues, xLabel = getSweepXValues(sweepName, groupSpec, df)
 
@@ -657,7 +683,7 @@ def plotRideHeightSweep(df, sweepName, groupSpec, activeGroups, casePath, includ
 
     outputDir = os.path.join(casePath, 'postProcessing', 'sensitivityPlots')
     os.makedirs(outputDir, exist_ok=True)
-    outFile = os.path.join(outputDir, '%s_sweep.png' % sweepName.replace(' ', ''))
+    outFile = os.path.join(outputDir, '%s%s_sweep.png' % (sweepName.replace(' ', ''), fileSuffix))
     fig.savefig(outFile, dpi=150)
     plt.close(fig)
     print('\tSaved %s sensitivity sweep: %s' % (sweepName, outFile))
@@ -689,9 +715,23 @@ def plotRideHeightSensitivity(casePath, includeSideForce=False):
         print('\tNo single-variable sweeps detected among ride-height child cases.')
         return
 
-    for sweepName in sweeps:
-        plotRideHeightSweep(df, sweepName, activeGroups[sweepName], activeGroups, casePath,
-                             includeSideForce=includeSideForce)
+    usedSuffixes = {}
+    for sweep in sweeps:
+        sweepName = sweep['name']
+        subDf = sweep['df']
+
+        fixedParts = _sweepFixedParts(sweepName, subDf, activeGroups)
+        slug = '_'.join(p.replace('=', '') for p in fixedParts).replace(' ', '')
+        fileSuffix = ('_%s' % slug) if slug else ''
+
+        #disambiguate on the rare chance two sub-sweeps of the same group produce the same slug
+        key = (sweepName, fileSuffix)
+        usedSuffixes[key] = usedSuffixes.get(key, 0) + 1
+        if usedSuffixes[key] > 1:
+            fileSuffix = '%s_%d' % (fileSuffix, usedSuffixes[key])
+
+        plotRideHeightSweep(subDf, sweepName, activeGroups[sweepName], activeGroups, casePath,
+                             includeSideForce=includeSideForce, fileSuffix=fileSuffix)
 
 
 def generate_summary():
