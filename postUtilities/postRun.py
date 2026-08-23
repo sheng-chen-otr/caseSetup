@@ -629,12 +629,9 @@ def _sweepFixedParts(sweepName, df, activeGroups):
 
 
 def buildSweepTitle(sweepName, df, activeGroups):
-    """Descriptive title naming the sweep and the constant configuration around it."""
-    fixedParts = _sweepFixedParts(sweepName, df, activeGroups)
-    title = '%s Sensitivity Sweep' % sweepName
-    if fixedParts:
-        title += ' (%s)' % ', '.join(fixedParts)
-    return title
+    """Short title naming just the sweep; fixed configuration is shown in a side panel instead
+    (see plotRideHeightSweep) so long lists of held-constant values don't overrun the title."""
+    return '%s Sensitivity Sweep' % sweepName
 
 
 def getSweepXValues(sweepName, groupSpec, df):
@@ -654,7 +651,11 @@ def getSweepXValues(sweepName, groupSpec, df):
 
 def plotRideHeightSweep(df, sweepName, groupSpec, activeGroups, casePath, includeSideForce=False,
                          fileSuffix=''):
-    """Plot one figure (scatter + connecting line, sorted by x) for a single-variable sweep."""
+    """Plot one figure (scatter + polynomial curve fit, sorted by x) for a single-variable sweep.
+
+    The swept variable's held-constant siblings are listed in a side panel (not the title) so
+    long configuration lists don't overrun the figure width.
+    """
     xValues, xLabel = getSweepXValues(sweepName, groupSpec, df)
 
     metrics = list(DEFAULT_SWEEP_METRICS)
@@ -665,26 +666,53 @@ def plotRideHeightSweep(df, sweepName, groupSpec, activeGroups, casePath, includ
         print('\tNo usable force coefficient columns for %s sweep, skipping plot.' % sweepName)
         return
 
-    isNumericX = np.issubdtype(np.asarray(xValues).dtype, np.number)
-    sortOrder = np.argsort(xValues) if isNumericX else np.argsort(xValues.astype(str))
+    xArr = np.asarray(xValues)
+    isNumericX = np.issubdtype(xArr.dtype, np.number)
+    sortOrder = np.argsort(xArr) if isNumericX else np.argsort(xArr.astype(str))
 
     fig, axes = plt.subplots(len(metrics), 1, figsize=(7, 3 * len(metrics)), sharex=True, squeeze=False)
     axes = axes[:, 0]
 
     for ax, metric in zip(axes, metrics):
         yValues = df[metric].to_numpy()
-        ax.plot(np.asarray(xValues)[sortOrder], yValues[sortOrder], marker='o', linestyle='-')
+        xSorted = xArr[sortOrder]
+        ySorted = yValues[sortOrder]
+        ax.scatter(xSorted, ySorted, marker='o', zorder=3)
+
+        if isNumericX:
+            validMask = np.isfinite(xSorted.astype(float)) & np.isfinite(ySorted.astype(float))
+            nValid = int(np.count_nonzero(validMask))
+            #degree scales with available points but stays low-order (avoid overfitting a
+            #handful of ride-height points); need at least degree+1 points to fit.
+            degree = min(3, nValid - 1) if nValid > 1 else 0
+            if degree >= 1 and np.unique(xSorted[validMask]).size > degree:
+                coeffs = np.polyfit(xSorted[validMask].astype(float), ySorted[validMask].astype(float), degree)
+                xFit = np.linspace(xSorted[validMask].min(), xSorted[validMask].max(), 100)
+                ax.plot(xFit, np.polyval(coeffs, xFit), linestyle='-', zorder=2)
+            else:
+                ax.plot(xSorted, ySorted, linestyle='-', zorder=2)
+        else:
+            ax.plot(xSorted, ySorted, linestyle='-', zorder=2)
+
         ax.set_ylabel(metric)
         ax.grid(True)
 
     axes[-1].set_xlabel(xLabel)
     fig.suptitle(buildSweepTitle(sweepName, df, activeGroups))
-    fig.tight_layout()
+
+    fixedParts = _sweepFixedParts(sweepName, df, activeGroups)
+    if fixedParts:
+        sideText = 'Fixed configuration:\n' + '\n'.join(fixedParts)
+        fig.subplots_adjust(right=0.72)
+        fig.text(0.75, 0.5, sideText, va='center', ha='left', fontsize=8,
+                  bbox=dict(boxstyle='round', facecolor='white', edgecolor='gray'))
+    else:
+        fig.tight_layout()
 
     outputDir = os.path.join(casePath, 'postProcessing', 'sensitivityPlots')
     os.makedirs(outputDir, exist_ok=True)
     outFile = os.path.join(outputDir, '%s%s_sweep.png' % (sweepName.replace(' ', ''), fileSuffix))
-    fig.savefig(outFile, dpi=150)
+    fig.savefig(outFile, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print('\tSaved %s sensitivity sweep: %s' % (sweepName, outFile))
 
