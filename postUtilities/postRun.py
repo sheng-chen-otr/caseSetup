@@ -69,6 +69,8 @@ def main():
                        help='Plot ride-height/yaw/cornering sensitivity sweeps for a ride-height mapping parent case')
     parser.add_argument('--includeSideForce', action='store_true',
                        help='Include Cs(f)/Cs(r) in sensitivity sweep plots (off by default)')
+    parser.add_argument('--sensitivityCases', nargs='+', default=[],
+                       help='Other ride-height mapping parent case paths to overlay on the sensitivity sweep plots for comparison')
 
     args = parser.parse_args()
     
@@ -86,7 +88,8 @@ def main():
         plotWingPressure(args, casePathDict, caseLoc)
 
     if args.sensitivityPlots:
-        plotRideHeightSensitivity(casePath, includeSideForce=args.includeSideForce)
+        plotRideHeightSensitivity(casePath, includeSideForce=args.includeSideForce,
+                                   compareCasePaths=args.sensitivityCases)
 
     if not args.summary and not args.forces and not args.wingPlots and not args.sensitivityPlots:
         parser.print_help()
@@ -650,58 +653,79 @@ def getSweepXValues(sweepName, groupSpec, df):
     return df[col].to_numpy(), groupSpec.get('xLabel', col)
 
 
-def plotRideHeightSweep(df, sweepName, groupSpec, activeGroups, casePath, includeSideForce=False,
+def plotRideHeightSweep(entries, sweepName, groupSpec, activeGroups, casePath, includeSideForce=False,
                          fileSuffix=''):
     """Plot one figure (scatter + polynomial curve fit, sorted by x) for a single-variable sweep.
+
+    `entries` is a list of (caseLabel, df) pairs. A single-case sweep passes one entry with
+    caseLabel=None (no legend shown); a multi-case comparison passes one entry per matched
+    parent case (same sweep type + same fixed configuration), each drawn in its own color with
+    a legend so sensitivities can be compared across ride-height maps.
 
     The swept variable's held-constant siblings are listed in a side panel (not the title) so
     long configuration lists don't overrun the figure width.
     """
-    xValues, xLabel = getSweepXValues(sweepName, groupSpec, df)
-
     metrics = list(DEFAULT_SWEEP_METRICS)
     if includeSideForce:
         metrics += OPTIONAL_SWEEP_METRICS
-    metrics = [m for m in metrics if m in df.columns and df[m].notna().any()]
+    metrics = [m for m in metrics if any(m in df.columns and df[m].notna().any() for _, df in entries)]
     if not metrics:
         print('\tNo usable force coefficient columns for %s sweep, skipping plot.' % sweepName)
         return
 
-    xArr = np.asarray(xValues)
-    isNumericX = np.issubdtype(xArr.dtype, np.number)
-    sortOrder = np.argsort(xArr) if isNumericX else np.argsort(xArr.astype(str))
-
     fig, axes = plt.subplots(len(metrics), 1, figsize=(7, 3 * len(metrics)), sharex=True, squeeze=False)
     axes = axes[:, 0]
 
-    for ax, metric in zip(axes, metrics):
-        yValues = df[metric].to_numpy()
-        xSorted = xArr[sortOrder]
-        ySorted = yValues[sortOrder]
-        ax.scatter(xSorted, ySorted, marker='o', zorder=3)
+    colorCycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', ['C0'])
+    showLegend = len(entries) > 1
 
-        if isNumericX:
-            validMask = np.isfinite(xSorted.astype(float)) & np.isfinite(ySorted.astype(float))
-            nValid = int(np.count_nonzero(validMask))
-            #degree scales with available points but stays low-order (avoid overfitting a
-            #handful of ride-height points); need at least degree+1 points to fit.
-            degree = min(3, nValid - 1) if nValid > 1 else 0
-            if degree >= 1 and np.unique(xSorted[validMask]).size > degree:
-                coeffs = np.polyfit(xSorted[validMask].astype(float), ySorted[validMask].astype(float), degree)
-                xFit = np.linspace(xSorted[validMask].min(), xSorted[validMask].max(), 100)
-                ax.plot(xFit, np.polyval(coeffs, xFit), linestyle='-', zorder=2)
+    xLabel = groupSpec.get('xLabel', sweepName)
+    for entryIdx, (caseLabel, df) in enumerate(entries):
+        if metrics and not any(m in df.columns and df[m].notna().any() for m in metrics):
+            continue
+        xValues, entryXLabel = getSweepXValues(sweepName, groupSpec, df)
+        xLabel = entryXLabel
+        xArr = np.asarray(xValues)
+        isNumericX = np.issubdtype(xArr.dtype, np.number)
+        sortOrder = np.argsort(xArr) if isNumericX else np.argsort(xArr.astype(str))
+        color = colorCycle[entryIdx % len(colorCycle)]
+
+        for ax, metric in zip(axes, metrics):
+            if metric not in df.columns:
+                continue
+            yValues = df[metric].to_numpy()
+            xSorted = xArr[sortOrder]
+            ySorted = yValues[sortOrder]
+            ax.scatter(xSorted, ySorted, marker='o', zorder=3, color=color,
+                       label=caseLabel if showLegend else None)
+
+            if isNumericX:
+                validMask = np.isfinite(xSorted.astype(float)) & np.isfinite(ySorted.astype(float))
+                nValid = int(np.count_nonzero(validMask))
+                #degree scales with available points but stays low-order (avoid overfitting a
+                #handful of ride-height points); need at least degree+1 points to fit.
+                degree = min(3, nValid - 1) if nValid > 1 else 0
+                if degree >= 1 and np.unique(xSorted[validMask]).size > degree:
+                    coeffs = np.polyfit(xSorted[validMask].astype(float), ySorted[validMask].astype(float), degree)
+                    xFit = np.linspace(xSorted[validMask].min(), xSorted[validMask].max(), 100)
+                    ax.plot(xFit, np.polyval(coeffs, xFit), linestyle='-', zorder=2, color=color)
+                else:
+                    ax.plot(xSorted, ySorted, linestyle='-', zorder=2, color=color)
             else:
-                ax.plot(xSorted, ySorted, linestyle='-', zorder=2)
-        else:
-            ax.plot(xSorted, ySorted, linestyle='-', zorder=2)
+                ax.plot(xSorted, ySorted, linestyle='-', zorder=2, color=color)
 
+    for ax, metric in zip(axes, metrics):
         ax.set_ylabel(metric)
         ax.grid(True)
 
-    axes[-1].set_xlabel(xLabel)
-    fig.suptitle(buildSweepTitle(sweepName, df, activeGroups))
+    if showLegend:
+        axes[0].legend(fontsize=8)
 
-    fixedParts = _sweepFixedParts(sweepName, df, activeGroups)
+    axes[-1].set_xlabel(xLabel)
+    titleDf = entries[0][1]
+    fig.suptitle(buildSweepTitle(sweepName, titleDf, activeGroups))
+
+    fixedParts = _sweepFixedParts(sweepName, titleDf, activeGroups)
     if fixedParts:
         sideText = 'Fixed configuration:\n' + '\n'.join(fixedParts)
         fig.subplots_adjust(right=0.72)
@@ -870,38 +894,73 @@ def plotFrhRrhContours(df, casePath, includeSideForce=False):
                            fileSuffix=fileSuffix)
 
 
-def plotRideHeightSensitivity(casePath, includeSideForce=False):
+def loadCaseSweepDataset(path):
+    """Build the ride-height sweep dataset for a parent case directory (used for both the
+    primary case and any --sensitivityCases comparison cases). Returns None if `path` is not a
+    valid ride-height mapping parent (no matching child dirs, or no rideHeights_updated.csv)."""
+    path = os.path.abspath(path)
+    parentCaseName = os.path.basename(path)
+    childCases = discoverRideHeightChildCases(path, parentCaseName)
+    if not childCases:
+        print('\tNo ride-height child cases detected in %s; skipping.' % path)
+        return None
+
+    rhMap = loadRideHeightMap(path)
+    if rhMap is None:
+        print('\tNo rideHeights_updated.csv found in %s; skipping.' % path)
+        return None
+
+    return buildSweepDataset(path, rhMap)
+
+
+def plotRideHeightSensitivity(casePath, includeSideForce=False, compareCasePaths=None):
     """Detect and plot single-variable sensitivity sweeps for a ride-height mapping parent case.
 
     Only runs for parent cases (those with child dirs matching caseName_#); does nothing for
     plain single cases or when run from inside a child case.
+
+    If `compareCasePaths` is given, sub-sweeps from those other parent ride-height cases are
+    overlaid on the same figure whenever they match the primary case's sweep type AND fixed
+    configuration (e.g. both are Front Ride Height sweeps with Rear Ride Height=-0.01), so
+    sensitivities can be compared across cases. FRH-RRH contour plots remain single-case.
     """
-    parentCaseName = os.path.basename(casePath)
-    childCases = discoverRideHeightChildCases(casePath, parentCaseName)
-    if not childCases:
-        print('\tNo ride-height child cases detected; skipping sensitivity plots.')
-        return
-
-    rhMap = loadRideHeightMap(casePath)
-    if rhMap is None:
-        print('\tNo rideHeights_updated.csv found; skipping sensitivity plots.')
-        return
-
-    df = buildSweepDataset(casePath, rhMap)
+    df = loadCaseSweepDataset(casePath)
     if df is None:
+        print('\tSkipping sensitivity plots for %s.' % casePath)
         return
 
+    caseLabel = os.path.basename(os.path.normpath(casePath))
     sweeps, activeGroups = detectRideHeightSweeps(df)
-    if not sweeps:
+
+    #collect comparison cases' sweeps under the same (sweepName, fixedConfig) matching used
+    #for the primary case's own sub-sweeps, so all matching sub-sweeps across cases share a plot
+    matchedSweeps = OrderedDict()
+    for sweep in sweeps:
+        sweepName = sweep['name']
+        subDf = sweep['df']
+        fixedKey = frozenset(_sweepFixedParts(sweepName, subDf, activeGroups))
+        matchedSweeps.setdefault((sweepName, fixedKey), []).append((caseLabel, subDf))
+
+    for comparePath in (compareCasePaths or []):
+        compareDf = loadCaseSweepDataset(comparePath)
+        if compareDf is None:
+            continue
+        compareLabel = os.path.basename(os.path.normpath(comparePath))
+        compareSweeps, compareActiveGroups = detectRideHeightSweeps(compareDf)
+        for sweep in compareSweeps:
+            sweepName = sweep['name']
+            subDf = sweep['df']
+            fixedKey = frozenset(_sweepFixedParts(sweepName, subDf, compareActiveGroups))
+            key = (sweepName, fixedKey)
+            if key in matchedSweeps:
+                matchedSweeps[key].append((compareLabel, subDf))
+
+    if not matchedSweeps:
         print('\tNo single-variable sweeps detected among ride-height child cases.')
     else:
         usedSuffixes = {}
-        for sweep in sweeps:
-            sweepName = sweep['name']
-            subDf = sweep['df']
-
-            fixedParts = _sweepFixedParts(sweepName, subDf, activeGroups)
-            slug = '_'.join(p.replace('=', '') for p in fixedParts).replace(' ', '')
+        for (sweepName, fixedKey), entries in matchedSweeps.items():
+            slug = '_'.join(p.replace('=', '') for p in sorted(fixedKey)).replace(' ', '')
             fileSuffix = ('_%s' % slug) if slug else ''
 
             #disambiguate on the rare chance two sub-sweeps of the same group produce the same slug
@@ -910,10 +969,12 @@ def plotRideHeightSensitivity(casePath, includeSideForce=False):
             if usedSuffixes[key] > 1:
                 fileSuffix = '%s_%d' % (fileSuffix, usedSuffixes[key])
 
-            plotRideHeightSweep(subDf, sweepName, activeGroups[sweepName], activeGroups, casePath,
+            plotRideHeightSweep(entries, sweepName, activeGroups[sweepName], activeGroups, casePath,
                                  includeSideForce=includeSideForce, fileSuffix=fileSuffix)
 
     plotFrhRrhContours(df, casePath, includeSideForce=includeSideForce)
+
+
 
 
 
