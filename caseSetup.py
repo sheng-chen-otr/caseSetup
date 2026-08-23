@@ -62,6 +62,11 @@ parser.add_argument("--animateSuspension", action="store_true",
                     help='Generate a suspension-motion GIF (front/side/top views) across '
                          'the ride-height map using the kinematic solver. Requires '
                          '[RIDE_HEIGHT_SETUP] USE_KINEMATIC_SOLVER true.')
+parser.add_argument("--gsheetPrep", action="store_true",
+                    help='After setup completes, reserve/prepare gsheet row(s) for this case (and its '
+                         'ride-height children, if any, in parent-then-child order) with the setup-time '
+                         'values already known (velocity, yaw, density, symmetry, wheelbase), without '
+                         'touching result columns. Intended to run before the case is submitted.')
 args = parser.parse_args()
 CONTROLDICT = args.controlDict
 NEWCS = args.new
@@ -161,7 +166,14 @@ def main():
                 copyScripts(templateLoc, fullCaseSetupDict,case)
             #tilt the base ground zones (child points are tilted+heaved in transformGeom)
             transformGroundGeom(geomDict,fullCaseSetupDict)
-            
+
+            if args.gsheetPrep:
+                print('\n\tPreparing gsheet row(s)...')
+                try:
+                    gsheetExportScript = os.path.join(execDir, 'postUtilities', 'gsheetExport.py')
+                    sp.run([sys.executable, gsheetExportScript, '--prep'], cwd=os.path.join(path, case), check=True)
+                except Exception as e:
+                    print('\tWARNING! Unable to prepare gsheet row(s): %s' % (e))
         
         
         

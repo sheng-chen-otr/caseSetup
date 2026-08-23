@@ -1,3 +1,4 @@
+import argparse
 import configparser
 import os
 import re
@@ -182,6 +183,183 @@ def build_sheet_values_from_summary(summary_dict, case_setup_dict):
     ]
 
 
+def resolve_job_context(case_path):
+    """Resolve (jobPath, jobName, worksheetName, sheetId) for a given case path,
+    using the same job-root inference rules as main()."""
+    case_path = Path(case_path).resolve()
+    case_name = case_path.name
+
+    if case_path.parent.name == 'CASES':
+        jobPath = case_path.parent.parent
+    elif case_path.parent.parent.name == 'CASES':
+        jobPath = case_path.parent.parent.parent
+    elif '_' in case_name:
+        jobPath = case_path.parents[2]
+    else:
+        jobPath = case_path.parents[1]
+
+    jobName = jobPath.name
+    worksheet_name = '%s - Trials List' % (jobName)
+    gsheet_id = getSheetId(
+        os.path.join(jobPath, '02_reference', 'GSheet', '%s.gsheet' % jobName),
+        jobName=jobName,
+    )
+    return jobPath, jobName, worksheet_name, gsheet_id
+
+
+def _first(value, default=""):
+    """Return the first element of a list/tuple (as produced by caseSetup.py's
+    in-memory caseSetup dict), or the value itself (as returned by configparser
+    when reading a caseSetup file back off disk)."""
+    if isinstance(value, (list, tuple)):
+        return value[0] if len(value) else default
+    if value is None:
+        return default
+    return value
+
+
+def build_setup_time_values(case_setup_dict):
+    """
+    Build the setup-time-known sheet columns (symmetry, velocity, yaw, density,
+    reference area, wheelbase) from a case's caseSetup dict. Result columns (run
+    date, solve time, cell count, Cd, Cl, etc.) are intentionally left out since
+    they are not known until the case has actually run.
+    """
+    try:
+        sim_sym = str(_first(case_setup_dict['GLOBAL_SIM_CONTROL']['SIM_SYM'], '')).strip().lower()
+    except Exception:
+        sim_sym = ''
+    is_half = "TRUE" if sim_sym == 'half' else "FALSE"
+
+    try:
+        velocity = _first(case_setup_dict['BC_SETUP']['INLET_MAG'])
+    except Exception:
+        velocity = ""
+
+    try:
+        yaw = 0 if sim_sym == 'half' else _first(case_setup_dict['BC_SETUP']['YAW'])
+    except Exception:
+        yaw = ""
+
+    try:
+        density = parse_float(_first(case_setup_dict['GLOBAL_MATERIAL']['DENSITY']), 1.225)
+    except Exception:
+        density = 1.225
+
+    try:
+        ref_area = _first(case_setup_dict['BC_SETUP']['REFAREA'])
+    except Exception:
+        ref_area = ""
+
+    try:
+        wheel_base = parse_float(_first(case_setup_dict['BC_SETUP']['REFLEN']), "")
+    except Exception:
+        wheel_base = ""
+
+    return {
+        "M": is_half,
+        "N": velocity,
+        "O": yaw,
+        "P": density,
+        "Q": "0",
+        "R": "0",
+        "S": ref_area,
+        "T": wheel_base,
+    }
+
+
+def write_setup_time_cells(sheet_id, worksheet_name, target_row, values_by_column, jobName):
+    worksheet = get_worksheet(sheet_id, worksheet_name, jobName)
+    for col, value in values_by_column.items():
+        cell = f"{col.upper()}{target_row}"
+        worksheet.update(
+            range_name=cell,
+            values=[[str(value)]],
+            value_input_option="RAW",
+        )
+
+
+def prep_single_case_row(sheet_id, worksheet_name, case_name, job_name, case_setup_dict):
+    """Ensure a row exists for case_name (reserving the next row if missing) and
+    fill in only the setup-time-known columns, leaving result columns untouched."""
+    if case_setup_dict is None:
+        print(f"\t\tWARNING! Unable to read caseSetup for {case_name}; skipping gsheet row prep.")
+        return
+    target_row = get_or_create_trial_row(sheet_id, worksheet_name, case_name, job_name)
+    setup_values = build_setup_time_values(case_setup_dict)
+    write_setup_time_cells(sheet_id, worksheet_name, target_row, setup_values, job_name)
+    print(f"\t\tPrepared gsheet row {target_row} for {case_name}.")
+
+
+def find_ride_height_children(parent_case_path):
+    """Return [(pointNumber, childPath), ...] sorted by ascending point number for
+    <parentName>_<n> child directories directly under the parent case directory."""
+    parent_case_path = Path(parent_case_path)
+    parent_name = parent_case_path.name
+    pattern = re.compile(r'^%s_(\d+)$' % re.escape(parent_name))
+    children = []
+    for child in parent_case_path.iterdir():
+        if not child.is_dir():
+            continue
+        m = pattern.match(child.name)
+        if m:
+            children.append((int(m.group(1)), child))
+    children.sort(key=lambda item: item[0])
+    return children
+
+
+def prep_ride_height_rows(case_path, fullCaseSetupDict, jobName, worksheet_name, gsheet_id):
+    """Ensure the parent row exists first, then the child rows in ascending
+    ride-height-point order, for a ride-height mapping parent case."""
+    case_path = Path(case_path).resolve()
+
+    #parent row first
+    prep_single_case_row(gsheet_id, worksheet_name, case_path.name, jobName, fullCaseSetupDict)
+
+    #then children, in ascending ride-height-point order
+    children = find_ride_height_children(case_path)
+    if not children:
+        print("\t\tWARNING! RUN_RIDE_HEIGHT is True but no child cases were found under: %s" % (case_path))
+        return
+    for pointNumber, childPath in children:
+        childCfg = load_case_setup(childPath)
+        prep_single_case_row(gsheet_id, worksheet_name, childPath.name, jobName, childCfg)
+
+
+def prep_gsheet_rows(case_path, fullCaseSetupDict=None):
+    """
+    Ensure this case's gsheet row exists (and, for a ride-height mapping parent,
+    every child's row as well, in parent-then-ascending-point-number order),
+    pre-filled with the setup-time values already known from caseSetup. Intended
+    to run right after caseSetup, before a case is submitted. Any failure (missing
+    credentials, sheet not found, network error, etc.) is caught and printed as a
+    warning only, so callers (e.g. caseSetup.py) can continue regardless.
+    """
+    case_path = Path(case_path).resolve()
+    try:
+        jobPath, jobName, worksheet_name, gsheet_id = resolve_job_context(case_path)
+        print('\tFound gsheet id: %s' % (gsheet_id))
+
+        if fullCaseSetupDict is None:
+            fullCaseSetupDict = load_case_setup(case_path)
+
+        is_ride_height_parent = False
+        if fullCaseSetupDict is not None and 'RIDE_HEIGHT_SETUP' in fullCaseSetupDict:
+            try:
+                is_ride_height_parent = str(_first(
+                    fullCaseSetupDict['RIDE_HEIGHT_SETUP']['RUN_RIDE_HEIGHT'], ''
+                )).strip().lower() == 'true'
+            except Exception:
+                is_ride_height_parent = False
+
+        if is_ride_height_parent:
+            prep_ride_height_rows(case_path, fullCaseSetupDict, jobName, worksheet_name, gsheet_id)
+        else:
+            prep_single_case_row(gsheet_id, worksheet_name, case_path.name, jobName, fullCaseSetupDict)
+    except Exception as e:
+        print('\tWARNING! Unable to prepare gsheet row(s) for %s: %s' % (case_path.name, e))
+
+
 def detect_parent_case_for_child(case_path):
     """Return parent case path if case is likely parentName_# under parentName folder."""
     case_path = Path(case_path).resolve()
@@ -295,26 +473,28 @@ def write_to_sheet_cells(
 
 def main():
     global jobName
+    parser = argparse.ArgumentParser(
+        description='Push case summary results to a Google Sheet, or reserve/pre-fill row(s) before a case runs.'
+    )
+    parser.add_argument(
+        '--prep', action='store_true',
+        help='Reserve gsheet row(s) for this case (and its ride-height children, if any, in parent-then-child '
+             'order) and fill in the setup-time values already known from caseSetup, without touching result '
+             'columns. Intended to run right after caseSetup, before the case is submitted.'
+    )
+    args = parser.parse_args()
+
     case_path = Path(os.getcwd()).resolve()
     case_name = case_path.name
     #checking if run in a trial directory
     # if os.path.basename(os.path.split(case_path)[0]) != 'CASES':
     #     sys.exit('ERROR! Please run in a trial directory!')
-    
-    if case_path.parent.name == 'CASES':
-        jobPath = case_path.parent.parent
-    elif case_path.parent.parent.name == 'CASES':
-        jobPath = case_path.parent.parent.parent
-    elif '_' in case_name:
-        jobPath = Path(os.path.abspath(os.path.join(os.getcwd(), "../../../")))
-    else:
-        jobPath = Path(os.path.abspath(os.path.join(os.getcwd(), "../../")))
-    jobName = jobPath.name
-    #jobName = getWorksheetName(case_path)
-    WORKSHEET_NAME = '%s - Trials List' % (jobName)
-    #jobRoot = os.path.abspath(os.path.join(path, os.pardir))
-    
-    gsheetID = getSheetId(os.path.join(jobPath, '02_reference', 'GSheet', '%s.gsheet' % jobName), jobName=jobName)
+
+    if args.prep:
+        prep_gsheet_rows(case_path)
+        return
+
+    jobPath, jobName, WORKSHEET_NAME, gsheetID = resolve_job_context(case_path)
     print('\tFound gsheet id: %s' % (gsheetID))
 
     parent_case_path = detect_parent_case_for_child(case_path)
