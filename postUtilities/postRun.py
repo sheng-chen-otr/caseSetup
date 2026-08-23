@@ -7,6 +7,7 @@ import configparser
 import argparse
 import matplotlib.pyplot as plt
 import scipy.stats as st
+from scipy.interpolate import griddata
 import glob
 from collections import OrderedDict
 #from plotForces import *
@@ -717,6 +718,152 @@ def plotRideHeightSweep(df, sweepName, groupSpec, activeGroups, casePath, includ
     print('\tSaved %s sensitivity sweep: %s' % (sweepName, outFile))
 
 
+#minimum number of rows / unique front-rear combinations required to build a FRH-RRH contour
+MIN_CONTOUR_POINTS = 4
+#other columns besides front/rear ride height that must be held constant for a contour group
+#(roll itself is enforced separately -- only roll==0 rows are considered at all)
+FRH_RRH_CONTOUR_CONSTANT_GROUPS = ['Yaw', 'Corner']
+
+
+def buildFrhRrhContourGroups(df, activeGroups, minPoints=MIN_CONTOUR_POINTS):
+    """Return a list of fixed-combo subsets of df suitable for a FRH-vs-RRH contour plot.
+
+    Requires 'roll' == 0 (within tolerance) and both front (fl/fr) and rear (rl/rr) ride
+    height columns present and varying with at least 2 unique values each. Every other
+    tracked group (Yaw, Corner) and the steer-only constancy group must be held constant
+    within each returned subset, matching the same fixed-combo logic used for 1D sweeps.
+    """
+    if 'roll' not in df.columns:
+        return []
+    if not {'fl', 'fr', 'rl', 'rr'}.issubset(df.columns):
+        return []
+
+    rollFiltered = df[np.isclose(df['roll'].astype(float), 0.0, atol=1e-6)]
+    if rollFiltered.empty:
+        return []
+
+    steerCols = [c for c in RIDE_HEIGHT_STEER_GROUP['cols'] if c in rollFiltered.columns]
+    otherCols = []
+    for groupName in FRH_RRH_CONTOUR_CONSTANT_GROUPS:
+        spec = activeGroups.get(groupName)
+        if spec:
+            otherCols.extend(spec['cols'])
+    otherCols.extend(steerCols)
+    otherCols = [c for c in dict.fromkeys(otherCols) if c in rollFiltered.columns]
+
+    if otherCols:
+        groupKey = rollFiltered[otherCols].round(9).apply(tuple, axis=1)
+    else:
+        groupKey = pd.Series(0, index=rollFiltered.index)
+
+    contourGroups = []
+    for _, subIdx in rollFiltered.groupby(groupKey).groups.items():
+        subDf = rollFiltered.loc[subIdx].reset_index(drop=True)
+        if len(subDf) < minPoints:
+            continue
+        frontVal = subDf[['fl', 'fr']].mean(axis=1).round(9)
+        rearVal = subDf[['rl', 'rr']].mean(axis=1).round(9)
+        if frontVal.nunique() < 2 or rearVal.nunique() < 2:
+            continue
+        contourGroups.append(subDf)
+
+    return contourGroups
+
+
+def plotFrhRrhContour(subDf, activeGroups, casePath, includeSideForce=False, fileSuffix=''):
+    """Plot a Front-Ride-Height (x) vs Rear-Ride-Height (y) contour, cubic-interpolated, one
+    subplot per force coefficient metric, for a fixed-combo subset with roll held at 0."""
+    frontVal = subDf[['fl', 'fr']].mean(axis=1).to_numpy(dtype=float)
+    rearVal = subDf[['rl', 'rr']].mean(axis=1).to_numpy(dtype=float)
+
+    metrics = list(DEFAULT_SWEEP_METRICS)
+    if includeSideForce:
+        metrics += OPTIONAL_SWEEP_METRICS
+    metrics = [m for m in metrics if m in subDf.columns and subDf[m].notna().any()]
+    if not metrics:
+        print('\tNo usable force coefficient columns for FRH-RRH contour, skipping plot.')
+        return
+
+    gridX, gridY = np.meshgrid(
+        np.linspace(frontVal.min(), frontVal.max(), 100),
+        np.linspace(rearVal.min(), rearVal.max(), 100),
+    )
+
+    fig, axes = plt.subplots(1, len(metrics), figsize=(6 * len(metrics), 5), squeeze=False)
+    axes = axes[0, :]
+
+    for ax, metric in zip(axes, metrics):
+        zValues = subDf[metric].to_numpy(dtype=float)
+        gridZ = griddata((frontVal, rearVal), zValues, (gridX, gridY), method='cubic')
+
+        contourf = ax.contourf(gridX, gridY, gridZ, levels=20, cmap='viridis')
+        ax.contour(gridX, gridY, gridZ, levels=20, colors='black', linewidths=0.4, alpha=0.5)
+        ax.scatter(frontVal, rearVal, c='white', edgecolors='black', s=25, zorder=3)
+        fig.colorbar(contourf, ax=ax, label=metric)
+        ax.set_xlabel('Front Ride Height (avg fl/fr)')
+        ax.set_ylabel('Rear Ride Height (avg rl/rr)')
+        ax.set_title(metric)
+
+    fig.suptitle('Front vs Rear Ride Height Sensitivity Contour (roll=0)')
+
+    fixedParts = []
+    for groupName in FRH_RRH_CONTOUR_CONSTANT_GROUPS:
+        spec = activeGroups.get(groupName)
+        if not spec:
+            continue
+        for col in spec['cols']:
+            if subDf[col].nunique(dropna=True) <= 1:
+                fixedParts.append('%s=%s' % (col, subDf[col].iloc[0]))
+    fixedParts.append('roll=0')
+    steerCols = [c for c in RIDE_HEIGHT_STEER_GROUP['cols'] if c in subDf.columns]
+    for col in steerCols:
+        if subDf[col].nunique(dropna=True) <= 1:
+            fixedParts.append('%s=%s' % (col, subDf[col].iloc[0]))
+            break
+
+    if fixedParts:
+        sideText = 'Fixed configuration:\n' + '\n'.join(fixedParts)
+        fig.subplots_adjust(top=0.8)
+        fig.text(0.5, 0.90, sideText, va='center', ha='center', fontsize=8,
+                  bbox=dict(boxstyle='round', facecolor='white', edgecolor='gray'))
+
+    outputDir = os.path.join(casePath, 'postProcessing', 'sensitivityPlots')
+    os.makedirs(outputDir, exist_ok=True)
+    outFile = os.path.join(outputDir, 'FrontRearRideHeight_contour%s.png' % fileSuffix)
+    fig.savefig(outFile, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print('\tSaved FRH-RRH sensitivity contour: %s' % outFile)
+
+
+def plotFrhRrhContours(df, casePath, includeSideForce=False):
+    """Detect and plot FRH-vs-RRH contour(s) for fixed-combo subsets with roll held at 0."""
+    _, activeGroups = detectRideHeightSweeps(df)
+    contourGroups = buildFrhRrhContourGroups(df, activeGroups)
+    if not contourGroups:
+        print('\tNo roll=0 Front/Rear Ride Height grid detected; skipping FRH-RRH contour plot.')
+        return
+
+    usedSuffixes = {}
+    for subDf in contourGroups:
+        fixedParts = []
+        for groupName in FRH_RRH_CONTOUR_CONSTANT_GROUPS:
+            spec = activeGroups.get(groupName)
+            if not spec:
+                continue
+            for col in spec['cols']:
+                if subDf[col].nunique(dropna=True) <= 1:
+                    fixedParts.append('%s%s' % (col, subDf[col].iloc[0]))
+        slug = '_'.join(fixedParts).replace(' ', '')
+        fileSuffix = ('_%s' % slug) if slug else ''
+
+        usedSuffixes[fileSuffix] = usedSuffixes.get(fileSuffix, 0) + 1
+        if usedSuffixes[fileSuffix] > 1:
+            fileSuffix = '%s_%d' % (fileSuffix, usedSuffixes[fileSuffix])
+
+        plotFrhRrhContour(subDf, activeGroups, casePath, includeSideForce=includeSideForce,
+                           fileSuffix=fileSuffix)
+
+
 def plotRideHeightSensitivity(casePath, includeSideForce=False):
     """Detect and plot single-variable sensitivity sweeps for a ride-height mapping parent case.
 
@@ -741,25 +888,27 @@ def plotRideHeightSensitivity(casePath, includeSideForce=False):
     sweeps, activeGroups = detectRideHeightSweeps(df)
     if not sweeps:
         print('\tNo single-variable sweeps detected among ride-height child cases.')
-        return
+    else:
+        usedSuffixes = {}
+        for sweep in sweeps:
+            sweepName = sweep['name']
+            subDf = sweep['df']
 
-    usedSuffixes = {}
-    for sweep in sweeps:
-        sweepName = sweep['name']
-        subDf = sweep['df']
+            fixedParts = _sweepFixedParts(sweepName, subDf, activeGroups)
+            slug = '_'.join(p.replace('=', '') for p in fixedParts).replace(' ', '')
+            fileSuffix = ('_%s' % slug) if slug else ''
 
-        fixedParts = _sweepFixedParts(sweepName, subDf, activeGroups)
-        slug = '_'.join(p.replace('=', '') for p in fixedParts).replace(' ', '')
-        fileSuffix = ('_%s' % slug) if slug else ''
+            #disambiguate on the rare chance two sub-sweeps of the same group produce the same slug
+            key = (sweepName, fileSuffix)
+            usedSuffixes[key] = usedSuffixes.get(key, 0) + 1
+            if usedSuffixes[key] > 1:
+                fileSuffix = '%s_%d' % (fileSuffix, usedSuffixes[key])
 
-        #disambiguate on the rare chance two sub-sweeps of the same group produce the same slug
-        key = (sweepName, fileSuffix)
-        usedSuffixes[key] = usedSuffixes.get(key, 0) + 1
-        if usedSuffixes[key] > 1:
-            fileSuffix = '%s_%d' % (fileSuffix, usedSuffixes[key])
+            plotRideHeightSweep(subDf, sweepName, activeGroups[sweepName], activeGroups, casePath,
+                                 includeSideForce=includeSideForce, fileSuffix=fileSuffix)
 
-        plotRideHeightSweep(subDf, sweepName, activeGroups[sweepName], activeGroups, casePath,
-                             includeSideForce=includeSideForce, fileSuffix=fileSuffix)
+    plotFrhRrhContours(df, casePath, includeSideForce=includeSideForce)
+
 
 
 def generate_summary():
