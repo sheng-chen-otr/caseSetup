@@ -14,7 +14,6 @@ from estimateStatisticalError import *
 
 #import paraview modules
 from paraview.simple import *
-from paraview.numpy_support import vtk_to_numpy
 
 
 parser = argparse.ArgumentParser(
@@ -25,6 +24,9 @@ parser = argparse.ArgumentParser(
 
 
 parser.add_argument('--meshOnly',
+                    action='store_true')  # on/off flag
+
+parser.add_argument('--wingPressure',
                     action='store_true')  # on/off flag
 args = parser.parse_args()
 PRE_DEF_MESH_LIST = []
@@ -68,7 +70,7 @@ def main():
     global UREF,LREF,CREF,FREF,WREF,fullCaseSetupDict,renderView,pvPostSetupDict,RESOLUTION,UMEAN_FIELD
     
 
-    print('''\n\t####\t\tEZ-CFD PARAVIEW POST-PROCESSING V1.0\t\t ####\n\n''')
+    print('''\n\t####\t\tPvPost\t\t ####\n\n''')
 
     # Start timing the script execution
     begin = time.time()
@@ -215,7 +217,10 @@ def main():
     internalVolume.UpdatePipeline()
     if args.meshOnly:
         exportTimes['mesh'] = generateMeshSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],viewsDict)
-        
+    elif args.wingPressure:
+        exportTimes['wingPressure'] = generateWingPressureCSVs(
+            source, selections, pvPostSetupDict, varDict
+        )
     else:
         if pvPostSetupDict['PV_POST_MAIN']['SURFACE_IMG'].lower() == 'true':
             exportTimes['surface'] = generateSurfaceContours(geomSurface,renderView,pvPostSetupDict['SURFACE']['VARIABLES'],pvPostSetupDict['SURFACE']['VIEWS'],varDict,viewsDict)
@@ -228,6 +233,10 @@ def main():
         
         if pvPostSetupDict['PV_POST_MAIN']['SLICE_LIC_IMG'].lower() == 'true':
             exportTimes['LICSlice'] = generateLICSlices(internalVolume,renderView,pvPostSetupDict['SLICE'],varDict,viewsDict)
+
+        exportTimes['wingPressure'] = generateWingPressureCSVs(
+            source, selections, pvPostSetupDict, varDict
+        )
 
     print('\tTotal Export Times (s):')
     for key in exportTimes.keys():
@@ -283,6 +292,309 @@ def getRequiredFields(varDict, extraFields=None):
         for f in extraFields:
             fields.add(componentSuffix.sub('', f))
     return fields
+
+
+def generateWingPressureCSVs(source, selections, pvPostSetupDict, varDict):
+    """Write combined wing samples (multiple configured variables) on spanwise planes."""
+    begin = time.time()
+    wingSections = (
+        ('FRONT_WING_PRESSURE', 'frontWing'),
+        ('REAR_WING_PRESSURE', 'rearWing'),
+    )
+    generated = 0
+
+    for sectionName, wingName in wingSections:
+        if sectionName not in pvPostSetupDict:
+            continue
+        setup = pvPostSetupDict[sectionName]
+        if setup.get('ENABLE', 'False').strip().lower() != 'true':
+            continue
+
+        pattern = setup.get('PATCH_PATTERN', '%s' % wingName).strip()
+        selectors = selectWingSelectors(selections, pattern)
+        if not selectors:
+            print('\n\tWARNING! No %s patches matched PATCH_PATTERN=%s; skipping.\n' %
+                  (wingName, pattern))
+            continue
+
+        normal = parseWingNormal(setup.get('NORMAL', 'default'))
+        yValues = parseWingPlaneLocations(setup.get('Y_RANGE', 'default'),
+                                          setup.get('N_PLANES', '11'))
+        variables = parseWingVariables(setup, varDict)
+        if not variables:
+            print('\n\tWARNING! No valid wing variables configured for %s; skipping.\n' %
+                  (wingName))
+            continue
+
+        wingSurface = ExtractBlock(Input=source)
+        wingSurface.Selectors = selectors
+        wingSurface.UpdatePipeline()
+
+        # Build a calculator chain so one intersection export contains all configured variables.
+        calculatorChain = []
+        combinedSource = wingSurface
+        for variable in variables:
+            calculator = Calculator(registrationName='%s_%s_PressureCalculator' % (wingName, variable),
+                                    Input=combinedSource)
+            calculator.Function = str(varDict['surfaceVariables'][variable]['equation'])
+            calculator.ResultArrayName = variable
+            calculator.UpdatePipeline()
+            calculatorChain.append(calculator)
+            combinedSource = calculator
+
+        outputDir = setup.get('OUTPUT_DIR', 'postProcessing/wingPressure').strip()
+        os.makedirs(outputDir, exist_ok=True)
+        plotOnIntersectionCurves = globals().get('PlotOnIntersectionCurves')
+        if plotOnIntersectionCurves is None:
+            sys.exit('ERROR! PlotOnIntersectionCurves filter is not available in this ParaView build.')
+
+        for yValue in yValues:
+            profile = plotOnIntersectionCurves(Input=combinedSource)
+            setIntersectionPlane(profile, normal,
+                                 [float(CREF[0]), float(yValue), float(CREF[2])])
+            profile.UpdatePipeline()
+
+            fileName = '%s_%s.csv' % (wingName, format(float(yValue), '.6g'))
+            filePath = os.path.join(outputDir, fileName)
+            SaveData(filePath, proxy=profile)
+
+            rows = normalizeWingPressureCsv(filePath, variables, yValue)
+            if rows == 0:
+                print('\t\tWARNING! %s did not contain configured variables at y=%+.4g; removing %s' %
+                      (wingName, yValue, filePath))
+                try:
+                    os.remove(filePath)
+                except OSError:
+                    pass
+                Delete(profile)
+                continue
+
+            print('\t\tWrote %s wing combined samples: %s (%d points, vars=%s)' %
+                  (wingName, filePath, rows, ','.join(variables)))
+            generated += 1
+            Delete(profile)
+
+        for calculator in reversed(calculatorChain):
+            Delete(calculator)
+        Delete(wingSurface)
+
+    if generated:
+        print('\tWing pressure CSV generation time (s): %s' %
+              round(time.time() - begin, 3))
+    return time.time() - begin
+
+
+def selectWingSelectors(selections, pattern):
+    """Return ExtractBlock selectors matching an OpenFOAM patch regex."""
+    try:
+        matcher = re.compile(pattern, re.IGNORECASE)
+    except re.error as error:
+        print('\n\tWARNING! Invalid wing PATCH_PATTERN %s: %s\n' % (pattern, error))
+        return []
+
+    selected = []
+    for selector in selections:
+        patchName = selector.rsplit('/Root/', 1)[-1]
+        candidates = (patchName, patchName.replace('-', ''))
+        if any(matcher.search(candidate) for candidate in candidates):
+            selected.append(selector)
+    return selected
+
+
+def parseWingNormal(value):
+    """Parse the default SAE y-normal or an explicit three-component normal."""
+    if value.strip().lower() == 'default':
+        return [0.0, 1.0, 0.0]
+    try:
+        normal = np.asarray([float(token) for token in value.split()], dtype=float)
+    except ValueError:
+        sys.exit('ERROR! Wing pressure NORMAL must be default or three numeric values.')
+    if normal.size != 3 or np.linalg.norm(normal) <= np.finfo(float).eps:
+        sys.exit('ERROR! Wing pressure NORMAL must contain three non-zero components.')
+    return (normal / np.linalg.norm(normal)).tolist()
+
+
+def parseWingPlaneLocations(yRange, nPlanes):
+    """Return fixed-y locations, defaulting to 11 planes across +/- WREF/2."""
+    if yRange.strip().lower() == 'default':
+        try:
+            count = int(nPlanes)
+        except ValueError:
+            sys.exit('ERROR! Wing pressure N_PLANES must be a positive integer.')
+        if count < 1:
+            sys.exit('ERROR! Wing pressure N_PLANES must be a positive integer.')
+        return np.linspace(float(CREF[1]) - 0.5 * float(WREF),
+                           float(CREF[1]) + 0.5 * float(WREF), count)
+
+    tokens = yRange.replace('[', '').replace(']', '').replace(',', ' ').split()
+    if len(tokens) != 2:
+        sys.exit('ERROR! Wing pressure Y_RANGE must be default or [Y_MIN,Y_MAX].')
+    try:
+        yMin, yMax = [float(token) for token in tokens]
+        count = int(nPlanes)
+    except ValueError:
+        sys.exit('ERROR! Wing pressure Y_RANGE and N_PLANES must be numeric.')
+    if yMax <= yMin or count < 1:
+        sys.exit('ERROR! Wing pressure Y_RANGE must increase and N_PLANES must be positive.')
+    return np.linspace(yMin, yMax, count)
+
+
+def parseWingVariables(setup, varDict):
+    """Parse wing pressure variables from setup, supporting VARIABLES and legacy VARIABLE."""
+    rawVariables = setup.get('VARIABLES', '').strip()
+    if not rawVariables or rawVariables.lower() == 'default':
+        rawVariables = setup.get('VARIABLE', 'CpMean').strip()
+
+    if rawVariables and rawVariables.lower() != 'default':
+        # Allow flexible config styles, e.g.:
+        # VARIABLES = CpMean CfMean
+        # VARIABLES = CpMean, CfMean
+        # VARIABLES = [CpMean, CfMean]
+        # VARIABLES = "CpMean CfMean"
+        # VARIABLES = CpMean CfMean  # comment
+        cleaned = rawVariables
+        for commentMarker in ('#', ';'):
+            if commentMarker in cleaned:
+                cleaned = cleaned.split(commentMarker, 1)[0]
+        cleaned = cleaned.replace('[', ' ').replace(']', ' ')
+        cleaned = cleaned.strip().strip('"').strip("'")
+        # Extract variable-like identifiers directly so unusual separators (e.g. full-width
+        # commas) still split correctly.
+        tokens = re.findall(r'[A-Za-z_][A-Za-z0-9_]*', cleaned)
+    else:
+        tokens = ['CpMean']
+
+    validVariables = []
+    available = varDict.get('surfaceVariables', {})
+    for variable in tokens:
+        if variable in available and variable not in validVariables:
+            validVariables.append(variable)
+        elif variable:
+            print('\t\tWARNING! Wing variable %s is not defined in surfaceVariables; skipping.' % variable)
+    return validVariables
+
+
+def setIntersectionPlane(profileProxy, normal, origin):
+    """Set plane orientation/origin for PlotOnIntersectionCurves across PV variants."""
+    applied = False
+
+    try:
+        profileProxy.SliceType.Normal = list(normal)
+        profileProxy.SliceType.Origin = list(origin)
+        applied = True
+    except Exception:
+        pass
+
+    # Property names can differ between ParaView versions; try common alternates.
+    for propName, value in (
+        ('Normal', list(normal)),
+        ('PlaneNormal', list(normal)),
+        ('Origin', list(origin)),
+        ('PlaneOrigin', list(origin)),
+    ):
+        try:
+            setattr(profileProxy, propName, value)
+            applied = True
+        except Exception:
+            pass
+
+    if not applied:
+        print('\t\tWARNING! Could not explicitly set PlotOnIntersectionCurves plane properties.')
+
+
+def normalizeWingPressureCsv(filePath, variables, yValue):
+    """Normalize intersection CSV headers to x,y,z plus configured variables."""
+    try:
+        rawData = pd.read_csv(filePath)
+    except Exception:
+        return 0
+
+    if rawData.empty:
+        return 0
+
+    pointAliases = {
+        'x': ('x', 'Points:0', 'Points_0', 'Point X'),
+        'y': ('y', 'Points:1', 'Points_1', 'Point Y'),
+        'z': ('z', 'Points:2', 'Points_2', 'Point Z'),
+    }
+
+    def findColumn(options):
+        for option in options:
+            if option in rawData.columns:
+                return option
+        return None
+
+    xColumn = findColumn(pointAliases['x'])
+    yColumn = findColumn(pointAliases['y'])
+    zColumn = findColumn(pointAliases['z'])
+    if xColumn is None:
+        return 0
+
+    def extractVariableSeries(variableName):
+        # Scalar column exists directly.
+        if variableName in rawData.columns:
+            return pd.to_numeric(rawData[variableName], errors='coerce')
+
+        # Some writers export vector components as Name:0/1/2 or Name_0/1/2.
+        componentColumns = []
+        for idx in range(3):
+            for candidate in (
+                '%s:%d' % (variableName, idx),
+                '%s_%d' % (variableName, idx),
+                '%s %d' % (variableName, idx),
+            ):
+                if candidate in rawData.columns:
+                    componentColumns.append(candidate)
+                    break
+
+        # Alternate naming style with axis letters.
+        if not componentColumns:
+            for axis in ('X', 'Y', 'Z'):
+                for candidate in (
+                    '%s_%s' % (variableName, axis),
+                    '%s%s' % (variableName, axis),
+                    '%s:%s' % (variableName, axis),
+                ):
+                    if candidate in rawData.columns:
+                        componentColumns.append(candidate)
+                        break
+
+        if componentColumns:
+            compArrays = [pd.to_numeric(rawData[col], errors='coerce') for col in componentColumns]
+            sqSum = compArrays[0] * 0.0
+            for comp in compArrays:
+                sqSum = sqSum + comp.pow(2)
+            return np.sqrt(sqSum)
+
+        return None
+
+    exportData = pd.DataFrame()
+    exportData['x'] = pd.to_numeric(rawData[xColumn], errors='coerce')
+    if yColumn is None:
+        exportData['y'] = float(yValue)
+    else:
+        exportData['y'] = pd.to_numeric(rawData[yColumn], errors='coerce').fillna(float(yValue))
+    if zColumn is None:
+        exportData['z'] = np.nan
+    else:
+        exportData['z'] = pd.to_numeric(rawData[zColumn], errors='coerce')
+    validVariables = []
+    for variable in variables:
+        series = extractVariableSeries(variable)
+        if series is not None:
+            exportData[variable] = series
+            validVariables.append(variable)
+
+    if not validVariables:
+        return 0
+
+    exportData = exportData.dropna(subset=['x'])
+    exportData = exportData.dropna(subset=validVariables, how='all').sort_values('x')
+    if exportData.empty:
+        return 0
+
+    exportData.to_csv(filePath, index=False)
+    return len(exportData)
 
 
 def getVariableDicts(variablePaths, viewsPath):

@@ -111,6 +111,79 @@ A variable requested here that is not defined in the variable dictionary, or not
 \subsection{Variables and Camera Views}
 The variable dictionary defines every plottable variable as an equation over the OpenFOAM fields, together with a display label, a value range and a ParaView colour preset. The tokens \codeword{UREF}, \codeword{LREF} and \codeword{WREF} in the equations are substituted with the case reference values before evaluation, so coefficients such as \codeword{CpMean} and \codeword{CptMean} are normalised consistently with the rest of the case. To use a custom set, point \codeword{VARIABLE_DICT} (and, if needed, \codeword{CAMERA_VIEWS}) at your own file.
 
+To customise one case, copy the default variable and view files from \codeword{postUtilities/default/} to new files, then reference those files from the case's \codeword{pvPostSetup}. Do not modify the repository defaults unless the change should apply to every future case. For example:
+\begin{lstlisting}
+    [PV_POST_MAIN]
+    VARIABLE_DICT = myVariables
+    CAMERA_VIEWS = myViews
+
+    [SURFACE]
+    VIEWS = DriverSide FrontLeft
+    VARIABLES = CpMean UMeanStreamwise CfMean
+
+    [SLICE]
+    VIEWS = DriverSide
+    VARIABLES = CpMean UMeanStreamwise
+    LIC_VARIABLES = UMean
+\end{lstlisting}
+
+Each custom variable file contains the three top-level groups \codeword{surfaceVariables}, \codeword{sliceVariables} and \codeword{isoVariables}. Add a variable to the required groups using an equation, label, display range and colour map. The following entry adds a normalised streamwise mean velocity variable:
+\begin{lstlisting}
+    "UMeanStreamwise": {
+        "equation": "UMean_X/UREF",
+        "label": "Umean,x/Uref",
+        "range": [0, 1.2],
+        "color": "Viridis (matplotlib)"
+    }
+\end{lstlisting}
+The name \codeword{UMeanStreamwise} is used in the \codeword{VARIABLES} lists. The equation must reference fields present in the exported EnSight solution. A requested variable that is missing from the dictionary or solution is reported and skipped.
+
+Custom camera-view files use one JSON object per view. The camera position is \codeword{campos}, the point being viewed is \codeword{focalpos}, \codeword{viewup} defines the upward direction, and \codeword{parallelscale} controls the orthographic zoom. Reference tokens can be used in the expressions:
+\begin{lstlisting}
+    "DriverSide": {
+        "pp": 1,
+        "campos": "[0,-LREF*10,0]",
+        "focalpos": "[1.18,0,0.85]",
+        "viewup": "[0,0,1]",
+        "parallelscale": "WREF/2"
+    }
+\end{lstlisting}
+The name in each \codeword{VIEWS} list must exactly match a key in the custom view file. When \codeword{CAMERA_VIEWS = default}, built-in views are generated automatically from the case reference dimensions.
+
+\subsection{Front- and Rear-Wing Pressure Sections}
+\codeword{pvPost} can extract the mean pressure coefficient where y-normal planes intersect the front or rear wing surface. Enable either section in the case's \codeword{pvPostSetup} file:
+\begin{lstlisting}
+    [FRONT_WING_PRESSURE]
+    ENABLE = True
+    PATCH_PATTERN = frontWing.*
+    NORMAL = default
+    Y_RANGE = default
+    N_PLANES = 11
+    VARIABLE = CpMean
+    OUTPUT_DIR = postProcessing/wingPressure
+
+    [REAR_WING_PRESSURE]
+    ENABLE = True
+    PATCH_PATTERN = rearWing.*
+    NORMAL = default
+    Y_RANGE = default
+    N_PLANES = 11
+    VARIABLE = CpMean
+    OUTPUT_DIR = postProcessing/wingPressure
+\end{lstlisting}
+The default patch patterns are case-insensitive regular expressions. The default \codeword{NORMAL} is the SAE y direction, \codeword{(0 1 0)}. \codeword{Y_RANGE = default} samples from \codeword{CREF_y - 0.5 WREF} to \codeword{CREF_y + 0.5 WREF}; an explicit range can be supplied as two values, for example \codeword{[-0.4,0.4]}. \codeword{N_PLANES} controls the number of evenly spaced planes. A different three-component plane normal can be supplied instead of \codeword{default}.
+
+Each intersection is written as a CSV file containing \codeword{x}, \codeword{y}, \codeword{z} and \codeword{CpMean} columns under \codeword{OUTPUT_DIR}. Both sections are disabled by default. This feature writes CSV data only and does not alter the existing surface, slice or LIC image generation.
+
+For a generated cluster case, enable the required sections in the case copy of \codeword{pvPostSetup} before submitting the post-processing job. The standard \codeword{postPro} workflow runs \codeword{pvPost.py} first, creating the CSV files when the sections are enabled, and then runs \codeword{postRun.py --wingPressure} to create the plots. No additional cluster setting is required beyond enabling the relevant section; the command is included in the \codeword{post} section of the selected \codeword{clusterDict} template.
+
+For local or manual processing, run \codeword{postRun.py} after \codeword{pvPost.py} has completed. The selected cases are supplied with \codeword{--trial}:
+\begin{lstlisting}
+    python postUtilities/postRun.py --wingPressure \
+        --trial case001 case002 --saveFormat png
+\end{lstlisting}
+For each selected case, \codeword{postRun.py} reads the available wing CSV files, plots \codeword{CpMean} against \codeword{x} for each y plane, and writes \codeword{frontWing_CpMean_vs_x.png} and \codeword{rearWing_CpMean_vs_x.png} under \codeword{postProcessing/wingPressure}. The pressure-coefficient axis is inverted using the conventional aerodynamic presentation. Cases without enabled wing extraction or matching CSV files are reported and skipped.
+
 \subsection{Half-Symmetry Cases}
 When the case is built on half symmetry (\codeword{SIM_SYM}\,=\,\codeword{half}), \codeword{pvPost} automatically reflects the body surface, the internal volume and the iso-surfaces about the symmetry plane so the rendered images show the full car.
 
@@ -157,3 +230,53 @@ For speed, \codeword{pvPost} loads only the fields actually referenced by the ac
 
     \item \codeword{No iso-surface files found, skipping} - no \codeword{iso*.vtp} files exist under \codeword{postProcessing/surfaces}. Enable the iso-surface function objects in the solver setup if iso images are required.
 \end{itemize}
+
+\section{Case Summaries (postRun.py --summary)}
+\codeword{postRun.py --summary} reads the converged solver logs and function-object output for a case and writes a single \codeword{summary.csv} file at the case root. \codeword{summary.csv} is a two column, header-less file of \codeword{key,value} pairs, one row per reported quantity (force and moment coefficients, cell count, mesher, solve time, run date, and so on). Every numeric value is formatted to three decimal places before being written, so downstream tools and spreadsheets show a consistent precision regardless of the underlying solver output.
+
+\begin{lstlisting}
+    python postUtilities/postRun.py --summary
+\end{lstlisting}
+
+\subsection{Case Completeness}
+Before summarising, \codeword{postRun.py} checks that the case actually finished by looking for a standalone \codeword{End} line in the relevant solver log. It checks, in order, \codeword{log.simpleFoam}, \codeword{log.pisoFoam}, \codeword{log.SRFSimpleFoam} and \codeword{log.SRFPimpleFoam}, so both straight-line and cornering (SRF) cases are recognised as complete. A case without a matching, finished log is reported as incomplete and skipped wherever a completeness check is required (single-case summaries, ride-height parent averaging and sensitivity plotting).
+
+\subsection{Ride-Height Parent Summaries}
+When \codeword{--summary} is run inside a ride-height mapping parent case (a directory containing child cases named \codeword{<parentCaseName>\_<number>}), \codeword{postRun.py} does not recompute coefficients from the raw logs. Instead it reads each child's own \codeword{summary.csv}, skips any child that is incomplete, missing its \codeword{summary.csv}, or has an unreadable \codeword{summary.csv} (with a warning printed for each skipped child), and averages the remaining numeric fields into the parent's own \codeword{summary.csv}. This includes the lift-balance and side-force coefficients \codeword{Cl(f)}, \codeword{Cl(r)}, \codeword{Cs(f)} and \codeword{Cs(r)} alongside \codeword{Cd} and \codeword{Cl}.
+
+\section{Ride-Height Sensitivity Plots (postRun.py --sensitivityPlots)}
+For a ride-height mapping parent case, \codeword{postRun.py --sensitivityPlots} detects and plots single-variable sensitivity sweeps directly from the parent's \codeword{rideHeights\_updated.csv} and each child's \codeword{summary.csv}. It only runs for parent cases (those with child directories matching \codeword{caseName\_\#}); it does nothing for a plain single case or when run from inside a child case.
+
+\begin{lstlisting}
+    python postUtilities/postRun.py --sensitivityPlots
+    python postUtilities/postRun.py --sensitivityPlots --includeSideForce
+    python postUtilities/postRun.py --sensitivityPlots \
+        --sensitivityCases ../otherRideHeightMap ../anotherRideHeightMap
+\end{lstlisting}
+
+\subsection{Sweep Detection}
+The ride-height map columns are organised into groups: \codeword{Front Ride Height} (\codeword{fl}, \codeword{fr}), \codeword{Rear Ride Height} (\codeword{rl}, \codeword{rr}), \codeword{Yaw} (\codeword{yaw}) and \codeword{Corner} (\codeword{corner\_radius}, \codeword{corner\_dir}). The \codeword{steer} column (or \codeword{steer\_deg}/\codeword{steer\_angle}) is tracked separately as a constancy-only group: it is never itself plotted, but it must stay constant for a group to qualify as a clean single-variable sweep. Within a group, columns that move together (for example \codeword{fl} and \codeword{fr} changing in step) are averaged into one representative value, so both changing together still counts as a single variable rather than two.
+
+Because a ride-height map is often a full grid (front ride height crossed with rear ride height, for example), a group can produce several sweeps at different fixed values of everything else. \codeword{postRun.py} finds every fixed-combo subset of the child cases where all other groups (including \codeword{steer}) hold one constant value, and where the named group still varies across at least three of those rows; each qualifying subset is plotted as its own sweep. For example, a map that varies both front and rear ride height produces one Front Ride Height sweep for each rear ride height value that has enough points, and vice versa.
+
+\subsection{Sweep Plots}
+Each sweep is drawn as one figure with one subplot per force coefficient: \codeword{Cd}, \codeword{Cl}, \codeword{Cl(f)} and \codeword{Cl(r)} by default, with \codeword{Cs(f)} and \codeword{Cs(r)} added when \codeword{--includeSideForce} is given. Each subplot shows the raw data points plus a low-order polynomial curve fit (degree scales with the number of available points, capped at three, and falls back to a straight line when there are too few unique x-values to fit safely). The figure title names only the swept variable; the values held constant for that sweep (the other groups and \codeword{steer}) are listed in a boxed side panel instead, so long configuration lists do not overrun the plot. Each figure is saved to
+\begin{lstlisting}
+    postProcessing/sensitivityPlots/<SweepName>_sweep.png
+\end{lstlisting}
+with a suffix built from the fixed configuration values when more than one sweep of the same type exists (for example \codeword{FrontRideHeight\_rl-0.01\_sweep.png}).
+
+\subsection{Comparing Multiple Ride-Height Maps}
+The optional \codeword{--sensitivityCases} flag takes one or more other ride-height mapping parent case paths. For each of those cases, \codeword{postRun.py} builds its own sweeps in the same way, then overlays a sweep from another case onto the primary case's matching sweep only when both the sweep type and every fixed configuration value are identical (same held rear ride height, yaw, corner and steer, for example). Matching sweeps are drawn in the same figure with one colour per case and a legend; sweeps that do not have a matching fixed configuration in another case are left as single-case plots. This makes it possible to compare, for example, a Front Ride Height sensitivity between two different aero concepts at the same rear ride height.
+
+\subsection{Front-Rear Ride Height Contour Plots}
+When the map contains a rectangular grid of front and rear ride height values with roll held at zero, \codeword{postRun.py} additionally produces a Front-Ride-Height-vs-Rear-Ride-Height contour plot for each qualifying fixed combination of the remaining variables (Yaw, Corner and steer). The contour requires at least four grid points with at least two unique front and two unique rear values. Each force coefficient is interpolated over the front/rear grid using cubic interpolation (\codeword{scipy.interpolate.griddata}, \codeword{method='cubic'}) and rendered as a filled contour with contour lines and the underlying data points overlaid, arranged two-by-two across the default four metrics (six when \codeword{--includeSideForce} is set, with any unused subplot slots hidden). Output is saved to
+\begin{lstlisting}
+    postProcessing/sensitivityPlots/FrontRearRideHeight_contour<suffix>.png
+\end{lstlisting}
+Contour plots are always single-case; they are not affected by \codeword{--sensitivityCases}.
+
+\section{Pushing Results to Google Sheets (gsheetExport.py)}
+\codeword{postUtilities/gsheetExport.py} pushes a case's summary metrics to a Google Sheet, one row per trial, using a service account for authentication. It reads its values directly from the case's \codeword{summary.csv} rather than recomputing anything from the solver output, so it must be run after \codeword{postRun.py --summary} has produced an up to date \codeword{summary.csv}.
+
+When the case being pushed is itself a child of a ride-height mapping parent (its directory name matches \codeword{<parentCaseName>\_<number>}), \codeword{gsheetExport.py} first regenerates the parent's \codeword{summary.csv} by invoking \codeword{postRun.py --summary} in the parent directory, then pushes both the child's row and the parent's (map-averaged) row to the sheet. For a case that is not part of a ride-height map, only that case's own row is pushed. The fixed set of spreadsheet columns written for each row includes run date, solve time, cell count, mesher, half/full symmetry, velocity, yaw, density, reference area and wheelbase, \codeword{Cd}, \codeword{Cl}, \codeword{Cl(f)}, \codeword{Cl(r)}, \codeword{Cs(f)}, \codeword{Cs(r)}, confidence intervals for \codeword{Cd}/\codeword{Cl}, and the front and rear wing \codeword{Cd}/\codeword{Cl}.

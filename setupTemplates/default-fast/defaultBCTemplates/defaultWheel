@@ -1,0 +1,6 @@
+[WH_SETUP]
+WH_RAD = default
+WH_CENTER = default
+WH_AXIS = default
+ROT_WH = True
+

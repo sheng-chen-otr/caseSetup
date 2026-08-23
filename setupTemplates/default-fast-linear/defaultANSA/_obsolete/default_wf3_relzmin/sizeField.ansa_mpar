@@ -1,0 +1,49 @@
+#===FILEINFO:VERSION_CREATED:25.10.100 LAST_VERSION_MODIFIED:25.10.100===
+#
+# ANSA Version
+#
+    ANSA_Version = 25.10.100
+#
+
+# Octree Options
+#
+    octree_parameters_name =
+    maximum_surface_length = 3.125
+    maximum_length = 3.125
+    delete_input_representation = false
+#
+
+# SizeField Options
+#
+    size_field_sweep_start_maximum_length = 1024.
+    size_field_sweep_start_maximum_surface_length = 1024.
+    size_field_sweep_growth_rate_type = Growth rate
+    size_field_sweep_end_maximum_length = 1024.
+    size_field_sweep_end_maximum_surface_length = 1024.
+    size_field_offset_growth_rate = 1.2
+    size_field_sweep_growth_rate = 1.2
+    size_field_sweep_dx = 0. 
+    size_field_sweep_dy = 0.
+    size_field_sweep_dz = 0.
+    size_field_sweep_distance = 0.
+    size_field_surf_offset_sweep_end_offset = 1.
+    size_field_surf_offset_offset = 10.
+    size_field_variable_size_flag = false
+    size_field_variable_shape_flag = false
+    size_field_invert_direction = false
+    size_field_surface_offset_sweep_rule = Vector
+    size_field_invert_lengths = false
+    size_field_surface_sweep_curve_id = 0
+#
+# Volume Fix Quality
+#
+    fix_solid_elements_general_flag = false
+    freeze_non_visible_shells = false
+    unconstrained_2nd_order_nodes = false
+    fix_solid_freeze_line_elements = true
+    fix_solid_constrained_layer_nodes = true
+    number_of_affected_solid_zones = 3
+    fix_volume_external_bounds = constrained
+    maximum_distance_from_external_bounds = 0.1*local
+    fix_volume_pid_bounds = unconstrained
+    maximum_distance_from_pid_bounds = 0.1*local

@@ -1,0 +1,10 @@
+[WAKE_4]
+TYPE = box
+MIN = -5 -3 -4
+MAX = 200 3 4
+REF_LEVEL = 2
+
+
+
+
+

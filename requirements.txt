@@ -1,13 +1,25 @@
-numpy
-pandas
-matplotlib
-scipy
-Pillow
-pyvista
-imageio
-imageio-ffmpeg
-python-pptx
-openpyxl
-gspread
-google-auth
+# Core dependencies (required for caseSetup.py and geometry/mesh utilities).
+# Pinned to the known-good versions from the development .venv (Python 3.13).
+numpy==2.4.4
+pandas==3.0.2
+matplotlib==3.10.8
+pyvista==0.48.4
+pillow==12.2.0
+imageio==2.37.3
+imageio-ffmpeg==0.6.0
+
+# Post-processing extras (postUtilities/).
+# These are optional; install them only if you use the affected tools:
+#   scipy        - force/statistics post-processing (postRun, plotForces, summary, ...)
+#   python-pptx  - PowerPoint report generation (pptGeneration.py)
+#   openpyxl     - Excel result logs (resultLogWriter.py)
+#   gspread      - Google Sheets export (gsheetExport.py)
+#   google-auth  - Google Sheets authentication (gsheetExport.py)
+# No known-good pin is captured yet (not installed in the core venv); use
+# conservative lower bounds and pin once validated.
+scipy>=1.11
+python-pptx>=0.6.21
+openpyxl>=3.1
+gspread>=5.10
+google-auth>=2.20
 

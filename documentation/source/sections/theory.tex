@@ -1,0 +1,110 @@
+\section{Theory}
+
+This section gives the theoretical background needed to interpret the turbulence models selected by \codeword{caseSetup}. The equations below use the incompressible, constant-density form for clarity. The same modelling ideas apply to the compressible formulations, with the additional energy equation and density variations.
+
+\subsection{Reynolds-Averaged Navier--Stokes (RANS)}
+
+In a turbulent flow, each instantaneous quantity is decomposed into a mean and a fluctuating component,
+\begin{equation}
+    u_i = \overline{u_i} + u_i', \qquad p = \overline{p} + p'.
+\end{equation}
+The averaging operation removes the rapidly varying fluctuations. Applying it to the incompressible continuity and momentum equations gives
+\begin{equation}
+    \frac{\partial \overline{u_i}}{\partial x_i} = 0,
+\end{equation}
+\begin{equation}
+    \frac{\partial \overline{u_i}}{\partial t}
+    + \overline{u_j}\frac{\partial \overline{u_i}}{\partial x_j}
+    = -\frac{1}{\rho}\frac{\partial \overline{p}}{\partial x_i}
+    + \nu\frac{\partial^2 \overline{u_i}}{\partial x_j\partial x_j}
+    - \frac{\partial \overline{u_i' u_j'}}{\partial x_j}.
+\end{equation}
+The final term is the divergence of the Reynolds-stress tensor. It represents the transport of momentum by turbulent fluctuations and introduces more unknowns than equations; this is the RANS closure problem.
+
+For most two-equation and one-equation models, the Reynolds stresses are approximated with the Boussinesq hypothesis,
+\begin{equation}
+    -\rho\overline{u_i'u_j'}
+    = 2\mu_t S_{ij} - \frac{2}{3}\rho k\delta_{ij},
+    \qquad
+    S_{ij}=\frac{1}{2}\left(\frac{\partial \overline{u_i}}{\partial x_j}
+    +\frac{\partial \overline{u_j}}{\partial x_i}\right),
+\end{equation}
+where $\mu_t$ is the turbulent (eddy) viscosity and
+\begin{equation}
+    k=\frac{1}{2}\overline{u_i'u_i'}
+\end{equation}
+is the turbulent kinetic energy. The practical effect is that turbulence is modelled as an additional momentum diffusion, with $\mu_t$ obtained from one or more transport equations.
+
+RANS is appropriate when the engineering objective is a statistically steady solution, such as mean forces, mean pressure distributions and integrated aerodynamic coefficients. It does not resolve the full turbulent spectrum. Instead, the selected model represents the average influence of turbulence on the resolved flow. Mesh quality, wall treatment, inlet turbulence quantities and convergence therefore affect the accuracy of the result as much as the nominal model choice.
+
+\subsection{Turbulence-model theory for RANS}
+
+\subsubsection{k--epsilon models}
+
+The standard $k$--$\varepsilon$ family solves transport equations for $k$ and the dissipation rate $\varepsilon$. The turbulent viscosity is obtained from
+\begin{equation}
+    \mu_t = \rho C_\mu \frac{k^2}{\varepsilon}.
+\end{equation}
+These models are robust and commonly perform well in free-shear flows, mixing layers and fully turbulent regions. They are less reliable in strongly separated flows, adverse pressure gradients and near-wall regions unless an appropriate wall treatment and model variant are used. The repository contains a \codeword{kEpsilon} field template, but it is not currently exposed as a selectable \codeword{TURB_MODEL} in the case-generation mapping.
+
+\subsubsection{k--omega models and SST}
+
+The $k$--$\omega$ family solves for turbulent kinetic energy $k$ and specific dissipation rate $\omega$. A representative eddy-viscosity relation is
+\begin{equation}
+    \mu_t \sim \rho\frac{k}{\omega}.
+\end{equation}
+The $\omega$ variable gives the model useful near-wall behaviour, while the formulation can be sensitive to free-stream values. The Shear Stress Transport model, $k$--$\omega$ SST, blends a near-wall $k$--$\omega$ formulation with a more free-stream-robust $k$--$\varepsilon$ behaviour and limits the eddy viscosity in regions of strong strain. This makes SST a common choice for external aerodynamics and separated flows. In \codeword{caseSetup}, the steady alias \codeword{kosst} selects \codeword{kOmegaSST}.
+
+\subsubsection{Spalart--Allmaras}
+
+Spalart--Allmaras is a one-equation model developed primarily for aerodynamic boundary layers. It transports a modified turbulent-viscosity variable, commonly written $\widetilde{\nu}$, and obtains the eddy viscosity through a damping function,
+\begin{equation}
+    \mu_t = \rho\widetilde{\nu} f_{v1}.
+\end{equation}
+Its low computational cost and good performance for attached boundary layers make it useful for vehicle aerodynamics. It can be less dependable for complex separation, massive recirculation and strongly three-dimensional vortical flows. The steady alias \codeword{sa} selects \codeword{SpalartAllmaras}.
+
+\subsubsection{GEKO}
+
+GEKO (Generalized k--$\omega$) is a coefficient-tunable two-equation model. It retains the general $k$--$\omega$ structure while allowing calibrated coefficients to alter the response to separation, jets, wakes and free shear. Its results are therefore dependent on both the implementation and the selected coefficient set. The steady alias \codeword{geko} selects \codeword{GEKO}; users should record any GEKO coefficient changes with the case because they directly affect model behaviour.
+
+\subsection{Wall-modelling theory}
+
+The near-wall region contains a viscous sublayer, a buffer layer and an outer logarithmic layer. The dimensionless wall distance is
+\begin{equation}
+    y^+ = \frac{u_\tau y}{\nu},
+    \qquad
+    u_\tau = \sqrt{\frac{\tau_w}{\rho}},
+\end{equation}
+where $y$ is the distance from the wall, $\tau_w$ is wall shear stress and $u_\tau$ is friction velocity. In the viscous sublayer, the mean velocity approximately follows $u^+=y^+$. Farther from the wall, the log-law approximation is commonly written
+\begin{equation}
+    u^+ = \frac{1}{\kappa}\ln(y^+) + B.
+\end{equation}
+
+Resolving the wall means placing the first cell centre inside the viscous sublayer, typically targeting $y^+\approx 1$, and using boundary conditions that integrate the turbulence equations to the wall. This requires many thin, high-aspect-ratio cells and several cells across the boundary layer. Wall functions avoid resolving the viscous sublayer. They impose an algebraic relation between the wall shear stress and the velocity at the first cell centre, reducing the near-wall cell count but requiring the first cell to lie in the range for which the wall function was developed. A mesh with an unsuitable $y^+$ can therefore produce misleading skin friction, separation and aerodynamic forces even when the outer flow appears converged.
+
+The generated cases write turbulence wall boundary conditions from the repository's fluid wall-options template. The choice is made independently for each geometry and ground section with \codeword{WALL_MODEL} or \codeword{GRND_WALL_MODEL}. The available inputs are:
+\begin{itemize}
+    \item \codeword{high}: selects \codeword{highReynolds}. The turbulent viscosity uses \codeword{nutkWallFunction}; $k$, $\varepsilon$ and $\omega$ use their corresponding OpenFOAM wall functions. This is the conventional high-Reynolds-number wall-function treatment and should be paired with a wall-function mesh rather than a nominally wall-resolved mesh.
+    \item \codeword{ally}: selects \codeword{allReynolds}. The turbulent viscosity uses \codeword{nutUSpaldingWallFunction}, with wall functions for $k$, $\varepsilon$ and $\omega$. The Spalding formulation provides a blended velocity relation across the near-wall range and is intended to be less dependent on a sharp switch between viscous and logarithmic laws. It does not remove the need to check $y^+$ or guarantee wall-resolved accuracy.
+    \item \codeword{low}: selects \codeword{lowReynolds}. The turbulent viscosity uses \codeword{nutLowReWallFunction}; $k$, $\varepsilon$, $\omega$ and the Spalart--Allmaras variable use near-wall fixed values. This is the option intended for a low-$y^+$, wall-resolved treatment. It only behaves as such when the mesh actually resolves the viscous sublayer; selecting \codeword{low} on a coarse wall-function mesh does not create wall resolution.
+\end{itemize}
+
+For the Spalart--Allmaras model, the repository sets $\widetilde{\nu}$ to zero at the wall and applies the selected treatment to $\nu_t$. For $k$--$\omega$ SST and GEKO, the $k$ and $\omega$ fields use the corresponding OpenFOAM wall functions in the high- and all-Reynolds options. The $k$--$\varepsilon$ template follows the same high-level wall-function approach, although that model is not currently exposed by the case selector.
+
+There is no separate wall-resolved LES model or automatic wall-model selection in the current setup. The transient IDDES choices inherit wall treatment from their underlying Spalart--Allmaras or SST formulation; they are hybrid RANS--LES models, not wall-resolved LES by default. A \codeword{slip} ground patch has no no-slip wall shear and therefore does not use a turbulence wall function on that patch. Likewise, the \codeword{laminar} template has no turbulent stress model, so the turbulence wall-function discussion does not apply to a truly laminar case.
+
+The solver reports the computed \codeword{yPlus} field through the standard function object. Always inspect its distribution on the vehicle, wheels and ground before interpreting wall shear or force coefficients. A single global average can hide regions of separation, stagnation or excessive cell size, so local maxima and the values over force-producing surfaces are important. Confirm the generated turbulence-properties file before production runs.
+
+\subsection{Other turbulence models in the template library}
+
+The repository also contains templates for hybrid RANS--LES and laminar calculations. These models do not have the same interpretation as a steady RANS mean solution.
+
+\begin{itemize}
+    \item \textbf{LES}: Large Eddy Simulation resolves the large, energy-containing eddies and models the smaller, more universal scales with a subgrid-scale model. It requires substantially finer spatial and temporal resolution than RANS, particularly near walls.
+    \item \textbf{DES}: Detached Eddy Simulation uses a RANS model near attached walls and switches toward LES behaviour in sufficiently resolved separated regions. It is intended to resolve large detached structures without the cost of wall-resolved LES everywhere.
+    \item \textbf{DDES}: Delayed Detached Eddy Simulation adds shielding intended to prevent premature switching from RANS to LES inside attached boundary layers. The template library includes \codeword{SpalartAllmarasDDES}.
+    \item \textbf{IDDES}: Improved Delayed Detached Eddy Simulation extends the hybrid approach with improved shielding and length-scale treatments. The transient aliases \codeword{sa} and \codeword{kosst} select \codeword{SpalartAllmarasIDDES} and \codeword{kOmegaSSTIDDES}, respectively.
+    \item \textbf{Laminar}: A laminar calculation sets the turbulent contribution to zero and solves the molecular-viscosity equations only. The \codeword{laminar} template is present for template development, but it is not currently exposed by the \codeword{TURB_MODEL} selector.
+\end{itemize}
+
+The currently exposed choices are therefore \codeword{sa}, \codeword{kosst} and \codeword{geko} for steady cases, and \codeword{sa} and \codeword{kosst} for transient cases. The transient mapping uses hybrid models and should not be interpreted as a time-accurate RANS calculation. Confirm the generated \codeword{constant/turbulencePropertiesSolve} file and the installed ESI OpenFOAM version before production runs, especially when using hybrid models or custom templates.

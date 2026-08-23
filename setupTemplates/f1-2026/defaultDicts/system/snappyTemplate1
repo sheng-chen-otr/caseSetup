@@ -43,6 +43,10 @@ refinementSurfaces
 {      
 <REFINEMENT_SURFACES>
 }
+faceZoneControls
+{
+<FACE_ZONE_CONTROLS>
+}
 resolveFeatureAngle <REF_ANGLE>;
 refinementRegions
 {

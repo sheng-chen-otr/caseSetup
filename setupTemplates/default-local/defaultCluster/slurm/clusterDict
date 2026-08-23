@@ -61,8 +61,9 @@
 
  "post":{
          "forces":"echo 'doing post run forces and summary...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch ~/openFoam/scripts/caseSetup/caseSetup-dev/postUtilities/postRun.py --forces -s --summary >> log.postRun",
-
          "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup-dev/postUtilities/pvPost.py >> log.pvpost",
+
+         "wingPressure":"echo 'plotting wing pressure distributions...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch ~/openFoam/scripts/caseSetup/caseSetup-dev/postUtilities/postRun.py --wingPressure >> log.wingPressure",
 		
 	        "makePpt":"echo 'generating ppt...';python3.8  ~/openFoam/scripts/caseSetup/caseSetup-dev/postUtilities/pptGeneration/pptGeneration.py >> log.pptGen"
 		

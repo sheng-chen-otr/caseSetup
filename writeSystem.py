@@ -36,7 +36,7 @@ dictDict = {'solverType':{'steady':steadyTurb,'transient':transientTurb},
 
 foList = ['averageFieldsDict','cptMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
 coeffList = ['forceCoeffs','forceCoeffsExport','forceCoeffSetup']
-prefixToIgnore = ['IDOM','SMP','REFX','REF','MRFG','POR','GRND'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
+prefixToIgnore = ['IDOM','SMP','REFX','REF','MRFG','POR','FAN','GRND'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
 
 forceVecDict = {'drag':{'default':'1 0 0'},
                 'lift':{'default':'0 0 1'},
@@ -462,6 +462,7 @@ def writeSchemes(templateLoc, fullCaseSetupDict):
 def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
     print('\n\tWriting out caseProperties...')
     bcStrings = {'GEOM':'GEOM_NAME{category wall; type noSlip; patches ("GEOM_NAME.*"); options {wallFunction WALL_MODEL; motion stationary;} values {$:initialConditions;}}',
+                 'FAN':'GEOM_NAME{category fan; type fan; patches ("GEOM_NAME.*"); options {patchType cyclic; jumpTable constant FAN_PRESSURE_RISE;} values {$:initialConditions;}}',
                  'ROTA':'GEOM_NAME{category wall; type noSlip; patches ("GEOM_NAME.*"); options {wallFunction WALL_MODEL; motion rotating;} values {type rotatingWallVelocity;origin (WH_ORIG); axis (WH_AXIS); rotVel WH_VEL; $:initialConditions;}}',
                  'MOVG':'GEOM_NAME{category wall; type noSlip; patches ("GEOM_NAME.*"); options {wallFunction WALL_MODEL; motion stationary;} values {$:initialConditions;}}'
                 }
@@ -548,6 +549,13 @@ def writeBoundaries(templateLoc,geomDict,fullCaseSetupDict):
                           }
     internalDomain = False
     for geom in geomDict.keys():
+        if geom.startswith('FAN'):
+            fanName = stripExt(geom)
+            fanString = bcStrings['FAN'].replace('GEOM_NAME', fanName)
+            fanString = fanString.replace('FAN_PRESSURE_RISE',
+                                          fullCaseSetupDict[fanName]['FAN_PRESSURE_RISE'][0])
+            caseSetupStringArray.append(fanString)
+            continue
         if 'IDOM' in geom:
             internalDomain = True
     runCornering = ('CORNERING_SETUP' in fullCaseSetupDict and

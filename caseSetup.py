@@ -62,6 +62,11 @@ parser.add_argument("--animateSuspension", action="store_true",
                     help='Generate a suspension-motion GIF (front/side/top views) across '
                          'the ride-height map using the kinematic solver. Requires '
                          '[RIDE_HEIGHT_SETUP] USE_KINEMATIC_SOLVER true.')
+parser.add_argument("--gsheetPrep", action="store_true",
+                    help='After setup completes, reserve/prepare gsheet row(s) for this case (and its '
+                         'ride-height children, if any, in parent-then-child order) with the setup-time '
+                         'values already known (velocity, yaw, density, symmetry, wheelbase), without '
+                         'touching result columns. Intended to run before the case is submitted.')
 args = parser.parse_args()
 CONTROLDICT = args.controlDict
 NEWCS = args.new
@@ -70,12 +75,12 @@ PR_MODULES = args.modules
 updateCaseSetupFlag = False
 
 #available addon keywords
-addonKeyWords = ['POR','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG','GRND']
+addonKeyWords = ['POR','FAN','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG','GRND']
 
 
 #getting default values from template
 def main():
-    titleText = '''\t##############################\n\t\tcaseSetup-v4.2-dev\t\n\t##############################'''
+    titleText = '''\t##############################\n\t\tcaseSetup-v4.2.3\t\n\t##############################'''
     print(titleText)
     getTemplateType(SETUP)
     
@@ -85,6 +90,10 @@ def main():
     if NEWCS == True:
         writeNewCaseSetup(defaultDict)
     else:
+        #copy over the pvPostSetup
+        if args.postProDict:
+            copyPvPostSetup()
+            return
         caseSetupDict,writeCaseSetupDict,fullCaseSetupDict = getCaseSetup(defaultDict)
 
         #srf cornering: force a full (non-symmetric) model in-memory, leaves caseSetup SIM_SYM alone
@@ -157,12 +166,16 @@ def main():
                 copyScripts(templateLoc, fullCaseSetupDict,case)
             #tilt the base ground zones (child points are tilted+heaved in transformGeom)
             transformGroundGeom(geomDict,fullCaseSetupDict)
-            
-        
-        #copy over the pvPostSetup
 
-        if args.postProDict:
-            copyPvPostSetup()
+            if args.gsheetPrep:
+                print('\n\tPreparing gsheet row(s)...')
+                try:
+                    gsheetExportScript = os.path.join(execDir, 'postUtilities', 'gsheetExport.py')
+                    sp.run([sys.executable, gsheetExportScript, '--prep'], cwd=os.path.join(path, case), check=True)
+                except Exception as e:
+                    print('\tWARNING! Unable to prepare gsheet row(s): %s' % (e))
+        
+        
         
         #getClusterType(templateLoc,fullCaseSetupDict)
         print('\nCase setup completed successfully!')
@@ -181,6 +194,64 @@ def getTemplateType(SETUP):
         print('ERROR! %s is not a valid setup template location!' % (templateLoc))
         exit()
    
+def resolveFanGeometry(geom, geomDict, fullCaseSetupDict):
+    """Resolve FAN defaults after geometry has been linked into triSurface."""
+    fanName = stripExt(geom)
+    setup = fullCaseSetupDict[fanName]
+    try:
+        vertices, faces = readGeomFile(geom)
+        surface = calculate_planar_surface_geometry(vertices, faces)
+    except Exception as error:
+        sys.exit('ERROR! Unable to resolve planar FAN geometry %s: %s' % (fanName, error))
+
+    centerSetting = setup['FAN_CENTER']
+    if len(centerSetting) == 1 and centerSetting[0].lower() == 'default':
+        center = surface['center']
+    else:
+        center = np.asarray([float(value) for value in centerSetting], dtype=float)
+
+    directionSetting = setup['FAN_DIRECTION']
+    if len(directionSetting) == 1 and directionSetting[0].lower() == 'default':
+        targetName = setup['FAN_TARGET_GEOMETRY'][0]
+        targetGeom = next(
+            (candidate for candidate in geomDict
+             if stripExt(candidate).lower() == targetName.lower()),
+            None
+        )
+        if targetGeom is None:
+            sys.exit('ERROR! %s -> FAN_TARGET_GEOMETRY %s was not found in GEOMETRY.' %
+                     (fanName, targetName))
+        try:
+            targetVertices, targetFaces = readGeomFile(targetGeom)
+            targetCenter = calculate_surface_centroid(targetVertices, targetFaces)
+            direction = orient_surface_normal(surface['normal'], center, targetCenter)
+        except Exception as error:
+            sys.exit('ERROR! Unable to orient %s FAN_DIRECTION toward %s: %s' %
+                     (fanName, targetName, error))
+    else:
+        direction = np.asarray([float(value) for value in directionSetting], dtype=float)
+        norm = np.linalg.norm(direction)
+        if norm <= np.finfo(float).eps:
+            sys.exit('ERROR! %s -> FAN_DIRECTION cannot be a zero vector.' % fanName)
+        direction = direction / norm
+
+    diameterSetting = setup['FAN_DIAMETER']
+    if len(diameterSetting) == 1 and diameterSetting[0].lower() == 'default':
+        diameter = surface['diameter']
+    else:
+        diameter = float(diameterSetting[0])
+    if diameter <= 0.0:
+        sys.exit('ERROR! %s -> FAN_DIAMETER must be positive.' % fanName)
+
+    setup['FAN_CENTER'] = ['%.12g' % value for value in center]
+    setup['FAN_DIRECTION'] = ['%.12g' % value for value in direction]
+    setup['FAN_DIAMETER'] = ['%.12g' % diameter]
+    setup['FAN_AREA'] = ['%.12g' % (np.pi * (diameter / 2.0) ** 2)]
+    setup['FAN_PLANARITY_ERROR'] = ['%.12g' % surface['planarity_error']]
+    print('\t\tResolved %s center=%s direction=%s diameter=%s' %
+          (fanName, setup['FAN_CENTER'], setup['FAN_DIRECTION'], setup['FAN_DIAMETER'][0]))
+
+
 #writes to snappyHexMeshDict
 def writeSnappy(geomDict,fullCaseSetupDict):
     print('\n\tPreparing geometry for writing to snappyHexMeshDict...')
@@ -223,7 +294,7 @@ def writeSnappy(geomDict,fullCaseSetupDict):
     if not os.path.exists(snappyTemplatePath):
         print('ERROR! TEMPLATE_TYPE in path %s is invalid!' % (snappyTemplatePath))
         exit()   
-    snappyDictSections = ['GEOMETRY','FEATURE_EDGE','REFINEMENT_SURFACES','REFINEMENT_REGIONS','LOC_IN_MESH','LAYERS','LOC_IN_MESH','REF_ANGLE','DEF_EX_RATIO']
+    snappyDictSections = ['GEOMETRY','FEATURE_EDGE','REFINEMENT_SURFACES','REFINEMENT_REGIONS','FACE_ZONE_CONTROLS','LOC_IN_MESH','LAYERS','LOC_IN_MESH','REF_ANGLE','DEF_EX_RATIO']
     snappyDict = {}
     
     #making sections in snappyDict
@@ -231,8 +302,9 @@ def writeSnappy(geomDict,fullCaseSetupDict):
         snappyDict[sec] = []
         
     #setting up the geometries
-    geometryStrings = {'GEOM':'\tGEOM_NAME {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
-                       'POR':'\tGEOM_NAME {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
+    geometryStrings = {'GEOM':'\tGEOM_NAME.obj {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
+                       'FAN':'\tGEOM_NAME.obj {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
+                       'POR':'\tGEOM_NAME.obj {type distributedTriSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'REF':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'REFX':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
                        'MRFG':'\tGEOM_NAME {type triSurfaceMesh; scale GEOM_SCALE; file "GEOM_FILE"; regions{".*";}}\n',
@@ -245,9 +317,10 @@ def writeSnappy(geomDict,fullCaseSetupDict):
                                        },
                                'REF':'\tGEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n',
                                }
-    refinementSurfaceStrings = {'GEOM': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); regions{#include"snappyRefinementDict"}}\n',
-                                'GEOMX': '\tGEOM_NAME {level (GEOMX_LEVEL_MIN GEOMX_LEVEL_MAX); regions{#include"snappyRefinementDict"}}\n',
-                                'POR': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; cellZone GEOM_NAME_INTERNAL; cellZoneInside insidePoint; insidePoint (POR_POINT);}\n',
+    refinementSurfaceStrings = {'GEOM': '\tGEOM_NAME.obj {level (GEOM_LEVEL GEOM_LEVEL); regions{#include"snappyRefinementDict"}}\n',
+                                'GEOMX': '\tGEOM_NAME.obj {level (GEOMX_LEVEL_MIN GEOMX_LEVEL_MAX); regions{#include"snappyRefinementDict"}}\n',
+                                'POR': '\tGEOM_NAME.obj {level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; cellZone GEOM_NAME_INTERNAL; cellZoneInside insidePoint; insidePoint (POR_POINT);}\n',
+                                'FAN': '\tGEOM_NAME.obj{level (GEOM_LEVEL GEOM_LEVEL); faceZone GEOM_NAME; faceType baffle;}\n',
                                 'MRFG': '\tGEOM_NAME {level (GEOM_LEVEL GEOM_LEVEL); faceZone toint-GEOM_NAME; cellZone fluid-GEOM_NAME; cellZoneInside insidePoint; insidePoint (MRF_POINT);}\n',
                                 
                                 }
@@ -315,7 +388,17 @@ def writeSnappy(geomDict,fullCaseSetupDict):
         geomLevel = geomDict[geom]['refinement'] 
         refType = ''
         refLevel = ''
-        if geomName.split('-')[0] == 'POR':
+        if geomName.split('-')[0] == 'FAN':
+            resolveFanGeometry(geom, geomDict, fullCaseSetupDict)
+            fanString = refinementSurfaceStrings['FAN']
+            fanString = fanString.replace('GEOM_NAME', geomName).replace('GEOM_LEVEL', geomLevel)
+            snappyDict['REFINEMENT_SURFACES'].append(fanString)
+            snappyDict['FACE_ZONE_CONTROLS'].append(
+                '\t%s { type faceZone; faceZone %s; faceType baffle; }\n' %
+                (geomName, geomName)
+            )
+            continue
+        elif geomName.split('-')[0] == 'POR':
             porString = refinementSurfaceStrings[geomName.split('-')[0]]
             #test if it's porous media
             try:
@@ -579,6 +662,9 @@ def writeSnappy(geomDict,fullCaseSetupDict):
         
     #writing to snappyHexMeshDict
     print('\t\tWriting to snappyHexMeshDict:')
+    search_and_replace("%s/%s/system/snappyHexMeshDict" % (path,case),
+                       '<FACE_ZONE_CONTROLS>',
+                       ''.join(snappyDict['FACE_ZONE_CONTROLS']))
     for snappySec in snappyDict.keys():
         print('\t\t\t%s' % (snappySec))
         search_and_replace("%s/%s/system/snappyHexMeshDict" % (path,case), '<%s>' % (snappySec),''.join(snappyDict[snappySec]))
@@ -968,6 +1054,7 @@ def getGeometry(fullCaseSetupDict,writeCaseSetupDict):
             print('\t\t\t%s: %s' % (col,val))
     writeCaseSetupDict = checkGeom(geomDict,writeCaseSetupDict)
     writeCaseSetupDict = checkPorous(geomDict,writeCaseSetupDict)
+    writeCaseSetupDict = checkFan(geomDict,writeCaseSetupDict)
     writeCaseSetupDict = checkMRF(geomDict,writeCaseSetupDict)
     writeCaseSetupDict = checkRotation(geomDict,writeCaseSetupDict)
     writeCaseSetupDict = checkInternalDomain(geomDict,writeCaseSetupDict)
@@ -1018,6 +1105,91 @@ def checkPorous(geomDict,writeCaseSetupDict):
             
         
     return writeCaseSetupDict    
+
+
+def _fan_vector_setting(section, key, values, allow_default=True):
+    """Validate a FAN three-component setting and return normalized tokens."""
+    if len(values) == 1 and values[0].lower() == 'default':
+        if allow_default:
+            return ['default']
+        sys.exit('ERROR! %s -> %s cannot be default.' % (section, key))
+    if len(values) != 3:
+        sys.exit('ERROR! %s -> %s must be default or exactly three numeric values.' %
+                 (section, key))
+    try:
+        vector = np.asarray([float(value) for value in values], dtype=float)
+    except (TypeError, ValueError):
+        sys.exit('ERROR! %s -> %s must contain three numeric values.' % (section, key))
+    if key == 'FAN_DIRECTION' and np.linalg.norm(vector) <= np.finfo(float).eps:
+        sys.exit('ERROR! %s -> FAN_DIRECTION cannot be a zero vector.' % section)
+    return [str(value) for value in vector]
+
+
+def checkFan(geomDict,writeCaseSetupDict):
+    """Populate and validate configuration for geometry-driven FAN components.
+
+    FAN is intentionally independent of POR: a POR geometry retains its
+    existing porous-media behavior, while a FAN geometry requests a planar
+    baffle and the ESI fan pressure-jump model.
+    """
+    global updateCaseSetupFlag
+    fanConfigRead = configparser.ConfigParser()
+    fanConfigRead.optionxform = str
+    try:
+        fanConfigRead.read_file(open('%s/defaultBCTemplates/defaultFan' % templateLoc))
+    except Exception:
+        print('ERROR! defaultFan template is invalid!')
+        sys.exit()
+    if 'FAN_SETUP' not in fanConfigRead.sections():
+        sys.exit('ERROR! defaultFan section header must be [FAN_SETUP]!')
+
+    defaults = dict(fanConfigRead.items('FAN_SETUP'))
+    for geom in geomDict:
+        if not geom.startswith('FAN'):
+            continue
+        fanName = stripExt(geom)
+        if fanName not in writeCaseSetupDict:
+            writeCaseSetupDict[fanName] = {
+                key: [value] for key, value in defaults.items()
+            }
+            updateCaseSetupFlag = True
+        else:
+            for key, value in defaults.items():
+                if key not in writeCaseSetupDict[fanName]:
+                    writeCaseSetupDict[fanName][key] = [value]
+                    updateCaseSetupFlag = True
+
+        setup = writeCaseSetupDict[fanName]
+        model = setup['FAN_MODEL'][0].lower()
+        if model not in ('fan', 'pressurejump'):
+            sys.exit('ERROR! %s -> FAN_MODEL must be fan or pressureJump for ESI OpenFOAM.' % fanName)
+        _fan_vector_setting(fanName, 'FAN_CENTER', setup['FAN_CENTER'])
+        direction = _fan_vector_setting(fanName, 'FAN_DIRECTION', setup['FAN_DIRECTION'])
+        if direction[0].lower() == 'default':
+            target = setup.get('FAN_TARGET_GEOMETRY', ['default'])
+            if len(target) != 1 or target[0].lower() == 'default':
+                sys.exit('ERROR! %s -> FAN_TARGET_GEOMETRY is required when FAN_DIRECTION=default.' % fanName)
+        elif 'FAN_TARGET_GEOMETRY' in setup:
+            print('\t	%s: explicit FAN_DIRECTION overrides FAN_TARGET_GEOMETRY.' % fanName)
+        diameter = setup['FAN_DIAMETER']
+        if len(diameter) == 1 and diameter[0].lower() == 'default':
+            pass
+        elif len(diameter) == 1:
+            try:
+                if float(diameter[0]) <= 0.0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                sys.exit('ERROR! %s -> FAN_DIAMETER must be default or one positive scalar.' % fanName)
+        else:
+            sys.exit('ERROR! %s -> FAN_DIAMETER must be default or one positive scalar.' % fanName)
+        try:
+            pressureRise = setup['FAN_PRESSURE_RISE']
+            if len(pressureRise) != 1 or float(pressureRise[0]) < 0.0:
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            sys.exit('ERROR! %s -> FAN_PRESSURE_RISE must be one non-negative scalar.' % fanName)
+
+    return writeCaseSetupDict
 
 def checkMRF(geomDict,writeCaseSetupDict):
     global updateCaseSetupFlag

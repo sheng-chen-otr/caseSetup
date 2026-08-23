@@ -1,0 +1,25 @@
+QCritMean
+{
+type            Q;
+libs            (fieldFunctionObjects);
+field           UMean;
+result          QMean;
+enabled         true;
+log             false;
+executeControl  timeStep;
+executeInterval 1;
+writeControl    timeStep;
+}
+
+QCrit
+{
+type            Q;
+libs            (fieldFunctionObjects);
+field           U;
+result          Q;
+enabled         true;
+log             false;
+executeControl  timeStep;
+executeInterval 1;
+writeControl    timeStep;
+}

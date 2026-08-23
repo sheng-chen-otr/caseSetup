@@ -1,0 +1,8 @@
+[REF_SETUP]
+REF_TYPE = inside
+REF_LEVEL = 9
+
+[REF_SETUP_DISTANCE]
+REF_TYPE = distance
+REF_LEVELS = 9 8 7
+REF_DIST = 0.5 0.8 1

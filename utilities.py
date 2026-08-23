@@ -16,6 +16,9 @@ import subprocess
 from datetime import datetime
 from copy import deepcopy
 
+import geometryIO
+import configValidation
+
 updateCaseSetupFlag = False
 
 
@@ -191,6 +194,10 @@ def _load_suspension_hardpoints_cfg(hardpointPath):
             v = str(val).strip()
             if v != '':
                 cornerPidKeywords[c].append(v)
+
+    unitsOk, unitsMessage = configValidation.checkHardpointUnitConsistency(corners)
+    if not unitsOk:
+        raise ValueError(unitsMessage)
 
     return corners, cornerPidKeywords
 
@@ -2392,113 +2399,22 @@ def calculateWheelMovements(z_fl, z_fr, z_rl, z_rr, pitch_deg, roll_deg, heave):
 
 def getBoundingBoxOBJ(geomFile):
     objPath = 'constant/triSurface/%s' % (geomFile)
-    
-    
-    #check that obj file is indeed an obj file
-    
-    if not geomFile.split('.')[-1].lower() == 'obj' or geomFile.split('.')[-2].lower() == 'obj':
+    ext = geomFile.lower()[:-3] if geomFile.lower().endswith('.gz') else geomFile.lower()
+    if not ext.endswith('.obj'):
         sys.exit('ERROR! Cannot attempt to import non-OBJ files using getBoundingBoxOBJ function!')
-        
-    #read in the file from the path given
-    if geomFile.split('.')[-1].lower() == 'gz':
-        import gzip
-        import shutil
-        with gzip.open(objPath, 'rt') as objFile:
-            #initializing the arrays
-            xCoords = []
-            yCoords = []
-            zCoords = []
-            
-            for line in objFile:
-                if line.startswith('v'):
-                    xCoords.append(line.split(' ')[1])
-                    yCoords.append(line.split(' ')[2])
-                    zCoords.append(line.split(' ')[3])
-    else:
-        with open(objPath, 'rt') as objFile:
-            #initializing the arrays
-            xCoords = []
-            yCoords = []
-            zCoords = []
-            
-            for line in objFile:
-                
-                if line.startswith('v'):
-                    xCoords.append(line.split(' ')[1])
-                    yCoords.append(line.split(' ')[2])
-                    zCoords.append(line.split(' ')[3])
-    
-    xCoords = np.array(xCoords)
-    yCoords = np.array(yCoords)
-    zCoords = np.array(zCoords)
-    
-    #getting bounds
-    
-    bbminX = min(xCoords)
-    bbmaxX = max(xCoords)
-    bbminY = min(yCoords)
-    bbmaxY = max(yCoords)
-    bbminZ = min(zCoords)
-    bbmaxZ = max(zCoords)
-    sys.exit()
-    
+
+    bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = geometryIO.surfaceBoundingBox(objPath)
     return bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ
-        
+
 def getBoundingBoxSTL(geomFile):
-    
+
     stlPath = 'constant/triSurface/%s' % (geomFile)
-    
-    #check that obj file is indeed an obj file
-    if not geomFile.split('.')[-1].lower() == 'stl' or geomFile.split('.')[-2].lower() == 'stl':
+    ext = geomFile.lower()[:-3] if geomFile.lower().endswith('.gz') else geomFile.lower()
+    if not ext.endswith('.stl'):
         sys.exit('ERROR! Cannot attempt to import non-STL files using getBoundingBoxSTL function!')
-        
-    #read in the file from the path given
-    if geomFile.split('.')[-1].lower() == 'gz':
-        import gzip
-        import shutil
-        with gzip.open(stlPath, 'rt') as stlFile:
-            #initializing the arrays
-            xCoords = []
-            yCoords = []
-            zCoords = []
-            
-            for line in stlFile:
-                if 'vertex' in line:
-                    line.replace('  ',',').replace(' ',',')
-                    xCoords.append(line.split(',')[1])
-                    yCoords.append(line.split(',')[2])
-                    zCoords.append(line.split(',')[3])
-    else:
-        with open(stlPath, 'rt') as stlFile:
-            #initializing the arrays
-            xCoords = []
-            yCoords = []
-            zCoords = []
-            
-            for line in stlFile:
-                if 'vertex' in line:
-                    line.replace('  ',',').replace(' ',',')
-                    xCoords.append(line.split(',')[1])
-                    yCoords.append(line.split(',')[2])
-                    zCoords.append(line.split(',')[3])
-    
-    xCoords = np.array(xCoords)
-    yCoords = np.array(yCoords)
-    zCoords = np.array(zCoords)
-    
-    #getting bounds
-    
-    bbminX = min(xCoords)
-    bbmaxX = max(xCoords)
-    bbminY = min(yCoords)
-    bbmaxY = max(yCoords)
-    bbminZ = min(zCoords)
-    bbmaxZ = max(zCoords)
-    
-    sys.exit()
-    
-    
-    return bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ   
+
+    bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ = geometryIO.surfaceBoundingBox(stlPath)
+    return bbminX, bbminY, bbminZ, bbmaxX, bbmaxY, bbmaxZ
 
 def getBoundingBoxPv(geomFile):
     geomPath = 'constant/triSurface/%s' % (geomFile)
@@ -3015,6 +2931,104 @@ def readGeomFile(fileName):
             vertices, faces = load_binary_stl(file)
 
     return vertices,faces
+
+
+def calculate_planar_surface_geometry(vertices, faces, planarity_tolerance=1.0e-5):
+    """Return area-weighted geometry data for a planar triangular surface.
+
+    The normal is obtained from the least-variance PCA direction, so the
+    result is independent of inconsistent OBJ/STL face winding.  Face areas
+    are used for the centroid and equivalent circular diameter.  The returned
+    normal has no meaningful sign; callers must orient it using a target point
+    or an explicit user vector.
+    """
+    vertices = np.asarray(vertices, dtype=float)
+    faces = np.asarray(faces, dtype=int)
+    if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) < 3:
+        raise ValueError('surface must contain at least three 3-D vertices')
+    if faces.ndim != 2 or faces.shape[1] != 3 or len(faces) == 0:
+        raise ValueError('surface must contain triangular faces')
+    if np.any(faces < 0) or np.any(faces >= len(vertices)):
+        raise ValueError('surface contains an invalid face index')
+
+    tri = vertices[faces]
+    cross = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    double_area = np.linalg.norm(cross, axis=1)
+    valid = double_area > np.finfo(float).eps
+    if not np.any(valid):
+        raise ValueError('surface has zero area')
+
+    tri = tri[valid]
+    areas = 0.5 * double_area[valid]
+    face_centres = np.mean(tri, axis=1)
+    area_total = float(np.sum(areas))
+    centre = np.sum(face_centres * areas[:, None], axis=0) / area_total
+
+    centred = vertices - centre
+    _, singular_values, vh = np.linalg.svd(centred, full_matrices=False)
+    normal = vh[-1]
+    normal_norm = np.linalg.norm(normal)
+    if normal_norm <= np.finfo(float).eps:
+        raise ValueError('unable to determine a surface normal')
+    normal = normal / normal_norm
+
+    scale = max(float(np.max(np.linalg.norm(centred, axis=1))), 1.0)
+    planarity_error = float(singular_values[-1] / scale)
+    if planarity_error > planarity_tolerance:
+        raise ValueError(
+            'surface is not planar (relative error %.6g > %.6g)' %
+            (planarity_error, planarity_tolerance)
+        )
+
+    diameter = 2.0 * np.sqrt(area_total / np.pi)
+    return {
+        'center': centre,
+        'normal': normal,
+        'area': area_total,
+        'diameter': float(diameter),
+        'planarity_error': planarity_error,
+    }
+
+
+def calculate_surface_centroid(vertices, faces):
+    """Return an area-weighted centroid for any triangulated surface."""
+    vertices = np.asarray(vertices, dtype=float)
+    faces = np.asarray(faces, dtype=int)
+    if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) < 3:
+        raise ValueError('surface must contain at least three 3-D vertices')
+    if faces.ndim != 2 or faces.shape[1] != 3 or len(faces) == 0:
+        raise ValueError('surface must contain triangular faces')
+    tri = vertices[faces]
+    areas = 0.5 * np.linalg.norm(
+        np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1
+    )
+    valid = areas > np.finfo(float).eps
+    if not np.any(valid):
+        raise ValueError('surface has zero area')
+    areas = areas[valid]
+    centres = np.mean(tri[valid], axis=1)
+    return np.sum(centres * areas[:, None], axis=0) / np.sum(areas)
+
+
+def orient_surface_normal(normal, source_center, target_center):
+    """Orient a surface normal from source_center toward target_center."""
+    normal = np.asarray(normal, dtype=float)
+    source_center = np.asarray(source_center, dtype=float)
+    target_center = np.asarray(target_center, dtype=float)
+    normal_norm = np.linalg.norm(normal)
+    target_vector = target_center - source_center
+    target_norm = np.linalg.norm(target_vector)
+    if normal_norm <= np.finfo(float).eps:
+        raise ValueError('surface normal is zero')
+    if target_norm <= np.finfo(float).eps:
+        raise ValueError('target geometry centre coincides with source centre')
+    normal = normal / normal_norm
+    target_vector = target_vector / target_norm
+    if abs(float(np.dot(normal, target_vector))) <= 1.0e-10:
+        raise ValueError('target geometry lies in the source surface plane')
+    if np.dot(normal, target_vector) < 0.0:
+        normal = -normal
+    return normal
 
 
 
