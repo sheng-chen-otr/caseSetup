@@ -2,7 +2,7 @@ PWD /Users/zchen147/Library/CloudStorage/OneDrive-azureford/researchMasc/caseSet
 INPUT /usr/local/texlive/2024/texmf.cnf
 INPUT /usr/local/texlive/2024/texmf-dist/web2c/texmf.cnf
 INPUT /usr/local/texlive/2024/texmf-var/web2c/pdftex/pdflatex.fmt
-INPUT /Users/zchen147/Library/CloudStorage/OneDrive-azureford/researchMasc/caseSetup-dev/documentation/source/caseSetupTUG.tex
+INPUT caseSetupTUG.tex
 OUTPUT caseSetupTUG.log
 INPUT /usr/local/texlive/2024/texmf-dist/tex/latex/base/article.cls
 INPUT /usr/local/texlive/2024/texmf-dist/tex/latex/base/article.cls
