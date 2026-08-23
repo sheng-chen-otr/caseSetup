@@ -815,8 +815,9 @@ def plotFrhRrhContour(subDf, activeGroups, casePath, includeSideForce=False, fil
 
     nCols = 2
     nRows = int(np.ceil(len(metrics) / float(nCols)))
-    fig, axes = plt.subplots(nRows, nCols, figsize=(6 * nCols, 5 * nRows), squeeze=False)
+    fig, axes = plt.subplots(nRows, nCols, figsize=(7.5 * nCols, 6 * nRows), squeeze=False)
     flatAxes = axes.flatten()
+    fig.subplots_adjust(wspace=0.55, hspace=0.45)
 
     for ax, metric in zip(flatAxes, metrics):
         zValues = subDf[metric].to_numpy(dtype=float)
@@ -825,10 +826,10 @@ def plotFrhRrhContour(subDf, activeGroups, casePath, includeSideForce=False, fil
         contourf = ax.contourf(gridX, gridY, gridZ, levels=20, cmap='viridis')
         ax.contour(gridX, gridY, gridZ, levels=20, colors='black', linewidths=0.4, alpha=0.5)
         ax.scatter(frontVal, rearVal, c='white', edgecolors='black', s=25, zorder=3)
-        fig.colorbar(contourf, ax=ax, label=metric)
+        fig.colorbar(contourf, ax=ax, label=metric, pad=0.03)
         ax.set_xlabel('Front Ride Height (avg fl/fr)')
         ax.set_ylabel('Rear Ride Height (avg rl/rr)')
-        ax.set_title(metric)
+        ax.set_title(metric, pad=10)
 
     #hide any unused axes (e.g. only 3 metrics in a 2x2 grid)
     for ax in flatAxes[len(metrics):]:
