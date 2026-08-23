@@ -737,7 +737,7 @@ def plotRideHeightSweep(entries, sweepName, groupSpec, activeGroups, casePath, i
     outputDir = os.path.join(casePath, 'postProcessing', 'sensitivityPlots')
     os.makedirs(outputDir, exist_ok=True)
     outFile = os.path.join(outputDir, '%s%s_sweep.png' % (sweepName.replace(' ', ''), fileSuffix))
-    fig.savefig(outFile, dpi=150, bbox_inches='tight')
+    fig.savefig(outFile, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print('\tSaved %s sensitivity sweep: %s' % (sweepName, outFile))
 
@@ -860,7 +860,7 @@ def plotFrhRrhContour(subDf, activeGroups, casePath, includeSideForce=False, fil
     outputDir = os.path.join(casePath, 'postProcessing', 'sensitivityPlots')
     os.makedirs(outputDir, exist_ok=True)
     outFile = os.path.join(outputDir, 'FrontRearRideHeight_contour%s.png' % fileSuffix)
-    fig.savefig(outFile, dpi=150, bbox_inches='tight')
+    fig.savefig(outFile, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print('\tSaved FRH-RRH sensitivity contour: %s' % outFile)
 
