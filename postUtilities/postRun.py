@@ -64,6 +64,10 @@ def main():
                        help='Manual averaging start time')
     parser.add_argument('--plotEveryOther', default=10, type=int,
                        help='Number of every other time steps to plot, reduces messiness in plot')
+    parser.add_argument('--sensitivityPlots', action='store_true',
+                       help='Plot ride-height/yaw/cornering sensitivity sweeps for a ride-height mapping parent case')
+    parser.add_argument('--includeSideForce', action='store_true',
+                       help='Include Cs(f)/Cs(r) in sensitivity sweep plots (off by default)')
 
     args = parser.parse_args()
     
@@ -80,7 +84,10 @@ def main():
         casePathDict, caseLoc = setCasePaths(args.trial,casePath)
         plotWingPressure(args, casePathDict, caseLoc)
 
-    if not args.summary and not args.forces and not args.wingPlots:
+    if args.sensitivityPlots:
+        plotRideHeightSensitivity(casePath, includeSideForce=args.includeSideForce)
+
+    if not args.summary and not args.forces and not args.wingPlots and not args.sensitivityPlots:
         parser.print_help()
 
 
@@ -464,6 +471,227 @@ def formatSummaryNumericValues(summaryDf, decimals=3):
         except Exception:
             pass
     return summaryDf
+
+
+#ride-height map sensitivity sweeps: groups of ride-height-CSV columns that can each act as a
+#single "swept" variable. 'cols' lists the underlying CSV columns that belong to the group;
+#a group counts as "changing" if ANY of its columns vary across the child cases. A group is only
+#plotted as a sweep if every OTHER group (including STEER_ONLY_GROUP, which is never itself
+#plotted) is constant across the same child cases -- i.e. exactly one variable is changing.
+RIDE_HEIGHT_SWEEP_GROUPS = OrderedDict([
+    ('Front Ride Height', {'cols': ['fl', 'fr'], 'xLabel': 'Front Ride Height (avg fl/fr)'}),
+    ('Rear Ride Height', {'cols': ['rl', 'rr'], 'xLabel': 'Rear Ride Height (avg rl/rr)'}),
+    ('Yaw', {'cols': ['yaw'], 'xLabel': 'Yaw (deg)'}),
+    ('Corner', {'cols': ['corner_radius', 'corner_dir'], 'xLabel': 'Corner Radius (m)'}),
+])
+#constancy-only: never plotted as its own sweep, but must stay constant for any of the
+#groups above to be considered a clean single-variable sweep
+RIDE_HEIGHT_STEER_GROUP = {'cols': ['steer', 'steer_deg', 'steer_angle']}
+
+#default force/moment coefficients plotted for every sensitivity sweep; Cs(f)/Cs(r) are only
+#added when includeSideForce=True (see plotRideHeightSensitivity)
+DEFAULT_SWEEP_METRICS = ['Cd', 'Cl', 'Cl(f)', 'Cl(r)']
+OPTIONAL_SWEEP_METRICS = ['Cs(f)', 'Cs(r)']
+
+
+def loadRideHeightMap(casePath):
+    """Load the parent case's rideHeights_updated.csv, or None if not present/unreadable."""
+    rhPath = os.path.join(casePath, 'rideHeights_updated.csv')
+    if not os.path.isfile(rhPath):
+        return None
+    try:
+        return pd.read_csv(rhPath)
+    except Exception as e:
+        print('\tUnable to read %s: %s' % (rhPath, e))
+        return None
+
+
+def buildSweepDataset(casePath, rhMap):
+    """Merge each ride-height-map row with its child case's summary.csv metrics.
+
+    Skips child cases that are incomplete, missing summary.csv, or unreadable (mirrors
+    the child-skip behavior used when averaging the parent summary).
+    """
+    if 'caseName' not in rhMap.columns:
+        print('\tWARNING! rideHeights_updated.csv has no caseName column; skipping sensitivity plots.')
+        return None
+
+    metricKeys = DEFAULT_SWEEP_METRICS + OPTIONAL_SWEEP_METRICS
+    rows = []
+    for _, row in rhMap.iterrows():
+        caseName = str(row.get('caseName', '')).strip()
+        if not caseName:
+            continue
+        childPath = os.path.join(casePath, caseName)
+        if not isCaseComplete(childPath):
+            print('\tWARNING! Child case %s is incomplete, skipping for sensitivity plots.' % caseName)
+            continue
+
+        summaryPath = os.path.join(childPath, 'summary.csv')
+        if not os.path.isfile(summaryPath):
+            print('\tWARNING! Child case %s missing summary.csv, skipping for sensitivity plots.' % caseName)
+            continue
+
+        summaryDict = readChildSummaryCsv(summaryPath)
+        if not summaryDict:
+            print('\tWARNING! Child case %s has unreadable summary.csv, skipping for sensitivity plots.' % caseName)
+            continue
+
+        entry = row.to_dict()
+        for metric in metricKeys:
+            try:
+                entry[metric] = float(summaryDict.get(metric, np.nan))
+            except Exception:
+                entry[metric] = np.nan
+        rows.append(entry)
+
+    if len(rows) < 2:
+        print('\tNot enough complete child cases with data to build sensitivity plots.')
+        return None
+
+    return pd.DataFrame(rows)
+
+
+def detectRideHeightSweeps(df):
+    """Return (list of sweep group names, activeGroups dict) for groups whose columns exist in df.
+
+    A sweep group qualifies when its columns vary across df while every other tracked group
+    (other sweep groups + the steer-only constancy group) stays constant.
+    """
+    activeGroups = OrderedDict()
+    for name, spec in RIDE_HEIGHT_SWEEP_GROUPS.items():
+        cols = [c for c in spec['cols'] if c in df.columns]
+        if cols:
+            activeGroups[name] = {'cols': cols, 'xLabel': spec['xLabel']}
+
+    steerCols = [c for c in RIDE_HEIGHT_STEER_GROUP['cols'] if c in df.columns]
+
+    def groupVaries(cols):
+        return any(df[c].nunique(dropna=True) > 1 for c in cols)
+
+    sweeps = []
+    for name, spec in activeGroups.items():
+        if not groupVaries(spec['cols']):
+            continue
+
+        othersConstant = True
+        for otherName, otherSpec in activeGroups.items():
+            if otherName == name:
+                continue
+            if groupVaries(otherSpec['cols']):
+                othersConstant = False
+                break
+        if othersConstant and groupVaries(steerCols):
+            othersConstant = False
+
+        if othersConstant:
+            sweeps.append(name)
+
+    return sweeps, activeGroups
+
+
+def buildSweepTitle(sweepName, df, activeGroups):
+    """Descriptive title naming the sweep and the constant configuration around it."""
+    fixedParts = []
+    for otherName, otherSpec in activeGroups.items():
+        if otherName == sweepName:
+            continue
+        for col in otherSpec['cols']:
+            if df[col].nunique(dropna=True) <= 1:
+                fixedParts.append('%s=%s' % (col, df[col].iloc[0]))
+
+    steerCols = [c for c in RIDE_HEIGHT_STEER_GROUP['cols'] if c in df.columns]
+    for col in steerCols:
+        if df[col].nunique(dropna=True) <= 1:
+            fixedParts.append('%s=%s' % (col, df[col].iloc[0]))
+            break
+
+    title = '%s Sensitivity Sweep' % sweepName
+    if fixedParts:
+        title += ' (%s)' % ', '.join(fixedParts)
+    return title
+
+
+def getSweepXValues(sweepName, groupSpec, df):
+    """Return (xValues array, xLabel) for the swept variable."""
+    if sweepName == 'Front Ride Height' and {'fl', 'fr'}.issubset(df.columns):
+        return df[['fl', 'fr']].mean(axis=1).to_numpy(), groupSpec['xLabel']
+    if sweepName == 'Rear Ride Height' and {'rl', 'rr'}.issubset(df.columns):
+        return df[['rl', 'rr']].mean(axis=1).to_numpy(), groupSpec['xLabel']
+    if sweepName == 'Corner':
+        if 'corner_radius' in df.columns and df['corner_radius'].nunique(dropna=True) > 1:
+            return df['corner_radius'].to_numpy(), 'Corner Radius (m)'
+        if 'corner_dir' in df.columns:
+            return df['corner_dir'].astype(str).to_numpy(), 'Corner Direction'
+    col = groupSpec['cols'][0]
+    return df[col].to_numpy(), groupSpec.get('xLabel', col)
+
+
+def plotRideHeightSweep(df, sweepName, groupSpec, activeGroups, casePath, includeSideForce=False):
+    """Plot one figure (scatter + connecting line, sorted by x) for a single-variable sweep."""
+    xValues, xLabel = getSweepXValues(sweepName, groupSpec, df)
+
+    metrics = list(DEFAULT_SWEEP_METRICS)
+    if includeSideForce:
+        metrics += OPTIONAL_SWEEP_METRICS
+    metrics = [m for m in metrics if m in df.columns and df[m].notna().any()]
+    if not metrics:
+        print('\tNo usable force coefficient columns for %s sweep, skipping plot.' % sweepName)
+        return
+
+    isNumericX = np.issubdtype(np.asarray(xValues).dtype, np.number)
+    sortOrder = np.argsort(xValues) if isNumericX else np.argsort(xValues.astype(str))
+
+    fig, axes = plt.subplots(len(metrics), 1, figsize=(7, 3 * len(metrics)), sharex=True, squeeze=False)
+    axes = axes[:, 0]
+
+    for ax, metric in zip(axes, metrics):
+        yValues = df[metric].to_numpy()
+        ax.plot(np.asarray(xValues)[sortOrder], yValues[sortOrder], marker='o', linestyle='-')
+        ax.set_ylabel(metric)
+        ax.grid(True)
+
+    axes[-1].set_xlabel(xLabel)
+    fig.suptitle(buildSweepTitle(sweepName, df, activeGroups))
+    fig.tight_layout()
+
+    outputDir = os.path.join(casePath, 'postProcessing', 'sensitivityPlots')
+    os.makedirs(outputDir, exist_ok=True)
+    outFile = os.path.join(outputDir, '%s_sweep.png' % sweepName.replace(' ', ''))
+    fig.savefig(outFile, dpi=150)
+    plt.close(fig)
+    print('\tSaved %s sensitivity sweep: %s' % (sweepName, outFile))
+
+
+def plotRideHeightSensitivity(casePath, includeSideForce=False):
+    """Detect and plot single-variable sensitivity sweeps for a ride-height mapping parent case.
+
+    Only runs for parent cases (those with child dirs matching caseName_#); does nothing for
+    plain single cases or when run from inside a child case.
+    """
+    parentCaseName = os.path.basename(casePath)
+    childCases = discoverRideHeightChildCases(casePath, parentCaseName)
+    if not childCases:
+        print('\tNo ride-height child cases detected; skipping sensitivity plots.')
+        return
+
+    rhMap = loadRideHeightMap(casePath)
+    if rhMap is None:
+        print('\tNo rideHeights_updated.csv found; skipping sensitivity plots.')
+        return
+
+    df = buildSweepDataset(casePath, rhMap)
+    if df is None:
+        return
+
+    sweeps, activeGroups = detectRideHeightSweeps(df)
+    if not sweeps:
+        print('\tNo single-variable sweeps detected among ride-height child cases.')
+        return
+
+    for sweepName in sweeps:
+        plotRideHeightSweep(df, sweepName, activeGroups[sweepName], activeGroups, casePath,
+                             includeSideForce=includeSideForce)
 
 
 def generate_summary():
