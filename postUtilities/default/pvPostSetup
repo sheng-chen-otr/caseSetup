@@ -33,7 +33,7 @@ VARIABLES = default
 ISO_VALUES = default
 
 [FRONT_WING_PRESSURE]
-ENABLE = False
+ENABLE = True
 PATCH_PATTERN = .*fw.*
 NORMAL = default
 Y_RANGE = default
@@ -43,7 +43,7 @@ VARIABLE = CpMean
 OUTPUT_DIR = postProcessing/wingPressure
 
 [REAR_WING_PRESSURE]
-ENABLE = False
+ENABLE = True
 PATCH_PATTERN = .*rw.*
 NORMAL = default
 Y_RANGE = default

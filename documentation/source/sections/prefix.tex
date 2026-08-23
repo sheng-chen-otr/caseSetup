@@ -138,3 +138,17 @@ the name of the block will be the name of the geometry just without the extensio
     
 
 \end{itemize} 
+
+\subsection{Sample Surfaces (SMP)}
+The prefix \codeword{SMP} defines a stand-alone sampling surface used only for field averaging/monitoring purposes. Unlike the other prefixes above, \codeword{SMP} does not apply a boundary condition and does not create any addon configuration block in the \codeword{caseSetup} file -- there is no \codeword{[SMP-name]} section to fill in. It is purely a convenience for placing a plane or arbitrary surface into the flow field (e.g. a duct cross-section, cooling-pack inlet/outlet plane, or wake-monitoring plane) so that velocity and pressure can be sampled across it.
+
+An \codeword{SMP} geometry is \textbf{not} passed to snappyHexMesh -- it is not refined, does not receive surface layers, and does not appear in the \codeword{snappyHexMeshDict}. It still needs to be supplied as an OBJ/STL file in the \codeword{02\_reference/MSH} folder like any other geometry, and \codeword{caseSetup} will link it into \codeword{constant/triSurface} the same way. Because it is never meshed, the refinement/layers/expansion/wallmodel columns in the \codeword{[GEOMETRY]} block are ignored for \codeword{SMP} geometries, but must still be present (any placeholder value works) since every geometry line requires the same number of columns.
+
+\begin{lstlisting}
+    [GEOMETRY]
+    GEOM = body.obj.gz,1,8,5,1.1,high
+            SMP-cooling-outlet.obj.gz,1,0,0,0,none
+\end{lstlisting}
+
+Every geometry whose name starts with \codeword{SMP} is automatically added to \codeword{system/surfaceFieldAverage} as a \codeword{sampledTriSurfaceMesh}, sampling \codeword{U}, \codeword{UMean}, \codeword{p}, and \codeword{pMean} with an \codeword{areaNormalAverage} operation, and writes its fields every time step. No further configuration is required beyond adding the \codeword{SMP-} prefixed geometry file to the \codeword{[GEOMETRY]} list.
+
