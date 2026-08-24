@@ -1312,7 +1312,12 @@ def addPvPostImageSlides(prs, path, caseArray):
     for variable, imageType, label in PPT_IMAGE_GROUPS:
         for view in PPT_IMAGE_VIEWS:
             for trial in caseArray:
-                imagePath = findPvPostImage(os.path.join(path, trial), variable, imageType, trial, view)
+                #pvPost.py names its own output files using only the case directory's own
+                #basename (it has no knowledge of any ride-height parent prefix), so an expanded
+                #child trial like 'parentTrial/childName' must be looked up by 'childName' even
+                #though its containing directory is path/parentTrial/childName.
+                imagePath = findPvPostImage(os.path.join(path, trial), variable, imageType,
+                                             os.path.basename(trial), view)
                 if imagePath:
                     anyFound = True
                     addPptImageSlide(prs, '%s - %s - %s' % (label, trial, view), imagePath)
@@ -1403,7 +1408,10 @@ def addSliceMovieSlides(prs, path, caseArray):
     for variable in PPT_SLICE_MOVIE_VARS:
         for normal, view in PPT_SLICE_MOVIE_VIEWS:
             for trial in caseArray:
-                result = generateSliceMovie(os.path.join(path, trial), trial, variable, normal, view)
+                #see addPvPostImageSlides: pvPost.py's own slice frame filenames use only the
+                #case directory's basename, not any ride-height parent prefix.
+                result = generateSliceMovie(os.path.join(path, trial), os.path.basename(trial),
+                                             variable, normal, view)
                 if result:
                     anyFound = True
                     moviePath, posterImagePath = result
@@ -1553,7 +1561,7 @@ def _plotBinForceComponent(ax, caseBinData, coeffKey, label, colors):
         color = colors[i % len(colors)]
         ax.plot(binData['xCoords'], binData[coeffKey], '-', linewidth=1, color=color, label=case)
 
-        imagePath = findPvPostImage(os.path.join(path, case), 'Geom', 'Surface', case, 'Left')
+        imagePath = findPvPostImage(os.path.join(path, case), 'Geom', 'Surface', os.path.basename(case), 'Left')
         if not imagePath:
             print('\tWARNING! No left-view geometry image found for %s, skipping image overlay.' % (case))
             continue
@@ -1619,7 +1627,7 @@ def _plotBinForceDeltaComponent(ax, baseCase, caseBinData, coeffKey, label, colo
     ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
 
     imgAspect = None
-    imagePath = findPvPostImage(os.path.join(path, baseCase), 'Geom', 'Surface', baseCase, 'Left')
+    imagePath = findPvPostImage(os.path.join(path, baseCase), 'Geom', 'Surface', os.path.basename(baseCase), 'Left')
     if imagePath:
         rgba = loadVehicleSideImageRGBA(imagePath)
         if rgba is not None:
@@ -1678,11 +1686,15 @@ def buildBinForcePlots(path, caseArray, outputDir):
         allForces = np.vstack((binData['xCoords'], binData['xCoeffs'], binData['yCoeffs'],
                                 binData['zCoeffs'], binData['xForce'], binData['yForce'],
                                 binData['zForce'])).T
-        np.savetxt(os.path.join(outputDir, 'trial%s_binForces.csv' % (case)), allForces, delimiter=',',
+        #case may be a compound 'parentTrial/childName' identifier (expanded ride-height child);
+        #sanitize to a flat filename-safe tag since this is a NEW output file, not a lookup of
+        #something pvPost.py already wrote.
+        caseTag = case.replace('/', '_')
+        np.savetxt(os.path.join(outputDir, 'trial%s_binForces.csv' % (caseTag)), allForces, delimiter=',',
                    header='xCoords,xCoeffs,yCoeffs,zCoeffs,xForce,yForce,zForce')
 
     colors = plt.cm.tab10.colors
-    reportName = '_'.join(caseBinData.keys())
+    reportName = '_'.join(c.replace('/', '_') for c in caseBinData.keys())
 
     figCl, axCl = plt.subplots()
     _plotBinForceComponent(axCl, caseBinData, 'zCoeffs', 'Binned Cl (Downforce)', colors)
@@ -1731,9 +1743,13 @@ def generate_ppt_report(args):
     #ride-height mapping parent cases (any --trial entry with child_# dirs, whether that's the
     #cwd default or an explicitly-passed -t) are expanded into their individual child cases so
     #each grid point gets full CFD render/bin-plot/etc. slides, same as manually listing every
-    #child case with -t. The parent name itself is kept aside (not added to caseArray) so its
-    #own summary.csv (the parent-level average, written by --summary) can still drive the
-    #"Ride Height Map Averages" table + sensitivity sweep plots below.
+    #child case with -t. Child case directories live NESTED inside the parent
+    #(path/parentTrial/childName), not directly under path, so each child is tracked as the
+    #compound relative path 'parentTrial/childName' -- every downstream os.path.join(path, trial)
+    #call then resolves to the correct nested location. The parent name itself is kept aside
+    #(not added to caseArray) so its own summary.csv (the parent-level average, written by
+    #--summary) can still drive the "Ride Height Map Averages" table + sensitivity sweep plots
+    #below.
     rideHeightParents = []
     expandedTrials = []
     for trial in args.trial:
@@ -1742,7 +1758,7 @@ def generate_ppt_report(args):
             rideHeightParents.append(trial)
             print('\tDetected ride-height mapping case %s, expanding into %d child case(s).' %
                   (trial, len(children)))
-            expandedTrials.extend(children)
+            expandedTrials.extend(os.path.join(trial, child) for child in children)
         else:
             expandedTrials.append(trial)
 
@@ -1775,9 +1791,12 @@ def generate_ppt_report(args):
     print('\tGenerating force history plots...')
     try:
         forceImageDir = buildForceHistoryImages(args, caseArray)
+        #matches plotForces.py's plotData(), which sanitizes compound 'parentTrial/childName'
+        #case identifiers (slashes -> underscores) before joining them into the saved filename.
+        trialTag = '_'.join(c.replace('/', '_') for c in caseArray)
         for var in args.plotData:
             imagePath = os.path.join(forceImageDir, '%s_forceHistory_%s.%s' %
-                                      ('_'.join(caseArray), var, args.saveFormat))
+                                      (trialTag, var, args.saveFormat))
             if os.path.isfile(imagePath):
                 addPptImageSlide(prs, 'Force History - %s' % (var), imagePath)
             else:
@@ -1833,7 +1852,7 @@ def generate_ppt_report(args):
                 title = 'Ride Height - %s' % (os.path.splitext(os.path.basename(plotFile))[0])
                 addPptImageSlide(prs, title, plotFile)
 
-    reportName = '_'.join(caseArray)
+    reportName = '_'.join(c.replace('/', '_') for c in caseArray)
     outputPath = os.path.join(casePath, '%s_report_%s.pptx' % (reportName, date.today()))
     prs.save(outputPath)
     print('\tSaved PPT report to %s' % (outputPath))

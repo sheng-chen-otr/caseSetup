@@ -220,10 +220,14 @@ def plotData(args,caseLoc,casePathDict):
 		ax.set_title(labelDict[var]['title'])
 		ax.set_xlabel('Time (s)')
 		plt.legend()
+		#case identifiers can be compound 'parentTrial/childName' paths (e.g. expanded
+		#ride-height children); sanitize slashes to underscores so the joined tag is a flat,
+		#filename-safe string rather than an (invalid/unintended) nested path.
+		trialTag = '_'.join(t.replace('/', '_') for t in args.trial)
 		if caseLoc.lower() == 'outtrial':
-			plt.savefig('%s/%s_forceHistory_%s.%s' % (list(casePathDict.keys())[0],'_'.join(args.trial),var,args.saveFormat),dpi = 300,bbox_inches='tight')
+			plt.savefig('%s/%s_forceHistory_%s.%s' % (list(casePathDict.keys())[0],trialTag,var,args.saveFormat),dpi = 300,bbox_inches='tight')
 		else :
-			plt.savefig('%s_forceHistory_%s.%s' % ('_'.join(args.trial),var,args.saveFormat),dpi = 300,bbox_inches='tight')
+			plt.savefig('%s_forceHistory_%s.%s' % (trialTag,var,args.saveFormat),dpi = 300,bbox_inches='tight')
 
 
 
