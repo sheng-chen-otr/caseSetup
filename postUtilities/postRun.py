@@ -1327,8 +1327,12 @@ def generateSliceMovie(trialPath, caseName, variable, normal, view):
             f.write("file '%s'\n" % (image))
 
     moviePath = os.path.join(imagesDir, '%s.mp4' % (prefix))
-    cmd = ("ffmpeg -y -f concat -safe 0 -i '%s' -vf scale=1920:1080 -r %s "
-           "-c:v libx264 -pix_fmt yuv420p '%s' >> log.pptReport" % (listFile, PPT_SLICE_MOVIE_FPS, moviePath))
+    #NOTE: -framerate MUST be an input option (before -i) so the concat demuxer displays every
+    #listed frame for 1/framerate seconds. Putting the rate after -i (as an output -r) makes
+    #ffmpeg resample/decimate the sequence against its default 25fps input assumption, silently
+    #dropping most of the slice frames instead of including all of them.
+    cmd = ("ffmpeg -y -framerate %s -f concat -safe 0 -i '%s' -vf scale=1920:1080 "
+           "-c:v libx264 -pix_fmt yuv420p '%s' >> log.pptReport" % (PPT_SLICE_MOVIE_FPS, listFile, moviePath))
     ret = os.system(cmd)
     if ret != 0 or not os.path.isfile(moviePath):
         print('\tWARNING! ffmpeg failed to build slice movie for %s (see log.pptReport)' % (prefix))
@@ -1434,9 +1438,9 @@ def loadBinForceCoeffs(fullCaseSetupDict, path, case):
 
 def loadVehicleSideImageRGBA(imagePath, whiteThresh=PPT_BIN_PLOT_WHITE_THRESH, blackThresh=PPT_BIN_PLOT_BLACK_THRESH):
     """Loads a pvPost.py Geom_Surface Left-view render and makes the white background and black
-    title text transparent, leaving only the grey vehicle body opaque. Returns
-    (rgba array, firstBodyCol, lastBodyCol), the pixel-column bounds of the remaining opaque
-    vehicle silhouette, or None if the image has no visible body left after masking."""
+    title text transparent, leaving only the grey vehicle body opaque. Returns the RGBA array
+    cropped to the columns spanning the vehicle body (so column 0 = vehicle front, last column =
+    vehicle rear), or None if the image has no visible body left after masking."""
     img = plt.imread(imagePath)
     if img.dtype == np.uint8:
         img = img.astype(float) / 255.0
@@ -1448,20 +1452,62 @@ def loadVehicleSideImageRGBA(imagePath, whiteThresh=PPT_BIN_PLOT_WHITE_THRESH, b
     bodyCols = np.nonzero(keep.any(axis=0))[0]
     if bodyCols.size == 0:
         return None
+    firstCol, lastCol = int(bodyCols[0]), int(bodyCols[-1])
 
     rgba = np.zeros((img.shape[0], img.shape[1], 4), dtype=float)
     rgba[:, :, :3] = rgb
     rgba[:, :, 3] = np.where(keep, 1.0, 0.0)
-    return rgba, int(bodyCols[0]), int(bodyCols[-1])
+    return rgba[:, firstCol:lastCol + 1, :]
+
+
+def _plotBinForceComponent(ax, caseBinData, forceKey, label, colors, xmin=0, xmax=99):
+    """Plots one force component (e.g. 'zForce'/downforce or 'xForce'/drag) for every case onto
+    ax, overlays each case's vehicle silhouette scaled so the front is at xmin and the rear at
+    xmax, and sets the axes box's physical aspect ratio to match the (undistorted) vehicle
+    image so the car isn't squished/stretched."""
+    maxForce = max(float(np.max(np.abs(d[forceKey]))) for d in caseBinData.values())
+    yTop = maxForce * 1.2 if maxForce > 0 else 1.0
+    imgAlpha = PPT_BIN_PLOT_IMG_ALPHA_SINGLE if len(caseBinData) == 1 else PPT_BIN_PLOT_IMG_ALPHA_MULTI
+
+    imgAspect = None
+    for i, (case, binData) in enumerate(caseBinData.items()):
+        color = colors[i % len(colors)]
+        ax.plot(binData[forceKey], '-', linewidth=1, color=color, label=case)
+
+        imagePath = findPvPostImage(os.path.join(path, case), 'Geom', 'Surface', case, 'Left')
+        if not imagePath:
+            print('\tWARNING! No left-view geometry image found for %s, skipping image overlay.' % (case))
+            continue
+        rgba = loadVehicleSideImageRGBA(imagePath)
+        if rgba is None:
+            print('\tWARNING! Could not isolate vehicle body in %s, skipping image overlay.' % (imagePath))
+            continue
+        #vehicle image is already cropped to exactly the body extent, so mapping its full width
+        #to [xmin, xmax] and its full height to [0, yTop] means the axes box's physical aspect
+        #ratio (set below) purely determines whether it's distorted, independent of yTop/xmax.
+        if imgAspect is None:
+            imgAspect = rgba.shape[0] / rgba.shape[1]
+        ax.imshow(rgba, extent=[xmin, xmax, 0, yTop], aspect='auto', alpha=imgAlpha, zorder=0)
+
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(0, yTop)
+    if imgAspect is not None:
+        ax.set_box_aspect(imgAspect)
+    ax.set_xlabel('Percent Length of Car (Front = 0)')
+    ax.set_ylabel('Force (N)')
+    ax.set_title(label)
+    ax.legend()
 
 
 def buildBinForcePlot(path, caseArray, outputDir):
-    """Builds a binned Cd/Cl-vs-length plot for caseArray, overlaying each case's own left-view
-    vehicle silhouette (background/text removed) scaled so the vehicle's front is at x=0 and its
-    rear at x=99 (bin 0 = front). When multiple cases are given, each case's plot line and image
-    use a distinct color and the images are drawn at reduced opacity so they can be visually
-    stacked/compared. Also writes a trial<case>_binForces.csv per case, like the legacy script.
-    Returns the saved plot path, or None if no case had bin force data."""
+    """Builds separate binned Cl (downforce) and Cd (drag) vs. length subplots for caseArray,
+    each overlaying every case's own left-view vehicle silhouette (background/text removed)
+    scaled so the vehicle's front is at x=0 and its rear at x=99 (bin 0 = front), with the axes
+    box's aspect ratio matched to the vehicle image so it isn't squished/stretched. When multiple
+    cases are given, each case's plot line and image use a distinct color and the images are
+    drawn at reduced opacity so they can be visually stacked/compared. Also writes a
+    trial<case>_binForces.csv per case, like the legacy script. Returns the saved plot path, or
+    None if no case had bin force data."""
     caseBinData = {}
     for case in caseArray:
         caseSetupPath = os.path.join(path, case, 'fullCaseSetupDict')
@@ -1481,44 +1527,18 @@ def buildBinForcePlot(path, caseArray, outputDir):
     if not caseBinData:
         return None
 
-    maxDownforce = max(float(np.max(d['zForce'])) for d in caseBinData.values())
-    yTop = maxDownforce * 1.2 if maxDownforce > 0 else 1.0
-    imgAlpha = PPT_BIN_PLOT_IMG_ALPHA_SINGLE if len(caseBinData) == 1 else PPT_BIN_PLOT_IMG_ALPHA_MULTI
-
-    fig, ax = plt.subplots()
-    colors = plt.cm.tab10.colors
-
-    for i, (case, binData) in enumerate(caseBinData.items()):
+    for case, binData in caseBinData.items():
         allForces = np.vstack((list(range(100)), binData['xCoeffs'], binData['yCoeffs'],
                                 binData['zCoeffs'], binData['xForce'], binData['yForce'],
                                 binData['zForce'])).T
         np.savetxt(os.path.join(outputDir, 'trial%s_binForces.csv' % (case)), allForces, delimiter=',',
                    header='xCoeffs,yCoeffs,zCoeffs,xForce,yForce,zForce')
 
-        color = colors[i % len(colors)]
-        ax.plot(binData['zForce'], '-', linewidth=1, color=color, label='Downforce - %s' % (case))
-        ax.plot(binData['xForce'], '--', linewidth=1, color=color, label='Drag - %s' % (case))
-
-        imagePath = findPvPostImage(os.path.join(path, case), 'Geom', 'Surface', case, 'Left')
-        if not imagePath:
-            print('\tWARNING! No left-view geometry image found for %s, skipping image overlay.' % (case))
-            continue
-        result = loadVehicleSideImageRGBA(imagePath)
-        if not result:
-            print('\tWARNING! Could not isolate vehicle body in %s, skipping image overlay.' % (imagePath))
-            continue
-        rgba, firstCol, lastCol = result
-        width = rgba.shape[1]
-        span = 99.0 * (width - 1) / max(lastCol - firstCol, 1)
-        xmin = -firstCol / (width - 1) * span
-        ax.imshow(rgba, extent=[xmin, xmin + span, 0, yTop], aspect='auto', alpha=imgAlpha, zorder=0)
-
-    ax.set_xlim(0, 99)
-    ax.set_ylim(-20, maxDownforce * 1.1 if maxDownforce > 0 else 1)
-    ax.set_xlabel('Percent Length of Car (Front = 0)')
-    ax.set_ylabel('Force (N)')
-    ax.set_title('Binned Forces')
-    ax.legend()
+    colors = plt.cm.tab10.colors
+    fig, (axCl, axCd) = plt.subplots(2, 1, figsize=(10, 12))
+    _plotBinForceComponent(axCl, caseBinData, 'zForce', 'Binned Downforce (Cl)', colors)
+    _plotBinForceComponent(axCd, caseBinData, 'xForce', 'Binned Drag (Cd)', colors)
+    fig.tight_layout()
 
     plotPath = os.path.join(outputDir, '%s_binnedForces.png' % ('_'.join(caseBinData.keys())))
     plt.savefig(plotPath, dpi=300)
@@ -1568,17 +1588,19 @@ def generate_ppt_report(args):
     except Exception as e:
         print('\tWARNING! Unable to generate force history plots: %s' % (e))
 
+    binPlotPath = buildBinForcePlot(path, caseArray, casePath)
+    if binPlotPath:
+        addPptImageSlide(prs, 'Binned Forces', binPlotPath)
+    else:
+        print('\tNo binForceCoeffs data found for any trial, skipping binned force plot.')
+
     addPvPostImageSlides(prs, path, caseArray)
     if not args.skipMovies:
         addSliceMovieSlides(prs, path, caseArray)
     else:
         print('\tSkipping slice movie generation (--skipMovies).')
 
-    binPlotPath = buildBinForcePlot(path, caseArray, casePath)
-    if binPlotPath:
-        addPptImageSlide(prs, 'Binned Forces', binPlotPath)
-    else:
-        print('\tNo binForceCoeffs data found for any trial, skipping binned force plot.')
+    
 
     #ride height: any requested trial that is itself a ride-height mapping parent case gets a
     #map-averages table (each trial's own already-averaged summary.csv) plus per-point sweep
