@@ -44,8 +44,8 @@ if not os.path.isdir(templateBaseLoc):
 parser = argparse.ArgumentParser(prog='caseSetup-v4.1.1',description='Set us the case based on settings written out in the caseSetup')
                     
 parser.add_argument("-s","--setup", default='default', 
-                    #choices=['otr','otrwt','bus'],
-                    help='Identifies which setup templates to use.')
+                   
+                    help='Identifies which setup templates to use. Available setups are: default, default-local, otr, otr2606')
 # parser.add_argument("-m","--mesh", action="store_true",
                     # help='Sets up meshing dicts and links geometry files. Will copy template case files if the trial folder is empty.')
 parser.add_argument('-d',"--controlDict", action="store_true", 
