@@ -1291,11 +1291,16 @@ def addPvPostImageSlides(prs, path, caseArray):
 #(see pvPost.py generateSlices()/saveImages()). We stitch each (variable, normal, view) sweep for a
 #trial into an .mp4 via ffmpeg (same approach as createMovies.py) so it can be embedded as a
 #playable movie in the PPT deck.
-PPT_SLICE_MOVIE_GROUPS = [
-    ('CpMean', 'X', 'Front', 'Cp Mean - X Slices'),
-    ('UMean', 'Y', 'Left', 'U Mean - Y Slices'),
-    ('CptMean', 'Z', 'Top', 'Cpt Mean - Z Slices'),
+#Views/normals match pvPost.py generateSlices()'s default sliceViews/normalsList pairing.
+PPT_SLICE_MOVIE_VIEWS = [
+    ('X', 'Front'),
+    ('Y', 'Left'),
+    ('Y', 'LeftForward'),
+    ('Y', 'LeftBack'),
+    ('Z', 'Top'),
 ]
+PPT_SLICE_MOVIE_VARS = ['CpMean', 'UMean', 'CptMean']
+PPT_SLICE_MOVIE_FPS = 2
 
 
 def _extractSliceCounter(filename):
@@ -1320,8 +1325,8 @@ def generateSliceMovie(trialPath, caseName, variable, normal, view):
             f.write("file '%s'\n" % (image))
 
     moviePath = os.path.join(imagesDir, '%s.mp4' % (prefix))
-    cmd = ("ffmpeg -y -f concat -safe 0 -i '%s' -vf scale=1920:1080 -r 10 "
-           "-c:v libx264 -pix_fmt yuv420p '%s' >> log.pptReport" % (listFile, moviePath))
+    cmd = ("ffmpeg -y -f concat -safe 0 -i '%s' -vf scale=1920:1080 -r %s "
+           "-c:v libx264 -pix_fmt yuv420p '%s' >> log.pptReport" % (listFile, PPT_SLICE_MOVIE_FPS, moviePath))
     ret = os.system(cmd)
     if ret != 0 or not os.path.isfile(moviePath):
         print('\tWARNING! ffmpeg failed to build slice movie for %s (see log.pptReport)' % (prefix))
@@ -1342,18 +1347,21 @@ def addPptMovieSlide(prs, title, moviePath, posterImagePath):
 
 
 def addSliceMovieSlides(prs, path, caseArray):
-    """Build and embed one slice-sweep movie slide per (variable, normal, view) group for each
-    trial, so they play back directly in the slideshow. Requires ffmpeg on PATH. Silently skips
-    any group/trial combination with no matching slice frames."""
+    """Build and embed one slice-sweep movie slide per (variable, view) for each trial, covering
+    every default slice view for that variable, so they play back directly in the slideshow.
+    Requires ffmpeg on PATH. Silently skips any variable/view/trial combination with no matching
+    slice frames."""
     print('\tGenerating slice movies (requires ffmpeg on PATH)...')
     anyFound = False
-    for variable, normal, view, label in PPT_SLICE_MOVIE_GROUPS:
-        for trial in caseArray:
-            result = generateSliceMovie(os.path.join(path, trial), trial, variable, normal, view)
-            if result:
-                anyFound = True
-                moviePath, posterImagePath = result
-                addPptMovieSlide(prs, '%s - %s' % (label, trial), moviePath, posterImagePath)
+    for variable in PPT_SLICE_MOVIE_VARS:
+        for normal, view in PPT_SLICE_MOVIE_VIEWS:
+            for trial in caseArray:
+                result = generateSliceMovie(os.path.join(path, trial), trial, variable, normal, view)
+                if result:
+                    anyFound = True
+                    moviePath, posterImagePath = result
+                    title = '%s - %s Slices - %s' % (variable, view, trial)
+                    addPptMovieSlide(prs, title, moviePath, posterImagePath)
     if not anyFound:
         print('\tNo slice images found for movie generation, skipping.')
 
