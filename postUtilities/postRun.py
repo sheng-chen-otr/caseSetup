@@ -10,6 +10,10 @@ import scipy.stats as st
 from scipy.interpolate import griddata
 import glob
 from collections import OrderedDict
+from datetime import date
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
 #from plotForces import *
 from summary import *
 #from estimateStatisticalError import *
@@ -71,6 +75,8 @@ def main():
                        help='Include Cs(f)/Cs(r) in sensitivity sweep plots (off by default)')
     parser.add_argument('--sensitivityCases', nargs='+', default=[],
                        help='Other ride-height mapping parent case paths to overlay on the sensitivity sweep plots for comparison')
+    parser.add_argument('--pptReport', action='store_true',
+                       help='Generate a PowerPoint (.pptx) report summarizing the trial(s) in --trial')
 
     args = parser.parse_args()
     
@@ -91,7 +97,10 @@ def main():
         plotRideHeightSensitivity(casePath, includeSideForce=args.includeSideForce,
                                    compareCasePaths=args.sensitivityCases)
 
-    if not args.summary and not args.forces and not args.wingPlots and not args.sensitivityPlots:
+    if args.pptReport:
+        generate_ppt_report(args)
+
+    if not args.summary and not args.forces and not args.wingPlots and not args.sensitivityPlots and not args.pptReport:
         parser.print_help()
 
 
@@ -1115,5 +1124,248 @@ def generate_summary():
 
     summary = summary.transpose()
     summary.to_csv("%s/%s/summary.csv" % (path, case), header=False)
+
+
+#### PPT Report Generation ####
+#field names (matching summary.csv row labels written by generate_summary) shown on the
+#trial-setup/BC table and the results table; fields missing from a case's summary.csv are
+#shown as 'N/A' rather than being skipped, so tables stay aligned across trials
+PPT_INFO_FIELDS = ['Simulation Type', 'Velocity', 'Turbulence Model', 'Moving Ground',
+                   'Rotating Wheels', 'Yaw', 'Symmetry', 'Iterations', 'Num. Cells']
+PPT_RESULTS_FIELDS = ['Cd', 'Cl', 'Cl/Cd', '%Front', 'Cd CI', 'Cl CI',
+                      'Cl(f)', 'Cl(r)', 'Cs(f)', 'Cs(r)']
+
+
+def _pptAddTitleTextbox(slide, prs, text):
+    box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), prs.slide_width - Inches(1.0), Inches(0.8))
+    tf = box.text_frame
+    tf.text = text
+    tf.paragraphs[0].font.size = Pt(28)
+    tf.paragraphs[0].font.bold = True
+    return box
+
+
+def _pptStyleTable(table, nRows, nCols):
+    for j in range(nCols):
+        cell = table.cell(0, j)
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = RGBColor(0x30, 0x30, 0x30)
+        for para in cell.text_frame.paragraphs:
+            para.font.size = Pt(12)
+            para.font.bold = True
+            para.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    for i in range(1, nRows):
+        for j in range(nCols):
+            for para in table.cell(i, j).text_frame.paragraphs:
+                para.font.size = Pt(11)
+
+
+def buildPptTitleSlide(prs, job, caseArray):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1.0), Inches(2.5), prs.slide_width - Inches(2.0), Inches(2.0))
+    tf = box.text_frame
+    tf.text = '%s - Post Processing Report' % (job)
+    tf.paragraphs[0].font.size = Pt(40)
+    tf.paragraphs[0].font.bold = True
+    trialsPara = tf.add_paragraph()
+    trialsPara.text = ' | '.join(caseArray)
+    trialsPara.font.size = Pt(20)
+    datePara = tf.add_paragraph()
+    datePara.text = str(date.today())
+    datePara.font.size = Pt(14)
+    return slide
+
+
+def buildPptFieldTableSlide(prs, title, caseArray, caseSummaries, fields):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _pptAddTitleTextbox(slide, prs, title)
+
+    availableFields = [f for f in fields if any(f in caseSummaries.get(c, {}) for c in caseArray)]
+    if not availableFields:
+        return slide
+
+    nRows = len(availableFields) + 1
+    nCols = len(caseArray) + 1
+    tableShape = slide.shapes.add_table(nRows, nCols, Inches(0.5), Inches(1.3),
+                                         prs.slide_width - Inches(1.0), Inches(0.4) * nRows)
+    table = tableShape.table
+    table.cell(0, 0).text = 'Metric'
+    for j, caseName in enumerate(caseArray):
+        table.cell(0, j + 1).text = caseName
+    for i, field in enumerate(availableFields):
+        table.cell(i + 1, 0).text = field
+        for j, caseName in enumerate(caseArray):
+            table.cell(i + 1, j + 1).text = str(caseSummaries.get(caseName, {}).get(field, 'N/A'))
+    _pptStyleTable(table, nRows, nCols)
+    return slide
+
+
+def buildPptDeltaTableSlide(prs, caseArray, caseSummaries, fields):
+    refCase = caseArray[0]
+    compareCases = caseArray[1:]
+    if not compareCases:
+        return None
+
+    availableFields = [f for f in fields if f in caseSummaries.get(refCase, {})]
+    if not availableFields:
+        return None
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _pptAddTitleTextbox(slide, prs, 'Results Delta to %s' % (refCase))
+
+    nRows = len(availableFields) + 1
+    nCols = len(compareCases) + 1
+    tableShape = slide.shapes.add_table(nRows, nCols, Inches(0.5), Inches(1.3),
+                                         prs.slide_width - Inches(1.0), Inches(0.4) * nRows)
+    table = tableShape.table
+    table.cell(0, 0).text = 'Metric'
+    for j, caseName in enumerate(compareCases):
+        table.cell(0, j + 1).text = '%s - %s' % (caseName, refCase)
+    for i, field in enumerate(availableFields):
+        table.cell(i + 1, 0).text = field
+        refValue = caseSummaries[refCase].get(field, None)
+        for j, caseName in enumerate(compareCases):
+            compareValue = caseSummaries.get(caseName, {}).get(field, None)
+            try:
+                text = '%0.3f' % (float(compareValue) - float(refValue))
+            except (TypeError, ValueError):
+                text = 'N/A'
+            table.cell(i + 1, j + 1).text = text
+    _pptStyleTable(table, nRows, nCols)
+    return slide
+
+
+def addPptImageSlide(prs, title, imagePath):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _pptAddTitleTextbox(slide, prs, title)
+    pictureTop = Inches(1.2)
+    slide.shapes.add_picture(imagePath, left=Inches(1.0), top=pictureTop,
+                              height=prs.slide_height - pictureTop - Inches(0.3))
+    return slide
+
+
+#CFD render images are written by pvPost.py's saveImages() as:
+#   postProcessing/images/<variable>_<imageType>/<caseName>_<variable>_<imageType>_<view>.jpeg
+#(see pvPost.py saveImages()). Note the .jpeg extension (not .png) and that the iso-surface
+#variable names are renamed from their vtp filenames ('isoCtp.vtp' -> 'Cpt', 'isoQ.vtp' -> 'Q').
+PPT_IMAGE_GROUPS = [
+    ('Geom', 'Surface', 'Geometry'),
+    ('CpMean', 'Surface', 'Cp Mean'),
+    ('CfMean', 'Surface', 'Cf Mean'),
+    ('CpPrime2Mean', 'Surface', 'Cp RMS'),
+    ('Cpt', 'isoSurface', 'Cpt = 0 Iso-Surface'),
+    ('Q', 'isoSurface', 'Q-Criterion Iso-Surface'),
+]
+PPT_IMAGE_VIEWS = ['Front', 'FrontLeft', 'Left', 'Bottom', 'RearLeft', 'Rear']
+
+
+def findPvPostImage(trialPath, variable, imageType, caseName, view):
+    """Locate a pvPost.py-rendered image, matching its current dirName/fileName convention
+    exactly (dirName='<variable>_<imageType>', fileName='<caseName>_<variable>_<imageType>_<view>.jpeg).
+    Returns None if not found."""
+    dirName = '%s_%s' % (variable, imageType)
+    fileName = '%s_%s_%s_%s.jpeg' % (caseName, variable, imageType, view)
+    imagePath = os.path.join(trialPath, 'postProcessing', 'images', dirName, fileName)
+    return imagePath if os.path.isfile(imagePath) else None
+
+
+def addPvPostImageSlides(prs, path, caseArray):
+    """Add one slide per found (variable, imageType, view) render for each trial, using
+    pvPost.py's current image naming. Silently skips any combination that isn't found (a
+    trial may not have run every view/variable)."""
+    print('\tAdding CFD render image slides...')
+    anyFound = False
+    for variable, imageType, label in PPT_IMAGE_GROUPS:
+        for view in PPT_IMAGE_VIEWS:
+            for trial in caseArray:
+                imagePath = findPvPostImage(os.path.join(path, trial), variable, imageType, trial, view)
+                if imagePath:
+                    anyFound = True
+                    addPptImageSlide(prs, '%s - %s - %s' % (label, trial, view), imagePath)
+    if not anyFound:
+        print('\tNo CFD render images found in postProcessing/images (run pvPost.py first), skipping.')
+
+
+def buildForceHistoryImages(args, caseArray):
+    """Generate (or refresh) the forceHistory_<var> plots for caseArray, reusing the same
+    setCasePaths/getCaseData/makePandasArrays/plotData pipeline as --forces. Returns the
+    directory the images were saved to."""
+    localArgs = argparse.Namespace(**vars(args))
+    localArgs.trial = caseArray
+    casePathDict, localCaseLoc = setCasePaths(caseArray, casePath)
+    casePathDict = getCaseData(casePathDict)
+    casePathDict = makePandasArrays(localArgs, casePathDict)
+    plotData(localArgs, localCaseLoc, casePathDict)
+    if localCaseLoc.lower() == 'outtrial':
+        return os.path.join(path, caseArray[0])
+    return casePath
+
+
+def generate_ppt_report(args):
+    print('\n\tGenerating PowerPoint report...')
+
+    caseSummaries = {}
+    for trial in args.trial:
+        summaryPath = os.path.join(path, trial, 'summary.csv')
+        if not os.path.isfile(summaryPath):
+            print('\tWARNING! %s is missing summary.csv (run --summary for it first), skipping.' % (trial))
+            continue
+        summaryDict = readChildSummaryCsv(summaryPath)
+        if not summaryDict:
+            print('\tWARNING! Unable to read summary.csv for %s, skipping.' % (trial))
+            continue
+        caseSummaries[trial] = summaryDict
+
+    caseArray = list(caseSummaries.keys())
+    if len(caseArray) < 1:
+        sys.exit('ERROR! No valid case summaries found, cannot build PPT report. Run --summary for each trial first.')
+
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+
+    buildPptTitleSlide(prs, job, caseArray)
+    buildPptFieldTableSlide(prs, 'Trial Setup and Boundary Conditions', caseArray, caseSummaries, PPT_INFO_FIELDS)
+    buildPptFieldTableSlide(prs, 'Results', caseArray, caseSummaries, PPT_RESULTS_FIELDS)
+    if len(caseArray) > 1:
+        buildPptDeltaTableSlide(prs, caseArray, caseSummaries, PPT_RESULTS_FIELDS)
+
+    print('\tGenerating force history plots...')
+    try:
+        forceImageDir = buildForceHistoryImages(args, caseArray)
+        for var in args.plotData:
+            imagePath = os.path.join(forceImageDir, '%s_forceHistory_%s.%s' %
+                                      ('_'.join(caseArray), var, args.saveFormat))
+            if os.path.isfile(imagePath):
+                addPptImageSlide(prs, 'Force History - %s' % (var), imagePath)
+            else:
+                print('\tWARNING! Could not find %s, skipping slide.' % (imagePath))
+    except Exception as e:
+        print('\tWARNING! Unable to generate force history plots: %s' % (e))
+
+    addPvPostImageSlides(prs, path, caseArray)
+
+    #ride height: any requested trial that is itself a ride-height mapping parent case gets a
+    #map-averages table (each trial's own already-averaged summary.csv) plus per-point sweep
+    #comparison plots (reusing plotRideHeightSensitivity's cross-case sweep matching)
+    rideHeightTrials = [t for t in caseArray if discoverRideHeightChildCases(os.path.join(path, t), t)]
+    if rideHeightTrials:
+        print('\tDetected ride-height mapping case(s): %s' % (', '.join(rideHeightTrials)))
+        buildPptFieldTableSlide(prs, 'Ride Height Map Averages', rideHeightTrials, caseSummaries, PPT_RESULTS_FIELDS)
+
+        primaryPath = os.path.join(path, rideHeightTrials[0])
+        comparePaths = [os.path.join(path, t) for t in rideHeightTrials[1:]]
+        sensitivityDir = os.path.join(primaryPath, 'postProcessing', 'sensitivityPlots')
+        plotRideHeightSensitivity(primaryPath, includeSideForce=args.includeSideForce,
+                                   compareCasePaths=comparePaths)
+        for plotFile in sorted(glob.glob(os.path.join(sensitivityDir, '*.png'))):
+            title = 'Ride Height - %s' % (os.path.splitext(os.path.basename(plotFile))[0])
+            addPptImageSlide(prs, title, plotFile)
+
+    reportName = '_'.join(caseArray)
+    outputPath = os.path.join(casePath, '%s_report_%s.pptx' % (reportName, date.today()))
+    prs.save(outputPath)
+    print('\tSaved PPT report to %s' % (outputPath))
+
 
 main()

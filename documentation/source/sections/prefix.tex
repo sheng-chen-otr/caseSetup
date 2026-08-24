@@ -152,3 +152,36 @@ An \codeword{SMP} geometry is \textbf{not} passed to snappyHexMesh -- it is not 
 
 Every geometry whose name starts with \codeword{SMP} is automatically added to \codeword{system/surfaceFieldAverage} as a \codeword{sampledTriSurfaceMesh}, sampling \codeword{U}, \codeword{UMean}, \codeword{p}, and \codeword{pMean} with an \codeword{areaNormalAverage} operation, and writes its fields every time step. No further configuration is required beyond adding the \codeword{SMP-} prefixed geometry file to the \codeword{[GEOMETRY]} list.
 
+\subsection{Ground Zones (GRND)}
+The prefix \codeword{GRND} splits the domain floor (the tunnel z-min patch) into independent regions, each with its own boundary condition. This is the mechanism used to set up and mimic wind-tunnel ground planes, where only a portion of the floor moves with the freestream and the remainder is stationary or slip.
+
+Each \codeword{GRND} geometry must be a \textbf{closed} surface that encloses the volume of mesh cells sitting above the section of floor it should control. \codeword{caseSetup} uses this box to select the mesh cells inside it, then sets those faces into a new patch named \codeword{groundZone-<name>}. The box only needs to enclose the target floor area; it does not need to match the vehicle geometry or mesh refinement of other regions, and the boxes for different \codeword{GRND} zones should not overlap.
+
+A single-belt setup -- one moving belt under the vehicle and everything else on the floor set to slip -- uses two \codeword{GRND} zones, as shown below:
+\begin{lstlisting}
+    [GEOMETRY]
+    GEOM = body.obj.gz,1,8,5,1.1,high
+            GRND-belt.obj.gz,1,0,0,0,none
+            GRND-plate.obj.gz,1,0,0,0,none
+
+    [GRND-belt]
+    GRND_TYPE = moving
+    GRND_VEL = default
+    GRND_WALL_MODEL = high
+
+    [GRND-plate]
+    GRND_TYPE = slip
+    GRND_VEL = default
+    GRND_WALL_MODEL = high
+\end{lstlisting}
+Here \codeword{GRND-belt} is a box enclosing only the strip of floor under the vehicle where the rolling road belt is located, while \codeword{GRND-plate} is a larger box covering the rest of the tunnel floor around it. As with the other prefixes, the refinement/layers/expansion/wallmodel columns in \codeword{[GEOMETRY]} are ignored for \codeword{GRND} geometries but must still be present as placeholders.
+
+The \codeword{[GRND-name]} block is exposed automatically the first time each \codeword{GRND} geometry is encountered, using the following settings:
+\begin{itemize}
+    \item \codeword{GRND_TYPE} [\codeword{str}] - boundary condition applied to this ground zone (\codeword{moving}, \codeword{noslip}/\codeword{stationary}, \codeword{slip})
+    \item \codeword{GRND_VEL} [[\codeword{float,m/s}] [\codeword{float,m/s}] [\codeword{float,m/s}]] - belt velocity vector, only used when \codeword{GRND_TYPE = moving}. Use \codeword{default} to match the freestream velocity, or supply an explicit \codeword{x y z} vector (\codeword{float} \codeword{float} \codeword{float}, \codeword{default})
+    \item \codeword{GRND_WALL_MODEL} [\codeword{str}] - wall function applied to the zone (\codeword{high}, \codeword{low}, \codeword{ally})
+\end{itemize}
+
+Ground zones also follow the domain's static tilt (\codeword{DOMAIN\_ROLL}/\codeword{DOMAIN\_PITCH}) and, in ride height mode, the per-point heave and tilt calculated for each ride height -- the belt/plate boxes are automatically re-tilted so they stay aligned with the tunnel floor at every ride height point.
+
