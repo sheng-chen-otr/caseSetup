@@ -77,6 +77,8 @@ def main():
                        help='Other ride-height mapping parent case paths to overlay on the sensitivity sweep plots for comparison')
     parser.add_argument('--pptReport', action='store_true',
                        help='Generate a PowerPoint (.pptx) report summarizing the trial(s) in --trial')
+    parser.add_argument('--skipMovies', action='store_true',
+                       help='Skip slice movie generation (ffmpeg) when building a --pptReport, e.g. for a quick re-run')
 
     args = parser.parse_args()
     
@@ -1567,7 +1569,10 @@ def generate_ppt_report(args):
         print('\tWARNING! Unable to generate force history plots: %s' % (e))
 
     addPvPostImageSlides(prs, path, caseArray)
-    addSliceMovieSlides(prs, path, caseArray)
+    if not args.skipMovies:
+        addSliceMovieSlides(prs, path, caseArray)
+    else:
+        print('\tSkipping slice movie generation (--skipMovies).')
 
     binPlotPath = buildBinForcePlot(path, caseArray, casePath)
     if binPlotPath:
