@@ -1364,11 +1364,14 @@ def generateSliceMovie(trialPath, caseName, variable, normal, view):
             f.write("file '%s'\n" % (image))
 
     moviePath = os.path.join(imagesDir, '%s.mp4' % (prefix))
-    #NOTE: -framerate MUST be an input option (before -i) so the concat demuxer displays every
-    #listed frame for 1/framerate seconds. Putting the rate after -i (as an output -r) makes
-    #ffmpeg resample/decimate the sequence against its default 25fps input assumption, silently
-    #dropping most of the slice frames instead of including all of them.
-    cmd = ("ffmpeg -y -framerate %s -f concat -safe 0 -i '%s' -vf scale=1920:1080 "
+    #NOTE: rate MUST be an input option (before -i) so the concat demuxer displays every listed
+    #frame for 1/rate seconds instead of resampling/decimating against the default 25fps input
+    #assumption (which would silently drop most of the slice frames). Use '-r' rather than
+    #'-framerate': '-framerate' is only accepted by demuxers that expose it as a private AVOption
+    #(e.g. image2), and errors with "Option framerate not found" on the concat demuxer used here.
+    #'-r' is special-cased by ffmpeg's own option parser and works as an input option regardless
+    #of demuxer.
+    cmd = ("ffmpeg -y -r %s -f concat -safe 0 -i '%s' -vf scale=1920:1080 "
            "-c:v libx264 -pix_fmt yuv420p '%s' >> log.pptReport" % (PPT_SLICE_MOVIE_FPS, listFile, moviePath))
     ret = os.system(cmd)
     if ret != 0 or not os.path.isfile(moviePath):
