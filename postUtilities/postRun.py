@@ -1238,18 +1238,31 @@ def buildPptDeltaTableSlide(prs, caseArray, caseSummaries, fields):
     return slide
 
 
+def _fitAndCenterPicture(shape, boxLeft, boxTop, boxWidth, boxHeight):
+    """Rescales a picture/movie shape (preserving its current aspect ratio) to fit within the
+    given box, then centers it in that box both horizontally and vertically."""
+    scale = min(boxWidth / shape.width, boxHeight / shape.height)
+    shape.width = int(shape.width * scale)
+    shape.height = int(shape.height * scale)
+    shape.left = int(boxLeft + (boxWidth - shape.width) / 2)
+    shape.top = int(boxTop + (boxHeight - shape.height) / 2)
+
+
 def addPptImageSlide(prs, title, imagePath):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _pptAddTitleTextbox(slide, prs, title)
     pictureTop = Inches(1.2)
-    slide.shapes.add_picture(imagePath, left=Inches(1.0), top=pictureTop,
-                              height=prs.slide_height - pictureTop - Inches(0.3))
+    boxWidth = prs.slide_width - Inches(2.0)
+    boxHeight = prs.slide_height - pictureTop - Inches(0.3)
+    picture = slide.shapes.add_picture(imagePath, left=Inches(1.0), top=pictureTop, height=boxHeight)
+    _fitAndCenterPicture(picture, Inches(1.0), pictureTop, boxWidth, boxHeight)
     return slide
 
 
 def addPptSideBySideImageSlide(prs, title, leftImagePath, rightImagePath):
     """Adds a slide with two images placed side by side, each scaled to fit half the slide
-    width while preserving its own aspect ratio (so neither image is squished)."""
+    width while preserving its own aspect ratio (so neither image is squished), and centered
+    (both horizontally and vertically) within its half."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _pptAddTitleTextbox(slide, prs, title)
     pictureTop = Inches(1.2)
@@ -1261,12 +1274,7 @@ def addPptSideBySideImageSlide(prs, title, leftImagePath, rightImagePath):
     for i, imagePath in enumerate((leftImagePath, rightImagePath)):
         left = margin + i * (halfWidth + gap)
         picture = slide.shapes.add_picture(imagePath, left=left, top=pictureTop, width=halfWidth)
-        if picture.height > availableHeight:
-            scale = availableHeight / picture.height
-            picture.height = availableHeight
-            picture.width = int(picture.width * scale)
-            picture.left = left + (halfWidth - picture.width) // 2
-        picture.top = pictureTop
+        _fitAndCenterPicture(picture, left, pictureTop, halfWidth, availableHeight)
     return slide
 
 
@@ -1365,14 +1373,23 @@ def generateSliceMovie(trialPath, caseName, variable, normal, view):
 
 
 def addPptMovieSlide(prs, title, moviePath, posterImagePath):
+    """Embeds a movie sized to preserve the poster image's aspect ratio (add_movie itself has no
+    concept of natural size, unlike add_picture, so the poster frame's real pixel dimensions are
+    used to compute it), then centers it within the slide's picture box."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _pptAddTitleTextbox(slide, prs, title)
     pictureTop = Inches(1.2)
-    movieWidth = prs.slide_width - Inches(2.0)
-    movieHeight = prs.slide_height - pictureTop - Inches(0.3)
-    slide.shapes.add_movie(moviePath, left=Inches(1.0), top=pictureTop,
-                            width=movieWidth, height=movieHeight,
-                            poster_frame_image=posterImagePath)
+    boxWidth = prs.slide_width - Inches(2.0)
+    boxHeight = prs.slide_height - pictureTop - Inches(0.3)
+
+    posterHeightPx, posterWidthPx = plt.imread(posterImagePath).shape[:2]
+    aspect = posterHeightPx / posterWidthPx
+    movieWidth = boxWidth
+    movieHeight = int(movieWidth * aspect)
+    movie = slide.shapes.add_movie(moviePath, left=Inches(1.0), top=pictureTop,
+                                    width=movieWidth, height=movieHeight,
+                                    poster_frame_image=posterImagePath)
+    _fitAndCenterPicture(movie, Inches(1.0), pictureTop, boxWidth, boxHeight)
     return slide
 
 
@@ -1566,6 +1583,64 @@ def _plotBinForceComponent(ax, caseBinData, coeffKey, label, colors):
     ax.legend()
 
 
+def _plotBinForceDeltaComponent(ax, baseCase, caseBinData, coeffKey, label, colors):
+    """Plots, for every case except baseCase, the delta of one binned coefficient component
+    (compareCase - baseCase) against distance (m). Since each case has its own real bin x
+    co-ords, each compare case's coefficient values are linearly interpolated (np.interp) onto
+    baseCase's x co-ords before differencing, so the delta is defined at baseCase's bin
+    positions. Overlays baseCase's own vehicle silhouette (as the common reference geometry)
+    scaled to baseCase's x co-ord extent, with the axes box's aspect ratio matched to the image.
+    """
+    baseBinData = caseBinData[baseCase]
+    baseX = baseBinData['xCoords']
+    baseVals = baseBinData[coeffKey]
+    compareCases = [c for c in caseBinData if c != baseCase]
+
+    deltas = {}
+    for case in compareCases:
+        binData = caseBinData[case]
+        interpVals = np.interp(baseX, binData['xCoords'], binData[coeffKey])
+        deltas[case] = interpVals - baseVals
+
+    if not deltas:
+        ax.set_title(label)
+        return
+
+    maxDelta = max(float(np.max(np.abs(d))) for d in deltas.values())
+    yLim = maxDelta * 1.2 if maxDelta > 0 else 1.0
+    imgAlpha = PPT_BIN_PLOT_IMG_ALPHA_SINGLE if len(deltas) == 1 else PPT_BIN_PLOT_IMG_ALPHA_MULTI
+
+    #colors offset by 1 so a compare case keeps the same color it used in the absolute plot
+    #(where baseCase took colors[0]).
+    for i, case in enumerate(compareCases):
+        ax.plot(baseX, deltas[case], '-', linewidth=1, color=colors[(i + 1) % len(colors)],
+                label='%s - %s' % (case, baseCase))
+
+    ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+
+    imgAspect = None
+    imagePath = findPvPostImage(os.path.join(path, baseCase), 'Geom', 'Surface', baseCase, 'Left')
+    if imagePath:
+        rgba = loadVehicleSideImageRGBA(imagePath)
+        if rgba is not None:
+            imgAspect = rgba.shape[0] / rgba.shape[1]
+            baseXMin, baseXMax = float(np.min(baseX)), float(np.max(baseX))
+            ax.imshow(rgba, extent=[baseXMin, baseXMax, -yLim, yLim], aspect='auto', alpha=imgAlpha, zorder=0)
+        else:
+            print('\tWARNING! Could not isolate vehicle body in %s, skipping image overlay.' % (imagePath))
+    else:
+        print('\tWARNING! No left-view geometry image found for %s, skipping image overlay.' % (baseCase))
+
+    ax.set_xlim(float(np.min(baseX)), float(np.max(baseX)))
+    ax.set_ylim(-yLim, yLim)
+    if imgAspect is not None:
+        ax.set_box_aspect(imgAspect)
+    ax.set_xlabel('Distance (m)')
+    ax.set_ylabel('Coefficient Delta')
+    ax.set_title(label)
+    ax.legend()
+
+
 def buildBinForcePlots(path, caseArray, outputDir):
     """Builds separate binned Cl (downforce) and Cd (drag) coefficient-vs-distance(m) figures
     (one PNG each) for caseArray, each overlaying every case's own left-view vehicle silhouette
@@ -1573,8 +1648,13 @@ def buildBinForcePlots(path, caseArray, outputDir):
     binForceCoeffs, per binPlotForces_v2_0.py), with the axes box's aspect ratio matched to the
     vehicle image so it isn't squished/stretched. When multiple cases are given, each case's plot
     line and image use a distinct color and the images are drawn at reduced opacity so they can
-    be visually stacked/compared. Also writes a trial<case>_binForces.csv per case, like the
-    legacy script. Returns (clPlotPath, cdPlotPath), or None if no case had bin force data."""
+    be visually stacked/compared. Also builds Cl/Cd delta-vs-baseline figures (baseline =
+    caseArray[0], matching the convention used by the Results Delta table) when more than one
+    case has bin data, each compare case's coefficients interpolated onto the baseline's x
+    co-ords before differencing. Also writes a trial<case>_binForces.csv per case, like the
+    legacy script. Returns a dict with 'clPlotPath'/'cdPlotPath' (always present) and
+    'clDeltaPlotPath'/'cdDeltaPlotPath' (present only if there were >= 2 cases with bin data), or
+    None if no case had bin force data."""
     caseBinData = {}
     for case in caseArray:
         caseSetupPath = os.path.join(path, case, 'fullCaseSetupDict')
@@ -1618,7 +1698,31 @@ def buildBinForcePlots(path, caseArray, outputDir):
     figCd.savefig(cdPlotPath, dpi=300)
     plt.close(figCd)
 
-    return clPlotPath, cdPlotPath
+    result = {'clPlotPath': clPlotPath, 'cdPlotPath': cdPlotPath}
+
+    if len(caseBinData) > 1:
+        baseCase = next(c for c in caseArray if c in caseBinData)
+
+        figClDelta, axClDelta = plt.subplots()
+        _plotBinForceDeltaComponent(axClDelta, baseCase, caseBinData, 'zCoeffs',
+                                     'Binned Cl Delta vs %s' % (baseCase), colors)
+        figClDelta.tight_layout()
+        clDeltaPlotPath = os.path.join(outputDir, '%s_binnedClDelta.png' % (reportName))
+        figClDelta.savefig(clDeltaPlotPath, dpi=300)
+        plt.close(figClDelta)
+
+        figCdDelta, axCdDelta = plt.subplots()
+        _plotBinForceDeltaComponent(axCdDelta, baseCase, caseBinData, 'xCoeffs',
+                                     'Binned Cd Delta vs %s' % (baseCase), colors)
+        figCdDelta.tight_layout()
+        cdDeltaPlotPath = os.path.join(outputDir, '%s_binnedCdDelta.png' % (reportName))
+        figCdDelta.savefig(cdDeltaPlotPath, dpi=300)
+        plt.close(figCdDelta)
+
+        result['clDeltaPlotPath'] = clDeltaPlotPath
+        result['cdDeltaPlotPath'] = cdDeltaPlotPath
+
+    return result
 
 
 def generate_ppt_report(args):
@@ -1665,8 +1769,10 @@ def generate_ppt_report(args):
 
     binPlots = buildBinForcePlots(path, caseArray, casePath)
     if binPlots:
-        clPlotPath, cdPlotPath = binPlots
-        addPptSideBySideImageSlide(prs, 'Binned Forces', clPlotPath, cdPlotPath)
+        addPptSideBySideImageSlide(prs, 'Binned Forces', binPlots['clPlotPath'], binPlots['cdPlotPath'])
+        if 'clDeltaPlotPath' in binPlots:
+            addPptSideBySideImageSlide(prs, 'Binned Force Deltas', binPlots['clDeltaPlotPath'],
+                                        binPlots['cdDeltaPlotPath'])
     else:
         print('\tNo binForceCoeffs data found for any trial, skipping binned force plots.')
 
