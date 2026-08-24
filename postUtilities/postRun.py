@@ -8,6 +8,7 @@ import argparse
 import matplotlib.pyplot as plt
 import scipy.stats as st
 from scipy.interpolate import griddata
+from scipy import ndimage
 import glob
 from collections import OrderedDict
 from datetime import date
@@ -1480,9 +1481,15 @@ def loadBinForceCoeffs(fullCaseSetupDict, path, case):
 
 def loadVehicleSideImageRGBA(imagePath, whiteThresh=PPT_BIN_PLOT_WHITE_THRESH, blackThresh=PPT_BIN_PLOT_BLACK_THRESH):
     """Loads a pvPost.py Geom_Surface Left-view render and makes the white background and black
-    title text transparent, leaving only the grey vehicle body opaque. Returns the RGBA array
-    cropped to the columns spanning the vehicle body (so column 0 = vehicle front, last column =
-    vehicle rear), or None if the image has no visible body left after masking."""
+    title text transparent, leaving only the grey vehicle body opaque. Anti-aliased edge pixels
+    (e.g. faint outline remnants of the removed title text, or the body's own anti-aliased
+    silhouette edge) can be neither near-white nor near-black and so would otherwise survive the
+    threshold and get included in the body's bounding box, leaving a faint gap between the
+    cropped image's edge and the actual vehicle silhouette. To avoid that, only the single
+    largest connected blob of kept pixels (the vehicle body itself) is retained; any other
+    disconnected leftover speckle (e.g. text-edge anti-aliasing) is discarded. Returns the RGBA
+    array cropped to the columns spanning the vehicle body (so column 0 = vehicle front, last
+    column = vehicle rear), or None if the image has no visible body left after masking."""
     img = plt.imread(imagePath)
     if img.dtype == np.uint8:
         img = img.astype(float) / 255.0
@@ -1490,6 +1497,13 @@ def loadVehicleSideImageRGBA(imagePath, whiteThresh=PPT_BIN_PLOT_WHITE_THRESH, b
     isWhite = np.all(rgb >= whiteThresh / 255.0, axis=2)
     isBlack = np.all(rgb <= blackThresh / 255.0, axis=2)
     keep = ~(isWhite | isBlack)
+
+    labeled, numBlobs = ndimage.label(keep)
+    if numBlobs == 0:
+        return None
+    blobSizes = ndimage.sum(keep, labeled, index=range(1, numBlobs + 1))
+    largestBlob = int(np.argmax(blobSizes)) + 1
+    keep = labeled == largestBlob
 
     bodyCols = np.nonzero(keep.any(axis=0))[0]
     if bodyCols.size == 0:
