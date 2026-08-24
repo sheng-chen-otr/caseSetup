@@ -1286,6 +1286,78 @@ def addPvPostImageSlides(prs, path, caseArray):
         print('\tNo CFD render images found in postProcessing/images (run pvPost.py first), skipping.')
 
 
+#pvPost.py's generateSlices() writes each frame of a slice sweep to:
+#   postProcessing/images/<variable>_slice/<caseName>_<variable>_slice_<view>_<normal>_<position>_<counter>.jpeg
+#(see pvPost.py generateSlices()/saveImages()). We stitch each (variable, normal, view) sweep for a
+#trial into an .mp4 via ffmpeg (same approach as createMovies.py) so it can be embedded as a
+#playable movie in the PPT deck.
+PPT_SLICE_MOVIE_GROUPS = [
+    ('CpMean', 'X', 'Front', 'Cp Mean - X Slices'),
+    ('UMean', 'Y', 'Left', 'U Mean - Y Slices'),
+    ('CptMean', 'Z', 'Top', 'Cpt Mean - Z Slices'),
+]
+
+
+def _extractSliceCounter(filename):
+    numbers = re.findall(r'\d+', os.path.basename(filename))
+    return int(numbers[-1]) if numbers else 0
+
+
+def generateSliceMovie(trialPath, caseName, variable, normal, view):
+    """Stitch a slice sweep's frames into an .mp4 via ffmpeg (assumes ffmpeg is on PATH).
+    Returns (moviePath, posterImagePath) on success, or None if no matching frames were found
+    or ffmpeg failed."""
+    imagesDir = os.path.join(trialPath, 'postProcessing', 'images', '%s_slice' % (variable))
+    pattern = os.path.join(imagesDir, '%s_%s_slice_%s_%s_*.jpeg' % (caseName, variable, view, normal))
+    images = sorted(glob.glob(pattern), key=_extractSliceCounter)
+    if not images:
+        return None
+
+    prefix = '%s_%s_slice_%s_%s' % (caseName, variable, view, normal)
+    listFile = os.path.join(imagesDir, '%s_images.txt' % (prefix))
+    with open(listFile, 'w') as f:
+        for image in images:
+            f.write("file '%s'\n" % (image))
+
+    moviePath = os.path.join(imagesDir, '%s.mp4' % (prefix))
+    cmd = ("ffmpeg -y -framerate 10 -f concat -safe 0 -i '%s' -vf scale=1920:1080 "
+           "-c:v libx264 -pix_fmt yuv420p '%s' >> log.pptReport" % (listFile, moviePath))
+    ret = os.system(cmd)
+    if ret != 0 or not os.path.isfile(moviePath):
+        print('\tWARNING! ffmpeg failed to build slice movie for %s (see log.pptReport)' % (prefix))
+        return None
+    return moviePath, images[0]
+
+
+def addPptMovieSlide(prs, title, moviePath, posterImagePath):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _pptAddTitleTextbox(slide, prs, title)
+    pictureTop = Inches(1.2)
+    movieWidth = prs.slide_width - Inches(2.0)
+    movieHeight = prs.slide_height - pictureTop - Inches(0.3)
+    slide.shapes.add_movie(moviePath, left=Inches(1.0), top=pictureTop,
+                            width=movieWidth, height=movieHeight,
+                            poster_frame_image=posterImagePath)
+    return slide
+
+
+def addSliceMovieSlides(prs, path, caseArray):
+    """Build and embed one slice-sweep movie slide per (variable, normal, view) group for each
+    trial, so they play back directly in the slideshow. Requires ffmpeg on PATH. Silently skips
+    any group/trial combination with no matching slice frames."""
+    print('\tGenerating slice movies (requires ffmpeg on PATH)...')
+    anyFound = False
+    for variable, normal, view, label in PPT_SLICE_MOVIE_GROUPS:
+        for trial in caseArray:
+            result = generateSliceMovie(os.path.join(path, trial), trial, variable, normal, view)
+            if result:
+                anyFound = True
+                moviePath, posterImagePath = result
+                addPptMovieSlide(prs, '%s - %s' % (label, trial), moviePath, posterImagePath)
+    if not anyFound:
+        print('\tNo slice images found for movie generation, skipping.')
+
+
 def buildForceHistoryImages(args, caseArray):
     """Generate (or refresh) the forceHistory_<var> plots for caseArray, reusing the same
     setCasePaths/getCaseData/makePandasArrays/plotData pipeline as --forces. Returns the
@@ -1344,6 +1416,7 @@ def generate_ppt_report(args):
         print('\tWARNING! Unable to generate force history plots: %s' % (e))
 
     addPvPostImageSlides(prs, path, caseArray)
+    addSliceMovieSlides(prs, path, caseArray)
 
     #ride height: any requested trial that is itself a ride-height mapping parent case gets a
     #map-averages table (each trial's own already-averaged summary.csv) plus per-point sweep
