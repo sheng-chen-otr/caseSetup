@@ -9,6 +9,7 @@ import configparser
 import scipy.stats as st
 from scipy.optimize import curve_fit
 from estimateStatisticalError import *
+from forceConvergencePlot import buildCaseTag
 params = {'mathtext.default': 'regular' }          
 plt.rcParams.update(params)
 
@@ -221,9 +222,9 @@ def plotData(args,caseLoc,casePathDict):
 		ax.set_xlabel('Time (s)')
 		plt.legend()
 		#case identifiers can be compound 'parentTrial/childName' paths (e.g. expanded
-		#ride-height children); sanitize slashes to underscores so the joined tag is a flat,
-		#filename-safe string rather than an (invalid/unintended) nested path.
-		trialTag = '_'.join(t.replace('/', '_') for t in args.trial)
+		#ride-height children); collapse them into a short '<parent>_rhmap' tag instead of
+		#concatenating every child's full name.
+		trialTag = buildCaseTag(args.trial)
 		if caseLoc.lower() == 'outtrial':
 			plt.savefig('%s/%s_forceHistory_%s.%s' % (list(casePathDict.keys())[0],trialTag,var,args.saveFormat),dpi = 300,bbox_inches='tight')
 		else :

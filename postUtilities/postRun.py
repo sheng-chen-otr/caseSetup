@@ -1694,7 +1694,7 @@ def buildBinForcePlots(path, caseArray, outputDir):
                    header='xCoords,xCoeffs,yCoeffs,zCoeffs,xForce,yForce,zForce')
 
     colors = plt.cm.tab10.colors
-    reportName = '_'.join(c.replace('/', '_') for c in caseBinData.keys())
+    reportName = buildCaseTag(list(caseBinData.keys()))
 
     figCl, axCl = plt.subplots()
     _plotBinForceComponent(axCl, caseBinData, 'zCoeffs', 'Binned Cl (Downforce)', colors)
@@ -1791,9 +1791,10 @@ def generate_ppt_report(args):
     print('\tGenerating force history plots...')
     try:
         forceImageDir = buildForceHistoryImages(args, caseArray)
-        #matches plotForces.py's plotData(), which sanitizes compound 'parentTrial/childName'
-        #case identifiers (slashes -> underscores) before joining them into the saved filename.
-        trialTag = '_'.join(c.replace('/', '_') for c in caseArray)
+        #matches forceConvergencePlot.py's plotData(), which collapses compound
+        #'parentTrial/childName' case identifiers (expanded ride-height children) into a
+        #short '<parent>_rhmap' tag before joining them into the saved filename.
+        trialTag = buildCaseTag(caseArray)
         for var in args.plotData:
             imagePath = os.path.join(forceImageDir, '%s_forceHistory_%s.%s' %
                                       (trialTag, var, args.saveFormat))
@@ -1852,7 +1853,7 @@ def generate_ppt_report(args):
                 title = 'Ride Height - %s' % (os.path.splitext(os.path.basename(plotFile))[0])
                 addPptImageSlide(prs, title, plotFile)
 
-    reportName = '_'.join(c.replace('/', '_') for c in caseArray)
+    reportName = buildCaseTag(caseArray)
     outputPath = os.path.join(casePath, '%s_report_%s.pptx' % (reportName, date.today()))
     prs.save(outputPath)
     print('\tSaved PPT report to %s' % (outputPath))

@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import scipy
 import scipy.stats as st
 import glob
+from collections import OrderedDict
 from estimateStatisticalError import *
 
 
@@ -35,6 +36,25 @@ plt.style.use(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'pltStyl
     
     
 #     plt.show()
+
+
+def buildCaseTag(caseList):
+    #case identifiers can be compound 'parentTrial/childName' paths (expanded ride-height
+    #children). Rather than concatenating every child's name into a huge filename, collapse
+    #them down to '<parentTrial(s)>_rhmap'. Falls back to a flat, sanitized join of the raw
+    #identifiers when the list isn't a pure ride-height expansion.
+    parents = OrderedDict()
+    simple = []
+    for c in caseList:
+        if '/' in c:
+            parents[c.split('/')[0]] = True
+        else:
+            simple.append(c)
+
+    if parents and not simple:
+        return '%s_rhmap' % ('_'.join(parents.keys()))
+
+    return '_'.join(c.replace('/', '_') for c in caseList)
 
 
 def setCasePaths(inputCaseList,casePath):
@@ -308,12 +328,16 @@ def plotData(args,caseLoc,casePathDict):
                         ncols = len(casePathDict.keys()),
                         ) #kinda wierd that it doesn't like to do 1 col ... so if less than 2 cases it will not have a ncol setting
 
+        #case identifiers can be compound 'parentTrial/childName' paths (e.g. expanded
+        #ride-height children passed in by postRun.py's --pptReport); collapse them into a
+        #short '<parent>_rhmap' tag instead of concatenating every child's full name.
+        trialTag = buildCaseTag(args.trial)
         if caseLoc.lower() == 'outtrial':
-            plt.savefig('%s/%s_forceHistory_%s.%s' % (list(casePathDict.keys())[0],'_'.join(args.trial),var,args.saveFormat),dpi = 300,
+            plt.savefig('%s/%s_forceHistory_%s.%s' % (list(casePathDict.keys())[0],trialTag,var,args.saveFormat),dpi = 300,
                         bbox_inches='tight'
                         )
         else:
-            plt.savefig('%s_forceHistory_%s.%s' % ('_'.join(args.trial),var,args.saveFormat),dpi = 300,bbox_inches='tight')
+            plt.savefig('%s_forceHistory_%s.%s' % (trialTag,var,args.saveFormat),dpi = 300,bbox_inches='tight')
 
 def calculateStatistics(avgData,time,data,forceName,contCiResolution = 100):
         
