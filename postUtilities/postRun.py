@@ -78,8 +78,8 @@ def main():
                        help='Other ride-height mapping parent case paths to overlay on the sensitivity sweep plots for comparison')
     parser.add_argument('--pptReport', action='store_true',
                        help='Generate a PowerPoint (.pptx) report summarizing the trial(s) in --trial')
-    parser.add_argument('--skipMovies', action='store_true',
-                       help='Skip slice movie generation (ffmpeg) when building a --pptReport, e.g. for a quick re-run')
+    parser.add_argument('--addMovies', action='store_true',
+                       help='Generate and embed slice movies (requires ffmpeg on PATH) when building a --pptReport; off by default since it can be slow')
 
     args = parser.parse_args()
     
@@ -1728,8 +1728,26 @@ def buildBinForcePlots(path, caseArray, outputDir):
 def generate_ppt_report(args):
     print('\n\tGenerating PowerPoint report...')
 
-    caseSummaries = {}
+    #ride-height mapping parent cases (any --trial entry with child_# dirs, whether that's the
+    #cwd default or an explicitly-passed -t) are expanded into their individual child cases so
+    #each grid point gets full CFD render/bin-plot/etc. slides, same as manually listing every
+    #child case with -t. The parent name itself is kept aside (not added to caseArray) so its
+    #own summary.csv (the parent-level average, written by --summary) can still drive the
+    #"Ride Height Map Averages" table + sensitivity sweep plots below.
+    rideHeightParents = []
+    expandedTrials = []
     for trial in args.trial:
+        children = discoverRideHeightChildCases(os.path.join(path, trial), trial)
+        if children:
+            rideHeightParents.append(trial)
+            print('\tDetected ride-height mapping case %s, expanding into %d child case(s).' %
+                  (trial, len(children)))
+            expandedTrials.extend(children)
+        else:
+            expandedTrials.append(trial)
+
+    caseSummaries = {}
+    for trial in expandedTrials:
         summaryPath = os.path.join(path, trial, 'summary.csv')
         if not os.path.isfile(summaryPath):
             print('\tWARNING! %s is missing summary.csv (run --summary for it first), skipping.' % (trial))
@@ -1777,29 +1795,43 @@ def generate_ppt_report(args):
         print('\tNo binForceCoeffs data found for any trial, skipping binned force plots.')
 
     addPvPostImageSlides(prs, path, caseArray)
-    if not args.skipMovies:
+    if args.addMovies:
         addSliceMovieSlides(prs, path, caseArray)
     else:
-        print('\tSkipping slice movie generation (--skipMovies).')
+        print('\tSkipping slice movie generation (pass --addMovies to include).')
 
     
 
-    #ride height: any requested trial that is itself a ride-height mapping parent case gets a
-    #map-averages table (each trial's own already-averaged summary.csv) plus per-point sweep
-    #comparison plots (reusing plotRideHeightSensitivity's cross-case sweep matching)
-    rideHeightTrials = [t for t in caseArray if discoverRideHeightChildCases(os.path.join(path, t), t)]
-    if rideHeightTrials:
-        print('\tDetected ride-height mapping case(s): %s' % (', '.join(rideHeightTrials)))
-        buildPptFieldTableSlide(prs, 'Ride Height Map Averages', rideHeightTrials, caseSummaries, PPT_RESULTS_FIELDS)
+    #ride height: any ride-height mapping parent detected above (see expansion at the top of
+    #this function) gets a map-averages table (each parent's own already-averaged summary.csv)
+    #plus per-point sweep comparison plots (reusing plotRideHeightSensitivity's cross-case sweep
+    #matching)
+    if rideHeightParents:
+        parentSummaries = {}
+        for parentTrial in rideHeightParents:
+            summaryPath = os.path.join(path, parentTrial, 'summary.csv')
+            if not os.path.isfile(summaryPath):
+                print('\tWARNING! %s missing its own (parent) summary.csv (run --summary on it), '
+                      'skipping from Ride Height Map Averages.' % (parentTrial))
+                continue
+            summaryDict = readChildSummaryCsv(summaryPath)
+            if summaryDict:
+                parentSummaries[parentTrial] = summaryDict
 
-        primaryPath = os.path.join(path, rideHeightTrials[0])
-        comparePaths = [os.path.join(path, t) for t in rideHeightTrials[1:]]
-        sensitivityDir = os.path.join(primaryPath, 'postProcessing', 'sensitivityPlots')
-        plotRideHeightSensitivity(primaryPath, includeSideForce=args.includeSideForce,
-                                   compareCasePaths=comparePaths)
-        for plotFile in sorted(glob.glob(os.path.join(sensitivityDir, '*.png'))):
-            title = 'Ride Height - %s' % (os.path.splitext(os.path.basename(plotFile))[0])
-            addPptImageSlide(prs, title, plotFile)
+        if parentSummaries:
+            rideHeightTrials = list(parentSummaries.keys())
+            print('\tDetected ride-height mapping case(s): %s' % (', '.join(rideHeightTrials)))
+            buildPptFieldTableSlide(prs, 'Ride Height Map Averages', rideHeightTrials, parentSummaries,
+                                     PPT_RESULTS_FIELDS)
+
+            primaryPath = os.path.join(path, rideHeightTrials[0])
+            comparePaths = [os.path.join(path, t) for t in rideHeightTrials[1:]]
+            sensitivityDir = os.path.join(primaryPath, 'postProcessing', 'sensitivityPlots')
+            plotRideHeightSensitivity(primaryPath, includeSideForce=args.includeSideForce,
+                                       compareCasePaths=comparePaths)
+            for plotFile in sorted(glob.glob(os.path.join(sensitivityDir, '*.png'))):
+                title = 'Ride Height - %s' % (os.path.splitext(os.path.basename(plotFile))[0])
+                addPptImageSlide(prs, title, plotFile)
 
     reportName = '_'.join(caseArray)
     outputPath = os.path.join(casePath, '%s_report_%s.pptx' % (reportName, date.today()))
