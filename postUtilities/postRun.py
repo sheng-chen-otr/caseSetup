@@ -1559,7 +1559,10 @@ def _plotBinForceComponent(ax, caseBinData, coeffKey, label, colors):
     imgAspect = None
     for i, (case, binData) in enumerate(caseBinData.items()):
         color = colors[i % len(colors)]
-        ax.plot(binData['xCoords'], binData[coeffKey], '-', linewidth=1, color=color, label=case)
+        #case may be a compound 'parentTrial/childName' identifier (expanded ride-height
+        #child); the parent prefix is redundant in the legend since it's shared across all
+        #plotted cases, so just show the case's own basename.
+        ax.plot(binData['xCoords'], binData[coeffKey], '-', linewidth=1, color=color, label=os.path.basename(case))
 
         imagePath = findPvPostImage(os.path.join(path, case), 'Geom', 'Surface', os.path.basename(case), 'Left')
         if not imagePath:
@@ -1622,7 +1625,7 @@ def _plotBinForceDeltaComponent(ax, baseCase, caseBinData, coeffKey, label, colo
     #(where baseCase took colors[0]).
     for i, case in enumerate(compareCases):
         ax.plot(baseX, deltas[case], '-', linewidth=1, color=colors[(i + 1) % len(colors)],
-                label='%s - %s' % (case, baseCase))
+                label='%s - %s' % (os.path.basename(case), os.path.basename(baseCase)))
 
     ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
 
