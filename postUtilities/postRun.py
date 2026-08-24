@@ -1320,7 +1320,7 @@ def generateSliceMovie(trialPath, caseName, variable, normal, view):
             f.write("file '%s'\n" % (image))
 
     moviePath = os.path.join(imagesDir, '%s.mp4' % (prefix))
-    cmd = ("ffmpeg -y -framerate 10 -f concat -safe 0 -i '%s' -vf scale=1920:1080 "
+    cmd = ("ffmpeg -y -f concat -safe 0 -i '%s' -vf scale=1920:1080 -r 10 "
            "-c:v libx264 -pix_fmt yuv420p '%s' >> log.pptReport" % (listFile, moviePath))
     ret = os.system(cmd)
     if ret != 0 or not os.path.isfile(moviePath):
