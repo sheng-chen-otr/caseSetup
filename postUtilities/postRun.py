@@ -1246,6 +1246,29 @@ def addPptImageSlide(prs, title, imagePath):
     return slide
 
 
+def addPptSideBySideImageSlide(prs, title, leftImagePath, rightImagePath):
+    """Adds a slide with two images placed side by side, each scaled to fit half the slide
+    width while preserving its own aspect ratio (so neither image is squished)."""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _pptAddTitleTextbox(slide, prs, title)
+    pictureTop = Inches(1.2)
+    margin = Inches(0.4)
+    gap = Inches(0.3)
+    availableHeight = prs.slide_height - pictureTop - Inches(0.3)
+    halfWidth = (prs.slide_width - 2 * margin - gap) / 2
+
+    for i, imagePath in enumerate((leftImagePath, rightImagePath)):
+        left = margin + i * (halfWidth + gap)
+        picture = slide.shapes.add_picture(imagePath, left=left, top=pictureTop, width=halfWidth)
+        if picture.height > availableHeight:
+            scale = availableHeight / picture.height
+            picture.height = availableHeight
+            picture.width = int(picture.width * scale)
+            picture.left = left + (halfWidth - picture.width) // 2
+        picture.top = pictureTop
+    return slide
+
+
 #CFD render images are written by pvPost.py's saveImages() as:
 #   postProcessing/images/<variable>_<imageType>/<caseName>_<variable>_<imageType>_<view>.jpeg
 #(see pvPost.py saveImages()). Note the .jpeg extension (not .png) and that the iso-surface
@@ -1387,24 +1410,37 @@ def buildForceHistoryImages(args, caseArray):
     return casePath
 
 
-#--- Binned force plot (ported from legacy forceBinPlot.py) ---
+#--- Binned force plot (ported from legacy forceBinPlot.py, x-axis units per binPlotForces_v2_0.py) ---
 #pvPost.py's Left view camera looks from +Y toward the origin with viewup=+Z (see
 #default/defaultViews), and the Front/Rear cameras confirm +X is the front of the vehicle.
 #cross(forward=-Y, up=+Z) = -X, i.e. screen-right = -X, so the vehicle's front (+X) renders on
 #the LEFT edge of the Left-view image and the rear on the right edge. Combined with bin index
-#0 = front (per user), the leftmost opaque (body) pixel column maps to x=0 and the rightmost
-#maps to x=99.
+#0 = front (per user), the leftmost opaque (body) pixel column maps to the smallest x co-ord
+#and the rightmost maps to the largest.
 PPT_BIN_PLOT_WHITE_THRESH = 235  # 0-255; pixels with all channels >= this are background
 PPT_BIN_PLOT_BLACK_THRESH = 60   # 0-255; pixels with all channels <= this are title text
 PPT_BIN_PLOT_IMG_ALPHA_SINGLE = 0.5
 PPT_BIN_PLOT_IMG_ALPHA_MULTI = 0.35
 
 
+def parseBinXCoords(coeffFile):
+    """Parses the '# x co-ords :' header line out of a binForceCoeffs .dat file (as
+    binPlotForces_v2_0.py's importBinData() does) to get each bin's real x position in meters.
+    Returns a numpy array, or None if the header line wasn't found."""
+    with open(coeffFile, 'r') as f:
+        for line in f:
+            if 'x co-ords' in line:
+                xCoords = line.replace('#', '').replace(':', '').replace('x', '').replace('co-ords', '')
+                return np.array([float(v) for v in xCoords.split()])
+    return None
+
+
 def loadBinForceCoeffs(fullCaseSetupDict, path, case):
     """Reads postProcessing/binForceCoeffs/<latestTime>/forceCoeffBin.dat for a case, replicating
-    the original forceBinPlot.py's per-bin coefficient/force extraction. Returns a dict with
-    xCoeffs/yCoeffs/zCoeffs/xForce/yForce/zForce (100-element arrays), or None if no bin force
-    data is available for this case."""
+    the original forceBinPlot.py's per-bin coefficient/force extraction, plus the real per-bin x
+    co-ordinates (in meters) parsed the same way as binPlotForces_v2_0.py. Returns a dict with
+    xCoeffs/yCoeffs/zCoeffs/xForce/yForce/zForce/xCoords (100-element arrays), or None if no bin
+    force data (or no x co-ords header) is available for this case."""
     scale = 2 if 'half' in case else 1
     surfaceLoc = glob.glob(os.path.join(path, case, 'postProcessing', 'binForceCoeffs', '*'))
     if not surfaceLoc:
@@ -1412,6 +1448,11 @@ def loadBinForceCoeffs(fullCaseSetupDict, path, case):
     lastTime = os.path.basename(surfaceLoc[0])
     coeffFile = os.path.join(path, case, 'postProcessing', 'binForceCoeffs', lastTime, 'forceCoeffBin.dat')
     if not os.path.isfile(coeffFile):
+        return None
+
+    xCoords = parseBinXCoords(coeffFile)
+    if xCoords is None:
+        print('\tWARNING! Could not find "x co-ords" header in %s, skipping.' % (coeffFile))
         return None
 
     inletMag = bcParser(fullCaseSetupDict, path, case)[0]
@@ -1433,6 +1474,7 @@ def loadBinForceCoeffs(fullCaseSetupDict, path, case):
         'xForce': xCoeffs * forceMultiplier * 1.225,
         'yForce': yCoeffs * forceMultiplier * 1.225,
         'zForce': zCoeffs * forceMultiplier * 1.225,
+        'xCoords': xCoords,
     }
 
 
@@ -1460,19 +1502,25 @@ def loadVehicleSideImageRGBA(imagePath, whiteThresh=PPT_BIN_PLOT_WHITE_THRESH, b
     return rgba[:, firstCol:lastCol + 1, :]
 
 
-def _plotBinForceComponent(ax, caseBinData, forceKey, label, colors, xmin=0, xmax=99):
-    """Plots one force component (e.g. 'zForce'/downforce or 'xForce'/drag) for every case onto
-    ax, overlays each case's vehicle silhouette scaled so the front is at xmin and the rear at
-    xmax, and sets the axes box's physical aspect ratio to match the (undistorted) vehicle
-    image so the car isn't squished/stretched."""
-    maxForce = max(float(np.max(np.abs(d[forceKey]))) for d in caseBinData.values())
-    yTop = maxForce * 1.2 if maxForce > 0 else 1.0
+def _plotBinForceComponent(ax, caseBinData, coeffKey, label, colors):
+    """Plots one binned coefficient component (e.g. 'zCoeffs'/Cl or 'xCoeffs'/Cd) for every case
+    onto ax using each case's real per-bin x co-ordinates (in meters, parsed from the
+    binForceCoeffs header, per binPlotForces_v2_0.py's importBinData()). Overlays each case's
+    vehicle silhouette scaled to that same case's x co-ord extent (as binPlotForces_v2_0.py
+    does), and sets the axes box's physical aspect ratio to match the (undistorted) vehicle
+    image so the car isn't squished/stretched. The shared x-axis limit spans the min/max x
+    co-ord across all cases."""
+    maxCoeff = max(float(np.max(np.abs(d[coeffKey]))) for d in caseBinData.values())
+    yTop = maxCoeff * 1.2 if maxCoeff > 0 else 1.0
     imgAlpha = PPT_BIN_PLOT_IMG_ALPHA_SINGLE if len(caseBinData) == 1 else PPT_BIN_PLOT_IMG_ALPHA_MULTI
+
+    xMin = min(float(np.min(d['xCoords'])) for d in caseBinData.values())
+    xMax = max(float(np.max(d['xCoords'])) for d in caseBinData.values())
 
     imgAspect = None
     for i, (case, binData) in enumerate(caseBinData.items()):
         color = colors[i % len(colors)]
-        ax.plot(binData[forceKey], '-', linewidth=1, color=color, label=case)
+        ax.plot(binData['xCoords'], binData[coeffKey], '-', linewidth=1, color=color, label=case)
 
         imagePath = findPvPostImage(os.path.join(path, case), 'Geom', 'Surface', case, 'Left')
         if not imagePath:
@@ -1482,32 +1530,37 @@ def _plotBinForceComponent(ax, caseBinData, forceKey, label, colors, xmin=0, xma
         if rgba is None:
             print('\tWARNING! Could not isolate vehicle body in %s, skipping image overlay.' % (imagePath))
             continue
+        #each case's image is scaled to that case's own x co-ord extent (matching
+        #binPlotForces_v2_0.py), so cases with slightly different bin extents each still line up
+        #their own vehicle silhouette against their own data.
+        caseXMin = float(np.min(binData['xCoords']))
+        caseXMax = float(np.max(binData['xCoords']))
         #vehicle image is already cropped to exactly the body extent, so mapping its full width
-        #to [xmin, xmax] and its full height to [0, yTop] means the axes box's physical aspect
-        #ratio (set below) purely determines whether it's distorted, independent of yTop/xmax.
+        #to [caseXMin, caseXMax] and its full height to [0, yTop] means the axes box's physical
+        #aspect ratio (set below) purely determines whether it's distorted, independent of yTop.
         if imgAspect is None:
             imgAspect = rgba.shape[0] / rgba.shape[1]
-        ax.imshow(rgba, extent=[xmin, xmax, 0, yTop], aspect='auto', alpha=imgAlpha, zorder=0)
+        ax.imshow(rgba, extent=[caseXMin, caseXMax, 0, yTop], aspect='auto', alpha=imgAlpha, zorder=0)
 
-    ax.set_xlim(xmin, xmax)
+    ax.set_xlim(xMin, xMax)
     ax.set_ylim(0, yTop)
     if imgAspect is not None:
         ax.set_box_aspect(imgAspect)
-    ax.set_xlabel('Percent Length of Car (Front = 0)')
-    ax.set_ylabel('Force (N)')
+    ax.set_xlabel('Distance (m)')
+    ax.set_ylabel('Coefficient')
     ax.set_title(label)
     ax.legend()
 
 
-def buildBinForcePlot(path, caseArray, outputDir):
-    """Builds separate binned Cl (downforce) and Cd (drag) vs. length subplots for caseArray,
-    each overlaying every case's own left-view vehicle silhouette (background/text removed)
-    scaled so the vehicle's front is at x=0 and its rear at x=99 (bin 0 = front), with the axes
-    box's aspect ratio matched to the vehicle image so it isn't squished/stretched. When multiple
-    cases are given, each case's plot line and image use a distinct color and the images are
-    drawn at reduced opacity so they can be visually stacked/compared. Also writes a
-    trial<case>_binForces.csv per case, like the legacy script. Returns the saved plot path, or
-    None if no case had bin force data."""
+def buildBinForcePlots(path, caseArray, outputDir):
+    """Builds separate binned Cl (downforce) and Cd (drag) coefficient-vs-distance(m) figures
+    (one PNG each) for caseArray, each overlaying every case's own left-view vehicle silhouette
+    (background/text removed) scaled to that case's real bin x co-ordinate extent (parsed from
+    binForceCoeffs, per binPlotForces_v2_0.py), with the axes box's aspect ratio matched to the
+    vehicle image so it isn't squished/stretched. When multiple cases are given, each case's plot
+    line and image use a distinct color and the images are drawn at reduced opacity so they can
+    be visually stacked/compared. Also writes a trial<case>_binForces.csv per case, like the
+    legacy script. Returns (clPlotPath, cdPlotPath), or None if no case had bin force data."""
     caseBinData = {}
     for case in caseArray:
         caseSetupPath = os.path.join(path, case, 'fullCaseSetupDict')
@@ -1528,22 +1581,30 @@ def buildBinForcePlot(path, caseArray, outputDir):
         return None
 
     for case, binData in caseBinData.items():
-        allForces = np.vstack((list(range(100)), binData['xCoeffs'], binData['yCoeffs'],
+        allForces = np.vstack((binData['xCoords'], binData['xCoeffs'], binData['yCoeffs'],
                                 binData['zCoeffs'], binData['xForce'], binData['yForce'],
                                 binData['zForce'])).T
         np.savetxt(os.path.join(outputDir, 'trial%s_binForces.csv' % (case)), allForces, delimiter=',',
-                   header='xCoeffs,yCoeffs,zCoeffs,xForce,yForce,zForce')
+                   header='xCoords,xCoeffs,yCoeffs,zCoeffs,xForce,yForce,zForce')
 
     colors = plt.cm.tab10.colors
-    fig, (axCl, axCd) = plt.subplots(2, 1, figsize=(10, 12))
-    _plotBinForceComponent(axCl, caseBinData, 'zForce', 'Binned Downforce (Cl)', colors)
-    _plotBinForceComponent(axCd, caseBinData, 'xForce', 'Binned Drag (Cd)', colors)
-    fig.tight_layout()
+    reportName = '_'.join(caseBinData.keys())
 
-    plotPath = os.path.join(outputDir, '%s_binnedForces.png' % ('_'.join(caseBinData.keys())))
-    plt.savefig(plotPath, dpi=300)
-    plt.close(fig)
-    return plotPath
+    figCl, axCl = plt.subplots()
+    _plotBinForceComponent(axCl, caseBinData, 'zCoeffs', 'Binned Cl (Downforce)', colors)
+    figCl.tight_layout()
+    clPlotPath = os.path.join(outputDir, '%s_binnedCl.png' % (reportName))
+    figCl.savefig(clPlotPath, dpi=300)
+    plt.close(figCl)
+
+    figCd, axCd = plt.subplots()
+    _plotBinForceComponent(axCd, caseBinData, 'xCoeffs', 'Binned Cd (Drag)', colors)
+    figCd.tight_layout()
+    cdPlotPath = os.path.join(outputDir, '%s_binnedCd.png' % (reportName))
+    figCd.savefig(cdPlotPath, dpi=300)
+    plt.close(figCd)
+
+    return clPlotPath, cdPlotPath
 
 
 def generate_ppt_report(args):
@@ -1588,11 +1649,12 @@ def generate_ppt_report(args):
     except Exception as e:
         print('\tWARNING! Unable to generate force history plots: %s' % (e))
 
-    binPlotPath = buildBinForcePlot(path, caseArray, casePath)
-    if binPlotPath:
-        addPptImageSlide(prs, 'Binned Forces', binPlotPath)
+    binPlots = buildBinForcePlots(path, caseArray, casePath)
+    if binPlots:
+        clPlotPath, cdPlotPath = binPlots
+        addPptSideBySideImageSlide(prs, 'Binned Forces', clPlotPath, cdPlotPath)
     else:
-        print('\tNo binForceCoeffs data found for any trial, skipping binned force plot.')
+        print('\tNo binForceCoeffs data found for any trial, skipping binned force plots.')
 
     addPvPostImageSlides(prs, path, caseArray)
     if not args.skipMovies:
