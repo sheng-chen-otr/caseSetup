@@ -1496,7 +1496,7 @@ def loadBinForceCoeffs(fullCaseSetupDict, path, case):
     for i in range(n):
         start = 9 * i
         binVals = coeffs[start:start + 3] * scale
-        xCoeffs[i], yCoeffs[i], zCoeffs[i] = binVals[0], binVals[1], binVals[2] * -1
+        xCoeffs[i], yCoeffs[i], zCoeffs[i] = binVals[0], binVals[1], binVals[2]
 
     return {
         'xCoeffs': xCoeffs, 'yCoeffs': yCoeffs, 'zCoeffs': zCoeffs,
