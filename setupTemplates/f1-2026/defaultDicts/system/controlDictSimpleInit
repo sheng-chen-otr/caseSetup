@@ -32,7 +32,7 @@ runTimeModifiable yes;
 functions
 {
 	#include "forceCoeffs"
-	#include "averageFieldsDict"	
+	#include "averageFieldsDictInit"	
 	fieldMinMax
 	{
 		// Mandatory entries (unmodifiable)

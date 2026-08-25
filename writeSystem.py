@@ -34,7 +34,7 @@ dictDict = {'solverType':{'steady':steadyTurb,'transient':transientTurb},
             'controlDictCornerType':controlDictCornerDict,
             'exportCornerType':exportCornerDict}
 
-foList = ['averageFieldsDict','cptMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
+foList = ['averageFieldsDict','averageFieldsDictInit','cptMeanDict','nearWallFieldsDict','wallShearStressDict','vorticityDict','QCriterionDict','yPlusDict','surfaceFieldAverage','surfaces']
 coeffList = ['forceCoeffs','forceCoeffsExport','forceCoeffSetup']
 prefixToIgnore = ['IDOM','SMP','REFX','REF','MRFG','POR','FAN','GRND'] #list of prefixes to not include in the boundary conditions for geometry as well as for forceCalculations
 
@@ -89,6 +89,18 @@ def writeControlDict(templateLoc, fullCaseSetupDict):
             #the solve preamble swap controlDict and mislead createZeroDirectory
             print('\t\tCornering case: skipping initialisation controlDict')
         elif simInit in possibleInit:
+            #transient cases initialised from steady (RANS) also run potentialFoam first (to
+            #give simpleFoam a sane starting field), so write out its controlDict too, in
+            #addition to the steady init controlDict written below.
+            if simType == 'transient' and simInit == 'steady':
+                potentialControlDictTemplate = dictDict['initType'][simType]['potential']
+                potentialInitTemplatePath = '%s/%s' % (controlDictTemplatePath, potentialControlDictTemplate)
+                localPotentialControlDictPath = 'system/%s' % (potentialControlDictTemplate)
+                copyTemplateToCase(potentialInitTemplatePath, localPotentialControlDictPath)
+                print('\t\tWriting controlDict for initialization: potential')
+                for key in setupDict.keys():
+                    search_and_replace(localPotentialControlDictPath, '<%s>' % (key), setupDict[key][0])
+
             controlDictTemplate = dictDict['initType'][simType][simInit]
             initTemplatePath = '%s/%s' % (controlDictTemplatePath,controlDictTemplate)
             if controlDictTemplate != '':
@@ -401,6 +413,10 @@ def writeSolution(templateLoc, fullCaseSetupDict):
             print('\t\t\tCopying fvSolutionPotential')
             copyTemplateToCase(templatePathPotential, 'system/fvSolutionPotential')
         elif fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0].lower() == 'steady':   
+            #steady init now also runs potentialFoam first (see writeControlDict/writeScripts),
+            #so fvSolutionPotential is needed in addition to fvSolutionSimple.
+            print('\t\t\tCopying fvSolutionPotential')
+            copyTemplateToCase(templatePathPotential, 'system/fvSolutionPotential')
             print('\t\t\tCopying fvSolutionSimple')
             copyTemplateToCase(templatePathSimple, 'system/fvSolutionSimple')
     elif simType.lower() == 'steady':

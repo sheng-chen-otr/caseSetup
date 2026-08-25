@@ -88,6 +88,9 @@ def makeScripts(templateLoc,fullCaseSetupDict):
                 if fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0] == 'potential':
                     solveScriptArray.append(clusterDict['solve']['initialize']['initializePotential'])
                 elif fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SIM_INIT'][0] == 'steady':
+                    #run potentialFoam first to give the steady RANS init a sane starting field,
+                    #then the steady (simpleFoam) init itself, before the transient/piso solve
+                    solveScriptArray.append(clusterDict['solve']['initialize']['initializePotential'])
                     solveScriptArray.append(clusterDict['solve']['initialize']['initializeSteady'])
             elif 'topoSet' in line:
                 #ansaMesh can't snap the porous/MRF interface, so build those cellZones with topoSet
