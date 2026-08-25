@@ -16,7 +16,7 @@
 					 "yPlus":{"equation":"yPlus","label":"$y^+$","range":[5,60],"color":"Cool To Warm"}
 	      			 },
  "sliceVariables":{"CpMean":{"equation":"pMean/(0.5*UREF^2)","label":"$\overline{C}_p$","range":[-1.5,1.5],"color":"Cool To Warm"},
-					"CptMean":{"equation":"(pMean+(0.5*UMean^2))/(0.5*UREF^2)","label":"$\overline{C}_{p,total}$","range":[-0.5,1],"color":"Viridis (matplotlib)"},
+					"CptMean":{"equation":"(pMean+(0.5*mag(UMean)^2))/(0.5*UREF^2)","label":"$\overline{C}_{p,total}$","range":[-0.5,1],"color":"Viridis (matplotlib)"},
 					 "CpPrime2Mean":{"equation":"sqrt(pPrime2Mean)/(0.5*UREF^2)","label":"$\overline{C}_{p}^\prime$","range":[0,0.3],"color":"Viridis (matplotlib)"},
 					 "UMean":{"equation":"UMean/UREF","label":"$\overline{U}/U_{ref}$","range":[0,1.2],"color":"Viridis (matplotlib)"},
 					 "UMeanX":{"equation":"UMean_X/UREF","label":"$\overline{U}_x/U_{ref}$","range":[0,1],"color":"Cool To Warm"},
