@@ -14,6 +14,6 @@ FoamFile
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 simulationType <SIMTYPE>;
-<SIMTYPE>{<SIMTYPE>Model <TURBMODEL>; delta cubeRootVol; printCoeffs on;turbulence on; cubeRootVolCoeffs {deltaCoeff 1;}}
+<SIMTYPE>{<SIMTYPE>Model <TURBMODEL>; delta IDDESDelta; printCoeffs on;turbulence on; cubeRootVolCoeffs {deltaCoeff 1;} viscosityRatioMax 1e5;}
 
 // ************************************************************************* //
