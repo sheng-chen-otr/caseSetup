@@ -77,6 +77,10 @@ updateCaseSetupFlag = False
 #available addon keywords
 addonKeyWords = ['POR','FAN','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG','GRND']
 
+#names of addon sections (whole-geometry or PID/solid-derived) confirmed valid this run,
+#used by cleanUpCaseSetup so PID-derived sections aren't mistaken for stale entries
+activeAddonSections = set()
+
 
 #getting default values from template
 def main():
@@ -714,17 +718,21 @@ def cleanUpCaseSetup(geomDict,writeCaseSetupDict,fullCaseSetupDict,defaultDict):
     sectionsToDelete = []
     #porous and ref check
     geomNames = [stripExt(i) for i in geomDict.keys()]
+    #PID/solid-derived addon sections (e.g. a ROTA-tagged PID inside a larger part) won't
+    #appear in geomNames, so they must also be checked against activeAddonSections or
+    #they'd be wrongly deleted as stale on every run
+    validAddonNames = set(geomNames) | activeAddonSections
     for key in writeCaseSetupDict.keys():
-        if any(key.startswith(i) for i in addonKeyWords) and key in geomNames:
+        if any(key.startswith(i) for i in addonKeyWords) and key in validAddonNames:
             continue
-        elif any(key.startswith(i) for i in addonKeyWords) and key not in geomNames:
+        elif any(key.startswith(i) for i in addonKeyWords) and key not in validAddonNames:
             if key not in sectionsToDelete:
                 sectionsToDelete.append(key)
  
     for key in fullCaseSetupDict.keys():
-        if any(key.startswith(i) for i in addonKeyWords) and key in geomNames:
+        if any(key.startswith(i) for i in addonKeyWords) and key in validAddonNames:
             continue
-        elif any(key.startswith(i) for i in addonKeyWords) and key not in geomNames:
+        elif any(key.startswith(i) for i in addonKeyWords) and key not in validAddonNames:
             if key not in sectionsToDelete:
                 sectionsToDelete.append(key)
 
@@ -733,6 +741,57 @@ def cleanUpCaseSetup(geomDict,writeCaseSetupDict,fullCaseSetupDict,defaultDict):
         del fullCaseSetupDict[sectionsDel]
 
     return writeCaseSetupDict,fullCaseSetupDict
+
+def getGeomSourcePath(geom):
+    return "%s/02_reference/MSH/%s" % (jobPath,geom)
+
+def scanGeometryPIDsForKeyword(geomDict,keyword):
+    """Scan every declared geometry file (skipping ones that are themselves already
+    a whole-file match for `keyword`, e.g. THRM-brake.stl) for internal PID/solid/
+    group names containing `keyword`. This supports tagging a single PID inside an
+    otherwise normal, fully-meshed part (e.g. a THRM- or ROTA-tagged PID inside a
+    full corner assembly), as opposed to a standalone <KEYWORD>-<name> geometry file.
+    Returns a list of matched PID/solid names (not geometry filenames).
+    """
+    matches = []
+    for geom in geomDict.keys():
+        if geom.startswith(keyword):
+            continue
+        geomPath = getGeomSourcePath(geom)
+        if not os.path.isfile(geomPath):
+            continue
+        try:
+            pidNames = listGeometryPIDNames(geomPath)
+        except Exception as e:
+            print('\t\tWARNING: unable to scan PIDs in %s for %s keyword: %s' % (geom,keyword,e))
+            continue
+        for pid in pidNames:
+            if keyword in pid:
+                matches.append(pid)
+    return matches
+
+def populateAddonSection(name,defaultsItems,writeCaseSetupDict):
+    """Shared populate-or-fill-in-defaults logic used by every per-geometry/per-PID
+    addon keyword (ROTA, FAN, GEOMX, IDOM, ...). Fills in any missing keys with
+    their default value (flagging caseSetup for rewrite) and leaves any user-set
+    values untouched. `name` may be a whole-geometry name or a PID/solid name."""
+    global updateCaseSetupFlag
+    if name in writeCaseSetupDict.keys():
+        tempDict = {}
+        for defaultVar,defaultVal in defaultsItems:
+            try:
+                tempDict[defaultVar] = writeCaseSetupDict[name][defaultVar]
+            except KeyError:
+                updateCaseSetupFlag = True
+                tempDict[defaultVar] = [str(defaultVal)]
+        writeCaseSetupDict[name] = tempDict
+    else:
+        writeCaseSetupDict[name] = {}
+        for defaultVar,defaultVal in defaultsItems:
+            writeCaseSetupDict[name][defaultVar] = [str(defaultVal)]
+        updateCaseSetupFlag = True
+    activeAddonSections.add(name)
+    return writeCaseSetupDict
 
     
 
@@ -1143,21 +1202,16 @@ def checkFan(geomDict,writeCaseSetupDict):
     if 'FAN_SETUP' not in fanConfigRead.sections():
         sys.exit('ERROR! defaultFan section header must be [FAN_SETUP]!')
 
-    defaults = dict(fanConfigRead.items('FAN_SETUP'))
-    for geom in geomDict:
-        if not geom.startswith('FAN'):
-            continue
-        fanName = stripExt(geom)
-        if fanName not in writeCaseSetupDict:
-            writeCaseSetupDict[fanName] = {
-                key: [value] for key, value in defaults.items()
-            }
-            updateCaseSetupFlag = True
-        else:
-            for key, value in defaults.items():
-                if key not in writeCaseSetupDict[fanName]:
-                    writeCaseSetupDict[fanName][key] = [value]
-                    updateCaseSetupFlag = True
+    defaultsItems = list(dict(fanConfigRead.items('FAN_SETUP')).items())
+
+    #FAN can be a whole-geometry file (FAN-<name>.stl) or a PID/solid name containing
+    #'FAN' inside an otherwise normal, fully-meshed part (e.g. a fan PID inside an
+    #engine-bay assembly)
+    fanNames = [stripExt(geom) for geom in geomDict if geom.startswith('FAN')]
+    fanNames += scanGeometryPIDsForKeyword(geomDict,'FAN')
+
+    for fanName in fanNames:
+        writeCaseSetupDict = populateAddonSection(fanName,defaultsItems,writeCaseSetupDict)
 
         setup = writeCaseSetupDict[fanName]
         model = setup['FAN_MODEL'][0].lower()
@@ -1245,37 +1299,19 @@ def checkGeom(geomDict,writeCaseSetupDict):
         print('ERROR! defaultGeomx template is invalid!')
         exit()
     
-    porousSections = geomConfigRead.sections()
-    
-    for geom in geomDict.keys():
-        if geom.startswith('GEOMX'):
-            geomName = stripExt(geom)
-            if geomName in writeCaseSetupDict.keys():               
-                tempDict = {}
-                for defaultGeomVar in geomConfigRead.items('GEOMX_SETUP'):
-                    defaultVar = defaultGeomVar[0]
-                    defaultVal = defaultGeomVar[1]
-                    try:
-                        tempDict[defaultVar] = writeCaseSetupDict[geomName][defaultVar]
-                    except:
-                        
-                        updateCaseSetupFlag = True
-                        tempDict[defaultVar] = [str(defaultVal)]
-                
-                writeCaseSetupDict[geomName] = tempDict
-                    
-            else:   
-                try:
-                    writeCaseSetupDict[geomName] = {}
-                    for var in list(geomConfigRead.items('GEOMX_SETUP')):
-                        var = list(var)
-                        writeCaseSetupDict[geomName][var[0]] = [var[1]]
-                    updateCaseSetupFlag = True
-                except:
-                    print('ERROR! defaultGeomx section header is not [GEOMX_SETUP]!')
-                    exit()
-            
-        
+    if 'GEOMX_SETUP' not in geomConfigRead.sections():
+        print('ERROR! defaultGeomx section header is not [GEOMX_SETUP]!')
+        exit()
+    defaultsItems = list(geomConfigRead.items('GEOMX_SETUP'))
+
+    #GEOMX can be a whole-geometry file (GEOMX-<name>.stl) or a PID/solid name
+    #containing 'GEOMX' inside an otherwise normal, fully-meshed part
+    geomNames = [stripExt(geom) for geom in geomDict.keys() if geom.startswith('GEOMX')]
+    geomNames += scanGeometryPIDsForKeyword(geomDict,'GEOMX')
+
+    for geomName in geomNames:
+        writeCaseSetupDict = populateAddonSection(geomName,defaultsItems,writeCaseSetupDict)
+
     return writeCaseSetupDict        
 
 def checkInternalDomain(geomDict,writeCaseSetupDict):
@@ -1289,37 +1325,19 @@ def checkInternalDomain(geomDict,writeCaseSetupDict):
         print('ERROR! defaultInternalDomain template is invalid!')
         exit()
         
-    idomconfig = idomConfigRead.sections()
-    for geom in geomDict.keys():
-        if geom.startswith('IDOM'):
-            domName = stripExt(geom)
-            
-            if domName in writeCaseSetupDict.keys():               
-                tempDict = {}
-                for defaultDomVar in idomConfigRead.items('INTERNAL_DOMAIN'):
-                    defaultVar = defaultDomVar[0]
-                    defaultVal = defaultDomVar[1]
-                    try:
-                        tempDict[defaultVar] = writeCaseSetupDict[domName][defaultVar]
-                    except:
-                        updateCaseSetupFlag = True
-                        tempDict[defaultVar] = [str(defaultVal)]
-                
-                writeCaseSetupDict[domName] = tempDict
-                    
-            else:   
-                try:
-                    writeCaseSetupDict[domName] = {}
-                    for var in list(idomConfigRead.items('INTERNAL_DOMAIN')):
-                        var = list(var)
-                        writeCaseSetupDict[domName][var[0]] = [var[1]]
-                    updateCaseSetupFlag = True
-                except:
-                    print('ERROR! defaultInternalDomain section header is not [INTERNAL_DOMAIN]!')
-                    exit()
-        
-            
-        
+    if 'INTERNAL_DOMAIN' not in idomConfigRead.sections():
+        print('ERROR! defaultInternalDomain section header is not [INTERNAL_DOMAIN]!')
+        exit()
+    defaultsItems = list(idomConfigRead.items('INTERNAL_DOMAIN'))
+
+    #IDOM can be a whole-geometry file (IDOM-<name>.stl) or a PID/solid name
+    #containing 'IDOM' inside an otherwise normal, fully-meshed part
+    domNames = [stripExt(geom) for geom in geomDict.keys() if geom.startswith('IDOM')]
+    domNames += scanGeometryPIDsForKeyword(geomDict,'IDOM')
+
+    for domName in domNames:
+        writeCaseSetupDict = populateAddonSection(domName,defaultsItems,writeCaseSetupDict)
+
     return writeCaseSetupDict
 def checkGround(geomDict,writeCaseSetupDict):
     global updateCaseSetupFlag
@@ -1371,36 +1389,20 @@ def checkRotation(geomDict,writeCaseSetupDict):
         print('ERROR! defaultWheel template is invalid!')
         exit()
     
-    rotationConfig = rotationConfigRead.sections()
-    for geom in geomDict.keys():
-        if geom.startswith('ROTA'):
-            rotName = stripExt(geom)
-            
-            if rotName in writeCaseSetupDict.keys():               
-                tempDict = {}
-                for defaultWheelVar in rotationConfigRead.items('WH_SETUP'):
-                    defaultVar = defaultWheelVar[0]
-                    defaultVal = defaultWheelVar[1]
-                    try:
-                        tempDict[defaultVar] = writeCaseSetupDict[rotName][defaultVar]
-                    except:
-                        updateCaseSetupFlag = True
-                        tempDict[defaultVar] = [str(defaultVal)]
-                
-                writeCaseSetupDict[rotName] = tempDict
-                    
-            else:   
-                try:
-                    writeCaseSetupDict[rotName] = {}
-                    for var in list(rotationConfigRead.items('WH_SETUP')):
-                        var = list(var)
-                        writeCaseSetupDict[rotName][var[0]] = [var[1]]
-                    updateCaseSetupFlag = True
-                except:
-                    print('ERROR! defaultWheel section header is not [WH_SETUP]!')
-                    exit()
-            
-        
+    if 'WH_SETUP' not in rotationConfigRead.sections():
+        print('ERROR! defaultWheel section header is not [WH_SETUP]!')
+        exit()
+    defaultsItems = list(rotationConfigRead.items('WH_SETUP'))
+
+    #ROTA can be a whole-geometry file (ROTA-<name>.stl) or a PID/solid name
+    #containing 'ROTA' inside an otherwise normal, fully-meshed part (e.g. a wheel
+    #PID inside a full corner assembly)
+    rotNames = [stripExt(geom) for geom in geomDict.keys() if geom.startswith('ROTA')]
+    rotNames += scanGeometryPIDsForKeyword(geomDict,'ROTA')
+
+    for rotName in rotNames:
+        writeCaseSetupDict = populateAddonSection(rotName,defaultsItems,writeCaseSetupDict)
+
     return writeCaseSetupDict    
     
 def geomToDict(geomDict,geometryList,geomColumnNames):

@@ -2666,6 +2666,57 @@ def copyTemplateToCase(templatePath,templateDest):
         print('ERROR: Unable to copy template to case!')
         print('\n\t\t\t'+ e )
         sys.exit()
+def listGeometryPIDNames(filePath):
+    """Scan a geometry file (STL or OBJ, optionally gzipped) and return the list
+    of internal PID/solid/group names it contains, without loading vertex data.
+
+    - ASCII STL: one name per `solid <name>` line.
+    - Binary STL: a single name taken from the 80-byte header (binary STLs only
+      carry one solid name for the whole file).
+    - OBJ: one name per `g <name>` / `o <name>` line.
+
+    Names are returned in file order, without duplicates. Unrecognized file
+    extensions return an empty list rather than raising. Used to detect addon
+    keywords (e.g. THRM, ROTA, FAN) tagged on a PID/solid inside an otherwise
+    normal, fully-meshed geometry, as opposed to a standalone keyword-prefixed
+    geometry file.
+    """
+    lowerPath = filePath.lower()
+    names = []
+    seen = set()
+
+    def _addName(name):
+        name = name.strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+
+    if '.obj' in lowerPath:
+        with _open_text_file_maybe_gz(filePath, 'rt') as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith('g ') or stripped.startswith('o '):
+                    parts = stripped.split(maxsplit=1)
+                    if len(parts) > 1:
+                        _addName(parts[1])
+    elif '.stl' in lowerPath:
+        if _is_ascii_stl_path(filePath):
+            with _open_text_file_maybe_gz(filePath, 'rt') as f:
+                for line in f:
+                    stripped = line.strip()
+                    if stripped.lower().startswith('solid'):
+                        parts = stripped.split(maxsplit=1)
+                        if len(parts) > 1:
+                            _addName(parts[1])
+        else:
+            with _open_text_file_maybe_gz(filePath, 'rb') as f:
+                header = f.read(80)
+            headerName = header.split(b'\x00')[0].decode('utf-8', errors='ignore').strip()
+            _addName(headerName)
+
+    return names
+
+
 def getGeomPID(geometry):
     command = """surfaceSplitByPatch %s""" % (geometry)
     searchType = 'contains'
