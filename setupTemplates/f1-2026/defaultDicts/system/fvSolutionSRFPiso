@@ -106,6 +106,23 @@ solvers
         maxIter          10;
     }
 
+    "(k|omega)"
+    {
+        solver           PBiCG;
+        preconditioner   DILU;
+        tolerance        0;//1e-07;
+        relTol           0.01;
+        maxIter          4;
+    }
+    "(k|omega)Final"
+    {
+        solver           PBiCG;
+        preconditioner   DILU;
+        tolerance        1e-07;
+        relTol           0;
+        maxIter          10;
+    }
+
     
 }
 
@@ -145,6 +162,7 @@ relaxationFactors
     equations
     {
        "nuTilda.*"     0.7;
+       "(k|omega).*"   0.7;
        "U.*"           0.6;
     }
 }
