@@ -19,6 +19,7 @@ import shutil
 import gzip
 import re
 import multiprocessing
+import concurrent.futures
 
 #these lines get the path which the program is run from
 path = os.path.split(os.getcwd())[0] #path of the case
@@ -745,25 +746,57 @@ def cleanUpCaseSetup(geomDict,writeCaseSetupDict,fullCaseSetupDict,defaultDict):
 def getGeomSourcePath(geom):
     return "%s/02_reference/MSH/%s" % (jobPath,geom)
 
-def scanGeometryPIDsForKeyword(geomDict,keyword):
-    """Scan every declared geometry file (skipping ones that are themselves already
-    a whole-file match for `keyword`, e.g. THRM-brake.stl) for internal PID/solid/
-    group names containing `keyword`. This supports tagging a single PID inside an
-    otherwise normal, fully-meshed part (e.g. a THRM- or ROTA-tagged PID inside a
-    full corner assembly), as opposed to a standalone <KEYWORD>-<name> geometry file.
-    Returns a list of matched PID/solid names (not geometry filenames).
+#cache of geom-filename -> PID/solid-name list, built once per distinct set of
+#declared geometries and reused by every keyword (ROTA, FAN, GEOMX, IDOM, THRM,
+#...) instead of re-reading/re-parsing every geometry file once per keyword
+_geometryPIDIndexCache = {}
+
+def _scanOneGeometryPIDs(geom):
+    geomPath = getGeomSourcePath(geom)
+    if not os.path.isfile(geomPath):
+        return geom, []
+    try:
+        return geom, listGeometryPIDNames(geomPath)
+    except Exception as e:
+        print('\t\tWARNING: unable to scan PIDs in %s: %s' % (geom,e))
+        return geom, []
+
+def buildGeometryPIDIndex(geomDict):
+    """Scan every declared geometry file once for its internal PID/solid/group
+    names, in parallel via a thread pool (file I/O and gzip decompression both
+    release the GIL, so threading gives a real wall-clock speedup here), and
+    cache the result. All per-keyword scans within the same caseSetup run
+    (checkRotation, checkFan, checkGeom, checkInternalDomain, checkThermal,
+    ...) share this single index rather than each re-scanning every geometry
+    file from scratch.
     """
+    cacheKey = tuple(sorted(geomDict.keys()))
+    if cacheKey in _geometryPIDIndexCache:
+        return _geometryPIDIndexCache[cacheKey]
+
+    index = {}
+    if len(geomDict) > 0:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8,len(geomDict))) as pool:
+            for geom,pidNames in pool.map(_scanOneGeometryPIDs,geomDict.keys()):
+                index[geom] = pidNames
+
+    _geometryPIDIndexCache[cacheKey] = index
+    return index
+
+def scanGeometryPIDsForKeyword(geomDict,keyword):
+    """Look up (building/caching the shared PID index on first use) every
+    internal PID/solid/group name across all declared geometry files, skipping
+    ones that are themselves already a whole-file match for `keyword` (e.g.
+    THRM-brake.stl), and return the ones containing `keyword` as a substring.
+    This supports tagging a single PID inside an otherwise normal, fully-meshed
+    part (e.g. a THRM- or ROTA-tagged PID inside a full corner assembly), as
+    opposed to a standalone <KEYWORD>-<name> geometry file. Returns a list of
+    matched PID/solid names (not geometry filenames).
+    """
+    index = buildGeometryPIDIndex(geomDict)
     matches = []
-    for geom in geomDict.keys():
+    for geom,pidNames in index.items():
         if geom.startswith(keyword):
-            continue
-        geomPath = getGeomSourcePath(geom)
-        if not os.path.isfile(geomPath):
-            continue
-        try:
-            pidNames = listGeometryPIDNames(geomPath)
-        except Exception as e:
-            print('\t\tWARNING: unable to scan PIDs in %s for %s keyword: %s' % (geom,keyword,e))
             continue
         for pid in pidNames:
             if keyword in pid:

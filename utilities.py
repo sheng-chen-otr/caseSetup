@@ -8,6 +8,7 @@ import re
 import json
 import csv
 import multiprocessing
+import mmap
 import pandas as pd
 import configparser
 import struct
@@ -1623,6 +1624,34 @@ def _is_ascii_stl_path(inputFile):
     return headStr.startswith('solid') and ('facet' in headStr or 'endsolid' in headStr)
 
 
+#compiled once at import time; used by listGeometryPIDNames for a single fast
+#regex pass over raw file bytes instead of a per-line Python loop
+_STL_SOLID_NAME_RE = re.compile(rb'(?im)^[ \t]*solid[ \t]+(\S+)')
+_OBJ_GROUP_NAME_RE = re.compile(rb'(?m)^[ \t]*[go][ \t]+(\S+)')
+
+
+def _read_bytes_for_scan(filePath):
+    """Return the full file content as a bytes-like object for regex scanning.
+
+    Uncompressed files are memory-mapped (zero-copy, lets the OS page cache
+    handle it) rather than read fully into a Python bytes object. gzipped
+    files are decompressed fully since gzip doesn't support mmap.
+
+    Note: the mmap is created and the underlying file descriptor is closed
+    immediately after; on POSIX (macOS/Linux, the only platforms this repo
+    targets) the kernel mapping remains valid after the fd is closed.
+    """
+    if filePath.lower().endswith('.gz'):
+        with gzip.open(filePath, 'rb') as f:
+            return f.read()
+    with open(filePath, 'rb') as f:
+        try:
+            return mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        except ValueError:
+            #empty file - mmap refuses to map zero-length files
+            return b''
+
+
 def _build_pid_regex_mapping(pidNames, pidTransformDict):
     pidToConfig = {}
     unmatched = []
@@ -2680,34 +2709,32 @@ def listGeometryPIDNames(filePath):
     keywords (e.g. THRM, ROTA, FAN) tagged on a PID/solid inside an otherwise
     normal, fully-meshed geometry, as opposed to a standalone keyword-prefixed
     geometry file.
+
+    Implementation note: uses a single compiled-regex pass over the raw file
+    bytes (mmap'd when uncompressed) instead of iterating line-by-line in
+    Python, since the vast majority of lines in a large STL/OBJ (vertices,
+    facets) never match and a per-line Python loop pays interpreter overhead
+    on every one of them.
     """
     lowerPath = filePath.lower()
     names = []
     seen = set()
 
-    def _addName(name):
-        name = name.strip()
+    def _addName(rawName):
+        name = rawName.decode('utf-8', errors='ignore').strip()
         if name and name not in seen:
             seen.add(name)
             names.append(name)
 
     if '.obj' in lowerPath:
-        with _open_text_file_maybe_gz(filePath, 'rt') as f:
-            for line in f:
-                stripped = line.strip()
-                if stripped.startswith('g ') or stripped.startswith('o '):
-                    parts = stripped.split(maxsplit=1)
-                    if len(parts) > 1:
-                        _addName(parts[1])
+        data = _read_bytes_for_scan(filePath)
+        for m in _OBJ_GROUP_NAME_RE.finditer(data):
+            _addName(m.group(1))
     elif '.stl' in lowerPath:
         if _is_ascii_stl_path(filePath):
-            with _open_text_file_maybe_gz(filePath, 'rt') as f:
-                for line in f:
-                    stripped = line.strip()
-                    if stripped.lower().startswith('solid'):
-                        parts = stripped.split(maxsplit=1)
-                        if len(parts) > 1:
-                            _addName(parts[1])
+            data = _read_bytes_for_scan(filePath)
+            for m in _STL_SOLID_NAME_RE.finditer(data):
+                _addName(m.group(1))
         else:
             with _open_text_file_maybe_gz(filePath, 'rb') as f:
                 header = f.read(80)
