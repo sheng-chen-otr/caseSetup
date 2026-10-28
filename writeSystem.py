@@ -947,8 +947,9 @@ def createGroundPatch(templateLoc,geomDict,fullCaseSetupDict):
         actions.append(faceSubsetTemplate.replace('FACE_SET',faceSet))
         patches.append(patchTemplate.replace('FACE_SET',faceSet))
 
-    if not actions:
-        return False
+    #commented out because in cases where there exists a topoSetDict it will overwrite and clear it out if not used
+    # if not actions:
+    #     return False
 
     header = '''/*--------------------------------*- C++ -*----------------------------------*\\
 | =========                 |                                                 |

@@ -98,7 +98,7 @@
          
          "postPro":"echo 'running pvPost...';~/openFoam/CODEHOST/SOFTWARES/PV5111HLOS/bin/pvbatch --mpi ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pvPost.py >> log.pvpost",
 
-         "wingPressure":"echo 'plotting wing pressure distributions...';/home/openfoam/openFoam/scripts/caseSetup/caseSetup/.venvs/bin/python3 ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/postRun.py --wingPressure >> log.wingPressure",
+         "wingPressure":"echo 'plotting wing pressure distributions...';/home/openfoam/openFoam/scripts/caseSetup/caseSetup/.venvs/bin/python3 ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/postRun.py --wingPlots >> log.wingPressure",
         
          "makePpt":"echo 'generating ppt...';python3.8  ~/openFoam/scripts/caseSetup/caseSetup/postUtilities/pptGeneration/pptGeneration.py >> log.pptGen"
 		
