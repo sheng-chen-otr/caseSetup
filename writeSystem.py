@@ -1,3 +1,21 @@
+"""
+Copyright (c) 2026 Zhi Sheng Chen
+
+Licensed under the PolyForm Noncommercial License 1.0.0 (the "License").
+You may not use this file except in compliance with the License. Any
+commercial use requires a separate commercial license from the copyright
+holder.
+
+You may obtain a copy of the License at:
+    https://polyformproject.org/licenses/noncommercial/1.0.0
+
+Or see the LICENSE file in the root of this repository.
+
+This software is provided "as is", without warranty of any kind, express or
+implied. See the License for the specific language governing permissions
+and limitations.
+"""
+
 import os
 import sys
 import numpy as np
@@ -874,8 +892,9 @@ def createTopoSet(templateLoc,geomDict,fullCaseSetupDict):
         actions.append(cellSetTemplate.replace('ZONE_NAME',zoneName).replace('SURF_FILE',surfFile).replace('OUTSIDE_POINT',outsidePoint))
         actions.append(cellZoneTemplate.replace('ZONE_NAME',zoneName))
 
-    if not actions:
-        return False
+    #commented out to write blank anyways, so any existing topoSetDict is overwritten and the user doesn't have to manually delete it
+    # if not actions:
+    #     return False
 
     print('\tWriting out system/topoSetDict for ansaMesh porous/MRF regions...')
     topoSetDict = '''/*--------------------------------*- C++ -*----------------------------------*\\
@@ -947,9 +966,8 @@ def createGroundPatch(templateLoc,geomDict,fullCaseSetupDict):
         actions.append(faceSubsetTemplate.replace('FACE_SET',faceSet))
         patches.append(patchTemplate.replace('FACE_SET',faceSet))
 
-    #commented out because in cases where there exists a topoSetDict it will overwrite and clear it out if not used
-    # if not actions:
-    #     return False
+    if not actions:
+        return False
 
     header = '''/*--------------------------------*- C++ -*----------------------------------*\\
 | =========                 |                                                 |
