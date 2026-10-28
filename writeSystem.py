@@ -892,8 +892,9 @@ def createTopoSet(templateLoc,geomDict,fullCaseSetupDict):
         actions.append(cellSetTemplate.replace('ZONE_NAME',zoneName).replace('SURF_FILE',surfFile).replace('OUTSIDE_POINT',outsidePoint))
         actions.append(cellZoneTemplate.replace('ZONE_NAME',zoneName))
 
-    if not actions:
-        return False
+    #commented out to write blank anyways, so any existing topoSetDict is overwritten and the user doesn't have to manually delete it
+    # if not actions:
+    #     return False
 
     print('\tWriting out system/topoSetDict for ansaMesh porous/MRF regions...')
     topoSetDict = '''/*--------------------------------*- C++ -*----------------------------------*\\
