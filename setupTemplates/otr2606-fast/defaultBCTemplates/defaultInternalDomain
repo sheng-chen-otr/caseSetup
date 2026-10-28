@@ -1,0 +1,7 @@
+[INTERNAL_DOMAIN]
+PATCH_TYPE = symmetry
+INLET_VEL = default
+PATCH_MOV = default
+
+
+

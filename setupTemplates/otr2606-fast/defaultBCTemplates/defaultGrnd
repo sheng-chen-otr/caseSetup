@@ -1,0 +1,7 @@
+[GRND_SETUP]
+GRND_TYPE = moving
+GRND_VEL = default
+GRND_WALL_MODEL = high
+
+
+

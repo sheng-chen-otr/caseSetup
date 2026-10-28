@@ -1,0 +1,2 @@
+variable,equation,label,range,color
+CpMean,pMean/(0.5*UREF**2),$\overline{C}_p$,[-1.5,1.5],Cool To Warm

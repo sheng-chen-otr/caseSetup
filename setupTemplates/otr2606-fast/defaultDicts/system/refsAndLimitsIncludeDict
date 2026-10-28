@@ -1,0 +1,7 @@
+pRefCell        0;
+pRefValue       0;
+
+pMin pMin [0 2 -2 0 0 0 0] -20000;
+pMax pMax [0 2 -2 0 0 0 0]  20000;
+
+

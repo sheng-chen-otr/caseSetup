@@ -1,0 +1,70 @@
+#===FILEINFO:VERSION_CREATED:25.10.100 LAST_VERSION_MODIFIED:25.10.100===
+# 
+# ANSA Version
+#
+    ANSA_Version = 25.10.100
+# 
+
+# Octree Options
+# 
+    octree_parameters_name = octree
+    curvature_minimum_length = 1.
+    maximum_surface_length = 1024.
+    maximum_length = 1024.
+    distortion_angle = 25.
+    distortion_angle_check_box = true
+    sharp_edges_angle_limit = 40.
+    sharp_angle_check_box = true
+    sharp_edges_length = 1.
+    sharp_edges_check_box = true
+    free_edges_length = 1.
+    free_edges_check_box = true
+    buffer_zones = 3
+    pid_bounds = true
+    intersection_lines_check_box = true
+    intersection_lines_angle_limit = 20.
+    special_perimeters = true
+    feature_bounds = true
+    proximity = true
+    detect_proximity_with_any_property = true
+    self_proximity = true
+    oriented_proximity = true
+    proximity_minimum_length = 1.
+    coordinate_sys_auto = 
+    coordinate_sys_id = 0
+    delete_input_representation = false
+    gap_resolution_mode = High detail
+    domain_box_id = 0
+# 
+
+# Hextreme Options
+# 
+    hextreme_method = Snap
+    smooth_iterations = 15
+    hextreme_light_volume_representation = true
+    conformal_mesh_at_internal_bounds = true
+    hextreme_maximum_non_orthogonality = 70.
+    hextreme_preserve_violating_layers_when_aspect = 30.
+    hextreme_preserve_violating_layers_when_aspect_check_box = true
+    hextreme_layers_flag = true
+    hextreme_number_of_layers_value = 1
+    hextreme_layers_first_layer_height = 0.2
+    hextreme_growth_rate_method = Constant
+    hextreme_layers_growth_rate = 1.2
+    hextreme_layers_variable_growth_factor = 
+    hextreme_layers_size_mode = Absolute
+    symmetry_direction = Y+
+    hextreme_connect_to_symmetry = true
+    max_layer_aspect = 0.5
+    maximum_allowed_aspect_option = local collapse
+    minimum_number_of_layers_on_max_aspect_collapse = 1
+    hextreme_maximum_skewness = 4.
+# 
+# Volume Fix Quality
+# 
+    fix_solid_elements_general_flag = true
+    fix_solid_constrained_layer_nodes = true
+    fix_volume_external_bounds = constrained
+    maximum_distance_from_external_bounds = 0.1*local
+    fix_volume_pid_bounds = unconstrained
+    maximum_distance_from_pid_bounds = 0.1*local

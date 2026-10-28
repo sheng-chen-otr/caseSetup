@@ -1,0 +1,7 @@
+[slurm]
+HEADER = #SBATCH --nodes=NUM_NODES
+	#SBATCH --ntasks-per-node=TASK_PER_NODE
+	#SBATCH --partition=PARTITION_NAME
+	#SBATCH --output=01_%x_meshing_%j.out
+	#SBATCH --exclusive
+	#SBATCH --job-name=JOB_CODE_CASENAME_SYMMETRY
