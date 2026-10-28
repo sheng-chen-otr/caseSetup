@@ -12,7 +12,7 @@
 
             "decomposePar":"if [ $? != 0 ]; then exit 1; fi; echo 'running decomposePar...'; ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec decomposePar -copyZero -constant>> log.decomposePar;",
 
-            "getFvDict":"if [ -f system/fvSchemesSimple ]; then cp system/fvSchemesSimple system/fvSchemes; cp system/fvSolutionSimple system/fvSolution; elif [ -f system/fvSchemesPiso ]; then cp system/fvSchemesPiso; system/fvSchemes; cp system/fvSolutionPiso system/fvSolution; else echo 'ERROR! Unable to find the right fvSchemes or fvSolution files for the appropriate simulation type!' exit 1; fi;",
+            "getFvDict":"if [ -f system/fvSchemesSimple ]; then cp system/fvSchemesSimple system/fvSchemes; cp system/fvSolutionSimple system/fvSolution; elif [ -f system/fvSchemesPiso ]; then cp system/fvSchemesPiso; system/fvSchemes; cp system/fvSolutionPiso system/fvSolution; elif [ -f system/fvSchemesSRFSimple ]; then cp system/fvSchemesSRFSimple system/fvSchemes; cp system/fvSolutionSRFSimple system/fvSolution; else echo 'ERROR! Unable to find the right fvSchemes or fvSolution files for the appropriate simulation type!' exit 1; fi;",
 
             "snappyHexMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running snappyHexMesh...'; /usr/bin/mpirun ~/openFoam/CODEHOST/OFSource/$VERSION/bin/tools/foamExec snappyHexMesh -parallel -overwrite >> log.snappyHexMesh;",
 
