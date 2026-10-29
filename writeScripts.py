@@ -90,8 +90,6 @@ def makeScripts(templateLoc,fullCaseSetupDict):
         for line in clusterDict[meshKey].keys():
             meshingScriptArray.append(clusterDict[meshKey][line])
         meshingScript = '\n'.join(meshingScriptArray)
-        with open('meshingScript', 'w') as m:
-            m.write(meshingScript)
 
     #srf cornering solves in the rotating frame with CORNER_SOLVER, so skip the
     #absolute-frame initialisers (they'd seed a bad field)
@@ -170,6 +168,10 @@ def makeScripts(templateLoc,fullCaseSetupDict):
         with open('solveScript', 'w') as m:
             m.write(solveScript)
 
+    #write the meshing script only after the cornering swaps above have been applied to it
+    if meshKey in clusterDict.keys():
+        with open('meshingScript', 'w') as m:
+            m.write(meshingScript)
 
     if 'export' in clusterDict.keys():
         for line in clusterDict['export'].keys():

@@ -9,7 +9,7 @@
 
             "decomposePar":"if [ $? != 0 ]; then exit 1; fi; echo 'running decomposePar...'; decomposePar -copyZero -constant>> log.decomposePar;",
 
-            "getFvDict":"if [ -f system/fvSchemesSimple ]; then cp system/fvSchemesSimple system/fvSchemes; cp system/fvSolutionSimple system/fvSolution; elif [ -f system/fvSchemesPiso ]; then cp system/fvSchemesPiso; system/fvSchemes; cp system/fvSolutionPiso system/fvSolution; else echo 'ERROR! Unable to find the right fvSchemes or fvSolution files for the appropriate simulation type!' exit 1; fi;",
+            "getFvDict":"if [ -f system/fvSchemesSimple ]; then cp system/fvSchemesSimple system/fvSchemes; cp system/fvSolutionSimple system/fvSolution; elif [ -f system/fvSchemesPiso ]; then cp system/fvSchemesPiso system/fvSchemes; cp system/fvSolutionPiso system/fvSolution; else echo 'ERROR! Unable to find the right fvSchemes or fvSolution files for the appropriate simulation type!'; exit 1; fi;",
 
             "snappyHexMesh":"if [ $? != 0 ]; then exit 1; fi; echo 'running snappyHexMesh...';mpirun -np $CORES snappyHexMesh -parallel -overwrite >> log.snappyHexMesh;",
 
