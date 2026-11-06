@@ -83,6 +83,102 @@ def _distance(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.linalg.norm(a - b))
 
 
+# solver result is a failure when the leftover constraint error is above this (m)
+RESIDUAL_TOL = 1e-6
+
+# names of the 8 solver constraints, in residual order, for error messages
+CONSTRAINT_NAMES = (
+    "UCA front leg length",
+    "UCA rear leg length",
+    "LCA front leg length",
+    "LCA rear leg length",
+    "tie rod length",
+    "pushrod length",
+    "wheel centre height",
+    "steer / rack travel",
+)
+
+# pushrod mount detection thresholds (m)
+_MOUNT_ON_ARM_TOL = 0.005      # closer than this to an arm triangle -> mounted on it
+_MOUNT_AMBIGUOUS_RATIO = 0.2   # distances within 20% of each other -> can't tell
+
+
+def _closest_point_on_triangle(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
+    # closest point to p on triangle abc (Ericson, Real-Time Collision Detection 5.1.5)
+    ab = b - a
+    ac = c - a
+    ap = p - a
+    d1 = np.dot(ab, ap)
+    d2 = np.dot(ac, ap)
+    if d1 <= 0.0 and d2 <= 0.0:
+        return a
+    bp = p - b
+    d3 = np.dot(ab, bp)
+    d4 = np.dot(ac, bp)
+    if d3 >= 0.0 and d4 <= d3:
+        return b
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0.0 and d1 >= 0.0 and d3 <= 0.0:
+        return a + (d1 / (d1 - d3)) * ab
+    cp = p - c
+    d5 = np.dot(ab, cp)
+    d6 = np.dot(ac, cp)
+    if d6 >= 0.0 and d5 <= d6:
+        return c
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0.0 and d2 >= 0.0 and d6 <= 0.0:
+        return a + (d2 / (d2 - d6)) * ac
+    va = d3 * d6 - d5 * d4
+    if va <= 0.0 and (d4 - d3) >= 0.0 and (d5 - d6) >= 0.0:
+        return b + ((d4 - d3) / ((d4 - d3) + (d5 - d6))) * (c - b)
+    denom = 1.0 / (va + vb + vc)
+    return a + ab * (vb * denom) + ac * (vc * denom)
+
+
+def resolve_pushrod_mount(hardpoints: Dict[str, object]) -> str:
+    """
+    Which wishbone ('uca' or 'lca') the pushrod outer end is bolted to, from
+    PUSHROD_OUTER_STATIC. Each wishbone is the triangle of its two inner mounts and outer
+    joint; the nearest triangle wins. Raises ValueError when the point is about equally far
+    from both (not a real mounting, usually a coordinate typo). Hardpoints in metres.
+    """
+    p = _as_vec3(hardpoints["pushrod_outer_static"], "pushrod_outer_static")
+    dist = {}
+    for arm in ("uca", "lca"):
+        a = _as_vec3(hardpoints["%s_f_inner" % arm], "%s_f_inner" % arm)
+        b = _as_vec3(hardpoints["%s_r_inner" % arm], "%s_r_inner" % arm)
+        c = _as_vec3(hardpoints["%s_outer_static" % arm], "%s_outer_static" % arm)
+        dist[arm] = float(np.linalg.norm(p - _closest_point_on_triangle(p, a, b, c)))
+
+    nearest = min(dist, key=dist.get)
+    other = "lca" if nearest == "uca" else "uca"
+    if dist[nearest] < _MOUNT_ON_ARM_TOL:
+        return nearest
+    if dist[other] - dist[nearest] <= _MOUNT_AMBIGUOUS_RATIO * dist[other]:
+        raise ValueError(
+            "PUSHROD_OUTER_STATIC (%.1f, %.1f, %.1f) mm is %.1f mm from the UCA and %.1f mm from the LCA, "
+            "can't tell which wishbone it is mounted on. Check the coordinates."
+            % (p[0] * 1000.0, p[1] * 1000.0, p[2] * 1000.0, dist["uca"] * 1000.0, dist["lca"] * 1000.0)
+        )
+    return nearest
+
+
+def _signed_angle_about_axis(axis_point: np.ndarray, axis_unit: np.ndarray,
+                             p_from: np.ndarray, p_to: np.ndarray) -> float:
+    # angle about the hinge line that swings p_from onto p_to (perpendicular parts only)
+    a = p_from - axis_point
+    b = p_to - axis_point
+    a = a - np.dot(a, axis_unit) * axis_unit
+    b = b - np.dot(b, axis_unit) * axis_unit
+    na = np.linalg.norm(a)
+    nb = np.linalg.norm(b)
+    if na <= 1e-15 or nb <= 1e-15:
+        return 0.0
+    a = a / na
+    b = b / nb
+    return math.atan2(float(np.dot(np.cross(a, b), axis_unit)), float(np.clip(np.dot(a, b), -1.0, 1.0)))
+
+
 class DoubleWishbonePushrodSolver:
     """
     solve wheel/upright kinematics for a double wishbone + pushrod/rocker corner.
@@ -92,7 +188,10 @@ class DoubleWishbonePushrodSolver:
 
     required hardpoint keys: wheel_center_static, uca/lca/tie inner+outer, pushrod_outer_static,
     rocker {pivot, axis, pushrod_joint_ref, damper_joint_ref, damper_chassis}.
-    optional: wheel_axis_local ([0,1,0]), wheel_forward_local ([1,0,0]).
+    optional: wheel_axis_local ([0,1,0]), wheel_forward_local ([1,0,0]),
+    pushrod_mount ('uca'/'lca', detected from pushrod_outer_static when missing).
+    the pushrod outer end is bolted to a wishbone, so it swings with that arm about the
+    arm's inner-mount axis. the vehicle centreline is y = 0.
     """
 
     def __init__(self, hardpoints: Dict[str, object]):
@@ -112,16 +211,32 @@ class DoubleWishbonePushrodSolver:
             "tie": _as_vec3(self.hp["tie_inner"], "tie_inner"),
         }
 
+        # points rigid on the upright
         self.outer0_global = {
             "uca": _as_vec3(self.hp["uca_outer_static"], "uca_outer_static"),
             "lca": _as_vec3(self.hp["lca_outer_static"], "lca_outer_static"),
             "tie": _as_vec3(self.hp["tie_outer_static"], "tie_outer_static"),
-            "pushrod": _as_vec3(self.hp["pushrod_outer_static"], "pushrod_outer_static"),
             "wheel_center": wc0,
         }
 
         # upright local frame starts aligned to global at the static pose
         self.outer_local = {k: (v - wc0) for k, v in self.outer0_global.items()}
+
+        # pushrod outer end rides on a wishbone, not the upright
+        self.pushrod_outer_static = _as_vec3(self.hp["pushrod_outer_static"], "pushrod_outer_static")
+        mount = self.hp.get("pushrod_mount") or resolve_pushrod_mount(self.hp)
+        mount = str(mount).strip().lower()
+        if mount not in ("uca", "lca"):
+            raise ValueError("pushrod_mount must be 'uca' or 'lca', got %r" % (mount,))
+        self.pushrod_mount = mount
+        self.mount_hinge_point = self.inner["%s_f" % mount]
+        self.mount_hinge_axis = _normalize(self.inner["%s_r" % mount] - self.inner["%s_f" % mount],
+                                           "%s hinge axis" % mount)
+
+        # inboard direction: towards the centreline y = 0
+        if abs(wc0[1]) < 1e-9:
+            raise ValueError("wheel_center_static y is 0, can't tell which side of the car the wheel is on")
+        self.inboard_y = -1.0 if wc0[1] > 0.0 else 1.0
 
         rocker_dict = self.hp["rocker"]
         self.rocker = RockerConfig(
@@ -158,7 +273,7 @@ class DoubleWishbonePushrodSolver:
             "lca_f": _distance(o["lca"], i["lca_f"]),
             "lca_r": _distance(o["lca"], i["lca_r"]),
             "tie": _distance(o["tie"], i["tie"]),
-            "pushrod": _distance(o["pushrod"], self.rocker.pushrod_joint_ref),
+            "pushrod": _distance(self.pushrod_outer_static, self.rocker.pushrod_joint_ref),
             "damper": _distance(self.rocker.damper_joint_ref, self.rocker.damper_chassis),
         }
 
@@ -180,6 +295,15 @@ class DoubleWishbonePushrodSolver:
     def _upright_global_points(self, rvec: np.ndarray, wheel_center: np.ndarray) -> Dict[str, np.ndarray]:
         R = _rodrigues(rvec)
         return {k: (R @ v_local) + wheel_center for k, v_local in self.outer_local.items()}
+
+    def _pushrod_outer(self, pg: Dict[str, np.ndarray]) -> np.ndarray:
+        # the mount arm's angle is set by where its outer ball joint is; swing the static
+        # pushrod point about the arm's inner-mount axis by the same angle
+        arm = self.pushrod_mount
+        theta = _signed_angle_about_axis(self.mount_hinge_point, self.mount_hinge_axis,
+                                         self.outer0_global[arm], pg[arm])
+        return _rotate_about_axis(self.pushrod_outer_static, self.mount_hinge_point,
+                                  self.mount_hinge_axis, theta)
 
     def _toe_rad_from_rvec(self, rvec: np.ndarray) -> float:
         R = _rodrigues(rvec)
@@ -209,7 +333,7 @@ class DoubleWishbonePushrodSolver:
         res[2] = _distance(pg["lca"], self.inner["lca_f"]) - self.lengths["lca_f"]
         res[3] = _distance(pg["lca"], self.inner["lca_r"]) - self.lengths["lca_r"]
         res[4] = _distance(pg["tie"], tie_inner) - self.lengths["tie"]
-        res[5] = _distance(pg["pushrod"], rk["pushrod"]) - self.lengths["pushrod"]
+        res[5] = _distance(self._pushrod_outer(pg), rk["pushrod"]) - self.lengths["pushrod"]
         res[6] = wc[2] - target_wheel_z
 
         # 8th constraint closes the rack DOF: prescribe rack travel, prescribe toe angle, or lock at zero
@@ -307,6 +431,7 @@ class DoubleWishbonePushrodSolver:
         rack_travel = float(x[7])
 
         pg = self._upright_global_points(rvec, wheel_center)
+        pg["pushrod"] = self._pushrod_outer(pg)
         rk = self._rocker_points(theta)
         damper_len = _distance(rk["damper"], self.rocker.damper_chassis)
 
@@ -314,7 +439,11 @@ class DoubleWishbonePushrodSolver:
         wheel_axis_global = _normalize(R @ self.wheel_axis_local, "wheel_axis_global")
         wheel_forward_global = _normalize(R @ self.wheel_forward_local, "wheel_forward_global")
 
-        camber_deg = math.degrees(math.atan2(wheel_axis_global[2], abs(wheel_axis_global[1]) + 1e-15))
+        # camber relative to the car body: spin axis flipped to point inboard so the sign does not
+        # depend on how WHEEL_AXIS_LOCAL was entered. negative = top of the wheel leaning inboard.
+        # asin of the vertical part keeps it independent of steer
+        axis_inboard = wheel_axis_global if wheel_axis_global[1] * self.inboard_y >= 0.0 else -wheel_axis_global
+        camber_deg = math.degrees(math.asin(float(np.clip(axis_inboard[2], -1.0, 1.0))))
         toe_deg = math.degrees(math.atan2(wheel_forward_global[1], wheel_forward_global[0] + 1e-15))
 
         residual = self._residual(x, target_z, steer, steer_mode)
@@ -338,7 +467,34 @@ class DoubleWishbonePushrodSolver:
             "rack_travel": rack_travel,
             "residual_norm": float(np.linalg.norm(residual)),
             "residual": residual,
+            "rocker_at_limit": abs(theta) >= (math.pi / 2.0 - 1e-6),
+            "pushrod_mount": self.pushrod_mount,
         }
+
+    @staticmethod
+    def describe_failure(solved: Dict[str, object], wheel_dz: float, steer: float, steer_mode: str) -> str:
+        """readable explanation of a solve whose residual is above RESIDUAL_TOL (lengths in m)."""
+        residual = np.asarray(solved["residual"], dtype=np.float64)
+        order = np.argsort(-np.abs(residual))
+        lines = []
+        for i in order[:3]:
+            if abs(residual[i]) <= RESIDUAL_TOL:
+                break
+            lines.append("%s off by %.3f mm" % (CONSTRAINT_NAMES[i], residual[i] * 1000.0))
+        if steer_mode == "angle":
+            steerText = "steer %.3f deg" % (steer,)
+        elif steer_mode == "rack":
+            steerText = "rack travel %.3f mm" % (steer * 1000.0,)
+        else:
+            steerText = "no steer"
+        msg = ("suspension solve did not converge for wheel travel %.3f mm, %s (leftover error %.4f mm).\n"
+               "\tLargest constraint errors: %s"
+               % (wheel_dz * 1000.0, steerText, solved["residual_norm"] * 1000.0, "; ".join(lines)))
+        if solved.get("rocker_at_limit"):
+            msg += "\n\tThe rocker hit its +/-90 deg limit."
+        msg += ("\n\tLikely causes: the requested travel/steer is beyond what the linkage can reach, a "
+                "hardpoint typo, or wrong units (check HARDPOINT_SCALE).")
+        return msg
 
     def sweep_wheel_travel(self, wheel_dz_values: List[float]) -> List[Dict[str, object]]:
         out = []
@@ -362,7 +518,7 @@ if __name__ == "__main__":
         "uca_outer_static": [1.42, 0.77, 0.47],
         "lca_outer_static": [1.43, 0.79, 0.20],
         "tie_outer_static": [1.40, 0.76, 0.27],
-        "pushrod_outer_static": [1.39, 0.75, 0.25],
+        "pushrod_outer_static": [1.43, 0.79, 0.20],  # on the LCA outer joint
         "rocker": {
             "pivot": [1.00, 0.35, 0.55],
             "axis": [1.0, 0.0, 0.0],

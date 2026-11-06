@@ -177,7 +177,8 @@ def main():
                 rideHeights = calculateRideHeights(fullCaseSetupDict)
                 rideHeights = createRideHeightCases(rideHeights, fullCaseSetupDict)
                 rideHeights = transformGeom(fullCaseSetupDict,rideHeights,geomDict)
-                runRHCaseSetup(rideHeights,fullCaseSetupDict)
+                runRHCaseSetup(rideHeights,fullCaseSetupDict,SETUP)
+                writeExecuteAllScript(rideHeights,fullCaseSetupDict)
             
             else:
                 makeScripts(templateLoc,fullCaseSetupDict)

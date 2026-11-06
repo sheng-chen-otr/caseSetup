@@ -1,4 +1,4 @@
-{"snappyHexMesh":{"header":"#!/bin/bash\n#SBATCH --nodes=2\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve2\n#SBATCH --output=01_%x_meshing_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_MS035_half_half",
+{"snappyHexMesh":{"header":"#!/bin/bash\n#SBATCH --nodes=2\n#SBATCH --ntasks-per-node=36\n#SBATCH --partition=solve2\n#SBATCH --output=01_%x_meshing_%j.out\n#SBATCH --exclusive\n#SBATCH --job-name=TS_MS035_half_half\n#SBATCH -L ansa:1",
 
             "precision":"SP=FALSE; VERSION=of2606; cd $SLURM_SUBMIT_DIR; if [ SP = 'TRUE' ]; then echo 'Running Meshing Script in SP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=SP; else echo 'Running Meshing Script in DP!'; . ~/openFoam/CODEHOST/OFSource/$VERSION/etc/bashrc WM_PRECISION_OPTION=DP; fi",
 

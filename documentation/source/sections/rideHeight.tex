@@ -1,7 +1,7 @@
 \section{Ride-Height and Suspension Kinematics}
 \codeword{caseSetup} can automatically generate a family of child cases, each at a different ride-height state, and deform the geometry to follow the actual suspension motion. There are two ways this is done:
 \begin{itemize}
-    \item \codeword{simple} - the wheels (and any \codeword{ROTA} geometry) are translated vertically by the requested corner displacement. No suspension linkage is required.
+    \item \codeword{simple} - each \codeword{ROTA} geometry file is translated vertically by its corner's wheel movement. The corner is found from the file's position relative to \codeword{REFCOR}: front when it lies at smaller \codeword{x} than \codeword{REFCOR}, left when it lies at smaller \codeword{y}. Each \codeword{ROTA} file must contain a single wheel, a file that spans across \codeword{REFCOR} in \codeword{x} or \codeword{y} stops \codeword{caseSetup} with an error. No suspension linkage is required.
 
     \item \codeword{kinematic} - a double wishbone and pushrod kinematic solver computes the realistic motion of every suspension component (wheel camber and toe, control arm rotation, rocker angle, damper stroke) and applies a per-component transform to the matching parts of the geometry.
 \end{itemize}
@@ -33,28 +33,30 @@ Deleting the module \codeword{defaultRideHeight} will expose the following block
 
     \item \codeword{USE_DEPEND} [\codeword{bool}] - reuse child case dependencies and links when they are already present (\codeword{True}, \codeword{False})
 
-    \item \codeword{RH_UNIT} [\codeword{str}] - unit of the corner displacements in the ride-height file (\codeword{mm}, \codeword{m})
+    \item \codeword{RH_UNIT} [\codeword{str}] - unit of the corner values in the ride-height file and of \codeword{INIT_RH}, any other value is an error (\codeword{mm}, \codeword{m})
 
-    \item \codeword{INIT_RH} [\codeword{float}] - optional initial ride-height offset applied to all points (\codeword{float})
+    \item \codeword{INIT_RH} [[\codeword{float}] [\codeword{float}] [\codeword{float}] [\codeword{float}]] - optional ride heights of the geometry as supplied, at FL FR RL RR. When given, the corner columns of the ride-height file are the target ride heights and the change applied is target minus \codeword{INIT_RH}. When blank, the corner columns are the changes from the supplied geometry. Any number of values other than 0 or 4 is an error (\codeword{float} \codeword{float} \codeword{float} \codeword{float})
 
     \item \codeword{RH_REF_WIDTH} [[\codeword{float,m}]] - optional reference track width used when converting corner displacements into pitch, roll and heave (\codeword{float})
 
     \item \codeword{RH_REF_LEN} [[\codeword{float,m}]] - optional reference wheelbase used when converting corner displacements into pitch, roll and heave (\codeword{float})
 
-    \item \codeword{USE_KINEMATIC_SOLVER} [\codeword{bool}] - enable the double wishbone and pushrod solver and the per-component geometry deformation, when \codeword{False} only simple vertical wheel translation is applied (\codeword{True}, \codeword{False})
+    \item \codeword{USE_KINEMATIC_SOLVER} [\codeword{bool}] - enable the double wishbone and pushrod solver and the per-component geometry deformation, when \codeword{False} only simple vertical wheel translation is applied. When \codeword{True}, a missing or invalid hardpoint file, or a corner the solver cannot solve, stops \codeword{caseSetup} with an error (\codeword{True}, \codeword{False})
 
     \item \codeword{HARDPOINT_FILE} [\codeword{str}] - path to the suspension hardpoint definition file, required when \codeword{USE_KINEMATIC_SOLVER} is \codeword{True} (\codeword{str})
 
     \item \codeword{HARDPOINT_SCALE} [\codeword{float}] - multiplier applied to every hardpoint coordinate to convert it to metres, use \codeword{0.001} if the hardpoint file is written in millimetres or \codeword{1.0} if it is already in metres (\codeword{float})
 
-    \item \codeword{SUSP_REQUIRE_ALL_PIDS_MATCHED} [\codeword{bool}] - when \codeword{True}, \codeword{caseSetup} stops with an error if any geometry part fails to match a suspension component, when \codeword{False} unmatched parts are left untouched and a warning is logged (\codeword{True}, \codeword{False})
+    \item \codeword{SUSP_REQUIRE_ALL_PIDS_MATCHED} [\codeword{bool}] - when \codeword{True}, \codeword{caseSetup} stops with an error if a geometry file that contains suspension parts also contains a part matching no keyword. Files with no suspension parts, such as the body, are not checked. When \codeword{False} unmatched parts are left untouched (\codeword{True}, \codeword{False})
 \end{itemize}
-To run a ride-height study, set \codeword{RUN_RIDE_HEIGHT} to \codeword{True} and run \codeword{caseSetup} as normal. Child cases are then created and built automatically.
+To run a ride-height study, set \codeword{RUN_RIDE_HEIGHT} to \codeword{True} and run \codeword{caseSetup} as normal. Child cases are then created and built automatically, using the same setup template (\codeword{-s}) and Python as the parent. If \codeword{caseSetup} fails in a child case, the run stops with an error naming that child.
+
+The pitch, roll and heave of each point are computed from the corner changes. Heave is the average change at the wheelbase centre and is added to the parent's \codeword{REFCOR} height, so a point with all corners at zero change produces a child identical to the parent.
 
 \textbf{NOTE:} \codeword{--rideHeightMode} is an internal flag used by \codeword{caseSetup} when it re-invokes itself inside each generated child case, it should not be supplied by the user.
 
 \subsection{The Ride-Height File}
-The ride-height file is a comma separated table where each row is one suspension state. The corner columns are the vertical wheel displacements in the unit set by \codeword{RH_UNIT}.
+The ride-height file is a comma separated table where each row is one suspension state. The corner columns are ride-height changes, or target ride heights when \codeword{INIT_RH} is set, in the unit set by \codeword{RH_UNIT}.
 \begin{lstlisting}
     point,fl,fr,rl,rr,yaw,steer
     1,0,0,0,0,0,0
@@ -66,9 +68,9 @@ The ride-height file is a comma separated table where each row is one suspension
 \begin{itemize}
     \item \codeword{point} [\codeword{int}] - unique index for the state, referenced by \codeword{RUN_RH_POINTS} and used to name the child case, for example \codeword{001_2} (\codeword{int})
 
-    \item \codeword{fl}, \codeword{fr}, \codeword{rl}, \codeword{rr} [[\codeword{float}]] - front-left, front-right, rear-left and rear-right wheel vertical displacements, negative values typically indicate compression (bump) and positive values rebound (droop) (\codeword{float})
+    \item \codeword{fl}, \codeword{fr}, \codeword{rl}, \codeword{rr} [[\codeword{float}]] - front-left, front-right, rear-left and rear-right ride height. With \codeword{INIT_RH} blank this is the change from the supplied geometry (positive raises the car at that corner), otherwise it is the target ride height (\codeword{float})
 
-    \item \codeword{yaw} [[\codeword{float,deg}]] - vehicle yaw angle for that state, \codeword{0} for straight-line (\codeword{float})
+    \item \codeword{yaw} [[\codeword{float,deg}]] - optional vehicle yaw (slip) angle for that state, added to the parent \codeword{YAW}. In straight-line cases it rotates the inlet velocity. In cornering cases the car stays fixed and the turn centre is rotated about \codeword{REFCOR} by the yaw, so the car sits at that slip angle to its path. Positive yaw turns the flow toward \codeword{+y} in both cases. Points with non-zero yaw are skipped in half-symmetry runs. \codeword{0} or omitted for none (\codeword{float})
 
     \item \codeword{steer} [[\codeword{float,deg}]] - optional front road-wheel steering angle for that state, see Section \codeword{Steering}, \codeword{0} or omitted for no steer (\codeword{float})
 \end{itemize}
@@ -86,21 +88,21 @@ The rack pushes the tie rod inner joint along the lateral (\codeword{y}) directi
 When the kinematic solver is enabled, the geometry of each corner's linkage is described in the hardpoint file pointed to by \codeword{HARDPOINT_FILE}. A template is provided at \codeword{rideHeightUtils/suspensionHardpoints_template.cfg}. It uses the same format as the \codeword{caseSetup} file, with one section per corner, \codeword{[SUSP_FL]}, \codeword{[SUSP_FR]}, \codeword{[SUSP_RL]} and \codeword{[SUSP_RR]}. Each corner section looks like this:
 \begin{lstlisting}
     [SUSP_FL]
-    WHEEL_CENTER_STATIC = 0 -781.03 356.57
-    UCA_F_INNER = -64.67 -157.20 500.45
-    UCA_R_INNER = 417.86 -157.20 488.42
-    LCA_F_INNER = -89.37 -157.20 330.51
-    LCA_R_INNER = 416.49 -157.20 350.42
-    TIE_INNER = -127.85 -157.20 330.51
-    UCA_OUTER_STATIC = 33.03 -707.27 520.88
-    LCA_OUTER_STATIC = 12.36 -737.95 331.40
-    TIE_OUTER_STATIC = -58.25 -706.55 461.63
-    PUSHROD_OUTER_STATIC = 12.36 -737.95 331.40
-    ROCKER_PIVOT = 61.44 -77.24 544.58
+    WHEEL_CENTER_STATIC = 0 -619.1 201.78
+    UCA_F_INNER = -172.4 -246.77 307.4
+    UCA_R_INNER = 131.3 -245.8 307.5
+    LCA_F_INNER = -124.4 -209.1 137.3
+    LCA_R_INNER = 142.3 -209.3 153.7
+    TIE_INNER = 80 -213.51 194.4
+    UCA_OUTER_STATIC = 17.8 -549.5 283.6
+    LCA_OUTER_STATIC = 4.32 -556 118.4
+    TIE_OUTER_STATIC = 78.8155 -525.2 163.6
+    PUSHROD_OUTER_STATIC = 18.95 -484.44 339.61
+    ROCKER_PIVOT = 18.855 -233.7 507.5
     ROCKER_AXIS = 1.0 0.0 0.0
-    ROCKER_PUSHROD_JOINT_REF = 61.09 -159.93 558.55
-    ROCKER_DAMPER_JOINT_REF = 61.44 -77.24 614.58
-    ROCKER_DAMPER_CHASSIS = 61.44 0 544.58
+    ROCKER_PUSHROD_JOINT_REF = 19.49 -273.77 544.15
+    ROCKER_DAMPER_JOINT_REF = 18.8 -240.6 562.9
+    ROCKER_DAMPER_CHASSIS = 19.635 -46.9 565.3
     WHEEL_AXIS_LOCAL = 0.0 1.0 0.0
     WHEEL_FORWARD_LOCAL = 1.0 0.0 0.0
     FL_UCA_PID = fluca
@@ -111,7 +113,7 @@ When the kinematic solver is enabled, the geometry of each corner's linkage is d
     FL_TIE_PID = fltie
     FL_WHEEL_PID = flwheel
 \end{lstlisting}
-All coordinates are given in the global coordinate system, in the units implied by \codeword{HARDPOINT_SCALE}, for example millimetres when \codeword{HARDPOINT_SCALE} is \codeword{0.001}.
+All coordinates are given in the global coordinate system, in the units implied by \codeword{HARDPOINT_SCALE}, for example millimetres when \codeword{HARDPOINT_SCALE} is \codeword{0.001}. The vehicle centreline is \codeword{y = 0}, left corners sit at negative \codeword{y}.
 \begin{itemize}
     \item \codeword{WHEEL_CENTER_STATIC} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - static wheel center position (\codeword{x} \codeword{y} \codeword{z})
 
@@ -125,7 +127,7 @@ All coordinates are given in the global coordinate system, in the units implied 
 
     \item \codeword{TIE_INNER}, \codeword{TIE_OUTER_STATIC} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - tie rod inner (chassis or rack) and outer (upright) mounts (\codeword{x} \codeword{y} \codeword{z})
 
-    \item \codeword{PUSHROD_OUTER_STATIC} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - pushrod to upright (or pushrod to lower control arm) joint (\codeword{x} \codeword{y} \codeword{z})
+    \item \codeword{PUSHROD_OUTER_STATIC} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - pushrod (or pullrod) to wishbone joint. The wishbone it is mounted on is detected from this point: each wishbone is the triangle formed by its two inner mounts and its outer joint, and the nearest triangle is used, so a pushrod on the lower wishbone and a pullrod on the upper wishbone are both handled. If the point is about equally far from both wishbones (distances within 20\% of each other and neither under 5 mm), \codeword{caseSetup} stops with an error (\codeword{x} \codeword{y} \codeword{z})
 
     \item \codeword{ROCKER_PIVOT} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - rocker rotation center (\codeword{x} \codeword{y} \codeword{z})
 
@@ -135,13 +137,13 @@ All coordinates are given in the global coordinate system, in the units implied 
 
     \item \codeword{ROCKER_DAMPER_CHASSIS} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - the chassis side damper mount (\codeword{x} \codeword{y} \codeword{z})
 
-    \item \codeword{WHEEL_AXIS_LOCAL}, \codeword{WHEEL_FORWARD_LOCAL} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - local spin axis and forward direction of the wheel, used to resolve camber and toe (\codeword{x} \codeword{y} \codeword{z})
+    \item \codeword{WHEEL_AXIS_LOCAL}, \codeword{WHEEL_FORWARD_LOCAL} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - local spin axis and forward direction of the wheel, used to resolve camber and toe. The spin axis may point inboard or outboard. Camber is reported relative to the car body, negative when the top of the wheel leans inboard, and is not affected by steer (\codeword{x} \codeword{y} \codeword{z})
 
     \item \codeword{RACK_AXIS} [[\codeword{float,m}] [\codeword{float,m}] [\codeword{float,m}]] - optional steering rack travel direction, the tie rod inner joint slides along this axis when a \codeword{steer} angle is requested, defaults to lateral \codeword{0 1 0} if omitted (\codeword{x} \codeword{y} \codeword{z})
 \end{itemize}
 
 \subsection{Component PID Keywords}
-Any key in a corner section whose name contains \codeword{PID} is treated as a part name keyword. Its value is matched against the group or solid names inside the OBJ or STL geometry to decide which faces belong to which suspension component. The match is case insensitive and is satisfied when the keyword appears as a substring of the part name.
+Part keys in a corner section are written as \codeword{<CORNER>_<COMPONENT>_PID = keyword}. The key decides which transform the parts receive, the value is a keyword searched for in the group or solid names inside the OBJ or STL geometry. A part is matched when its name contains the keyword anywhere. The match is case sensitive.
 \begin{itemize}
     \item \codeword{FL_WHEEL_PID} [\codeword{str}] - part keyword for the wheel (\codeword{str})
 
@@ -156,56 +158,57 @@ Any key in a corner section whose name contains \codeword{PID} is treated as a p
     \item \codeword{FL_DAMPER_PID} [\codeword{str}] - part keyword for the damper (\codeword{str})
 
     \item \codeword{FL_TIE_PID} [\codeword{str}] - part keyword for the tie rod (\codeword{str})
+
+    \item \codeword{FL_UPRIGHT_PID} [\codeword{str}] - part keyword for the upright and anything rigidly attached to it, such as brake ducts. It follows the full wheel pose (\codeword{str})
 \end{itemize}
-The same set of keys exist for the other corners using the \codeword{FR}, \codeword{RL} and \codeword{RR} prefixes. The keyword is automatically classified into a component type. Classification accepts the full component name as well as common abbreviations, so values such as \codeword{flprod} or \codeword{rlpr} are correctly recognised as a pushrod. The recognised keywords for each component are:
+The same set of keys exist for the other corners using the \codeword{FR}, \codeword{RL} and \codeword{RR} prefixes. The keyword itself can be any text, it does not need to contain the component name. For example \codeword{FL_PUSHROD_PID = fl_link_a} moves every part whose name contains \codeword{fl_link_a} with the front-left pushrod.
+
+The following are errors that stop \codeword{caseSetup}:
 \begin{itemize}
-    \item \codeword{UCA} - \codeword{uca}
-    \item \codeword{LCA} - \codeword{lca}
-    \item \codeword{ROCKER} - \codeword{rocker}, \codeword{rock}, \codeword{rkr}
-    \item \codeword{PUSHROD} - \codeword{pushrod}, \codeword{prod}, \codeword{pshrd}, \codeword{push}, \codeword{pr}
-    \item \codeword{DAMPER} - \codeword{damper}, \codeword{damp}, \codeword{shock}, \codeword{strut}
-    \item \codeword{WHEEL} - \codeword{wheel}, \codeword{whl}
-    \item \codeword{TIE} - \codeword{tie}, \codeword{tierod}, \codeword{trod}
+    \item a key containing \codeword{PID} that does not follow \codeword{<CORNER>_<COMPONENT>_PID}, or names an unknown component. Valid components are \codeword{UCA}, \codeword{LCA}, \codeword{ROCKER}, \codeword{PUSHROD}, \codeword{DAMPER}, \codeword{TIE}, \codeword{WHEEL} and \codeword{UPRIGHT}
+    \item a key whose corner does not match its section, for example \codeword{FR_UCA_PID} inside \codeword{[SUSP_FL]}
+    \item the same keyword used by two keys
+    \item a part whose name contains keywords belonging to two different components or corners. Containing two keywords of the same component is allowed
+    \item an OBJ vertex used by parts of two different components, for example a UCA part and an LCA part sharing a vertex. Each component must have its own vertices
 \end{itemize}
 
-\textbf{NOTE:} The keyword must be a substring of the actual part name in your geometry. For example a part group named \codeword{body_susp_fllca} is matched by the keyword \codeword{fllca}. If a part is not matched it is left in its static position. Set \codeword{SUSP_REQUIRE_ALL_PIDS_MATCHED} to \codeword{True} to turn unmatched parts into a hard error instead.
+These checks run once, before any ride height point is built.
+
+A keyword that matches no part in any geometry file is not an error. \codeword{caseSetup} prints a warning listing the keyword, its key, and any geometry files that could not be scanned (for example binary STL), and continues. The warning is printed once for the whole run. Those parts are not moved. If no keyword matches at all, the warning states that no suspension part will be moved and only the tunnel pitch, roll and heave are applied.
+
+\textbf{NOTE:} Parts that match no keyword, such as the bodywork, are copied unchanged. Geometry files that contain no suspension parts are copied to each child case as they are. In files that do contain suspension parts only the lines of moved vertices are rewritten, every other line is kept exactly as in the original file. Set \codeword{SUSP_REQUIRE_ALL_PIDS_MATCHED} to \codeword{True} to make any unmatched part inside a geometry file that contains suspension parts an error.
 
 \subsection{Optional Component Sections}
-Additional sections can attach extra geometry to a corner without that geometry being one of the primary kinematic parts. Any section that defines a \codeword{CORNER} key contributes its \codeword{PID} keywords to that corner. A usage example is shown below.
+Additional sections can attach extra geometry to a corner without that geometry being one of the primary kinematic parts. Any section that defines a \codeword{CORNER} key adds its part keys to that corner. A usage example is shown below.
 \begin{lstlisting}
     [SUSP_COMP_EXAMPLE_1]
     CORNER = fl
-    PID = fluca_bracket
+    UCA_PID = fluca_bracket
+    UPRIGHT_PID = fl_brake_duct
 \end{lstlisting}
 \begin{itemize}
     \item \codeword{CORNER} [\codeword{str}] - which corner this geometry belongs to (\codeword{fl}, \codeword{fr}, \codeword{rl}, \codeword{rr})
 
-    \item \codeword{PID} [\codeword{str}] - part keyword for the extra geometry, any key whose name contains \codeword{PID} is accepted (\codeword{str})
+    \item \codeword{<COMPONENT>_PID} [\codeword{str}] - part keyword for the extra geometry. The component in the key decides which transform it follows, using the same components as the corner sections. \codeword{<CORNER>_<COMPONENT>_PID} is also accepted if the corner matches \codeword{CORNER} (\codeword{str})
 \end{itemize}
-These sections do not introduce a transform of their own. They reuse the same machinery as the primary parts, so the choice of which component an optional part moves with is made in two steps:
-\begin{itemize}
-    \item \textbf{Which corner} - given by the \codeword{CORNER} key. The section's \codeword{PID} keywords are merged into that corner's keyword pool, exactly as if they had been written directly inside the matching corner section, for example \codeword{[SUSP_FL]}.
-
-    \item \textbf{Which component} - given by the text of the keyword itself. The keyword is classified using the same recognised keywords listed under \codeword{Component PID Keywords}, and the optional part inherits that component's translation, rotation and pivot.
-\end{itemize}
-In the example above, \codeword{fluca_bracket} contains \codeword{uca}, so it is classified as an upper control arm and rides with the front-left upper control arm transform. In the same way a keyword such as \codeword{frdamper_shroud} contains \codeword{damper} and follows the front-right damper, including its length morph, and a keyword containing \codeword{wheel} follows the wheel center motion.
-
-\textbf{NOTE:} If an optional keyword contains none of the recognised component keywords, for example \codeword{fl_aero_fairing}, it is not classified into any component, so no transform is assigned and the part is copied unchanged. To make an optional part follow a component, ensure its keyword contains the relevant keyword such as \codeword{uca}, \codeword{damper} or \codeword{wheel}.
+In the example above, parts containing \codeword{fluca_bracket} ride with the front-left upper control arm, and parts containing \codeword{fl_brake_duct} follow the front-left upright. A key without a component, such as \codeword{PID = fluca_bracket}, is an error.
 
 \subsection{Per-Component Transforms}
 For each ride-height point and corner the solver produces a transform for every component, made up of a translation, a rotation about an axis and a pivot point. How each component moves is summarised below.
 \begin{itemize}
     \item \codeword{WHEEL} - translates by the wheel center displacement and rotates with the camber and toe from the solver, about the static wheel center
 
-    \item \codeword{UCA} - rotates as its outer joint follows the wheel, about the midpoint of its inner chassis mounts
+    \item \codeword{UPRIGHT} - same motion as \codeword{WHEEL}
 
-    \item \codeword{LCA} - rotates as its outer joint follows the wheel, about the midpoint of its inner chassis mounts
+    \item \codeword{UCA} - rotates about the line through its two inner chassis mounts as its outer joint follows the wheel
+
+    \item \codeword{LCA} - rotates about the line through its two inner chassis mounts as its outer joint follows the wheel
 
     \item \codeword{ROCKER} - rotates in place by the rocker angle about the rocker axis, about the rocker pivot
 
-    \item \codeword{PUSHROD} - inherits the motion of the rocker, about the rocker pivot
+    \item \codeword{PUSHROD} - its inner end follows the rocker and its outer end swings with the wishbone it is mounted on, the same motion used by the solver, with its length preserved
 
-    \item \codeword{DAMPER} - inherits the motion of the rocker and stretches by the damper stroke, about the rocker pivot
+    \item \codeword{DAMPER} - its chassis end stays fixed, its rocker end follows the rocker, and it stretches by the damper stroke
 
     \item \codeword{TIE} - rotates as its outer end follows the wheel, about the tie rod inner mount, and when steering the inner end slides along the rack axis
 \end{itemize}
@@ -226,11 +229,13 @@ For every transformed geometry a log is written next to the output file, \codewo
 
 \subsection{Troubleshooting}
 \begin{itemize}
-    \item \codeword{PID scan skipped} - a geometry could not be processed by the PID aware path, for example an unsupported or binary format, so the file falls back to simple wheel translation. Check that the suspension geometry is ASCII OBJ or ASCII STL.
+    \item \codeword{WARNING: These hardpoint-file keywords matched no part} (or \codeword{NO SUSPENSION PART WILL BE MOVED}) - the keyword does not appear in any part name, so those parts were left in place. Matching is case sensitive. If the warning lists files that could not be scanned, convert any of them that contain suspension parts to ASCII OBJ or ASCII STL.
 
-    \item \codeword{Unmatched PID} - the keyword from the hardpoint file does not appear in any part name. Confirm the keyword is a substring of the actual part name, or add a recognised keyword.
+    \item \codeword{matches keywords from different suspension parts} - a part name contains keywords of two different components or corners. Make the keywords more specific.
+
+    \item \codeword{suspension solve did not converge} - the solver could not satisfy the linkage for that point and corner. The error lists the point, corner, requested travel and steer, the constraints with the largest error, and whether the rocker reached its limit. Usual causes are travel beyond the linkage range, a hardpoint typo, or wrong \codeword{HARDPOINT_SCALE}.
+
+    \item \codeword{can't tell which wishbone it is mounted on} - \codeword{PUSHROD_OUTER_STATIC} is about equally far from both wishbones. Check its coordinates.
 
     \item \codeword{Geometry not moving as expected} - verify \codeword{HARDPOINT_SCALE} matches the unit of your hardpoint coordinates, and review the per-part transform log.
-
-    \item \codeword{Kinematic solver skipped} - confirm \codeword{USE_KINEMATIC_SOLVER} is \codeword{True}, that \codeword{HARDPOINT_FILE} exists relative to the case, and that all required hardpoint keys are present.
 \end{itemize}

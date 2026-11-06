@@ -679,7 +679,7 @@ SUSP_REQUIRE_ALL_PIDS_MATCHED = False
 | `RUN_RIDE_HEIGHT` | master switch, `True` builds one child case per ride-height point |
 | `RIDE_HEIGHT_FILE` | name/path of the ride-height CSV |
 | `RUN_RH_POINTS` | space-separated list of point indices (from the CSV) to build |
-| `USE_DEPEND` | not operational at this moment |
+| `USE_DEPEND` | how `executeAll.sh` submits the child cases: `True` runs them one at a time (each child starts once the previous child's export finishes), `False` submits them all at once |
 | `RH_UNIT` | unit of the corner displacements in the CSV (`mm` or `m`) |
 | `INIT_RH` | optional initial/reference ride-height offset, not operational at this moment |
 | `RH_REF_WIDTH`, `RH_REF_LEN` | optional reference track width / wheelbase, not operational at this moment |
@@ -743,6 +743,14 @@ snappyHexMesh
 # or run the generated bash scripts in order: meshScript, solveScript, exportScript
 # (postScript is called by exportScript when it's done)
 ```
+
+for a ride-height study, run every child case at once from the parent case:
+```bash
+cd 001/
+./executeAll.sh
+```
+- **SLURM scripts:** each child's mesh, solve and export are chained with `sbatch --dependency`. With `USE_DEPEND = True` the children run one after another (child N starts once child N-1's export is done, whether or not it succeeded), which keeps the queue open for other jobs. With `USE_DEPEND = False` all children are submitted at once. If a step fails, the rest of that child is cancelled.
+- **plain bash scripts (no `#SBATCH` headers):** the children are run one after another with bash.
 
 ### Step 6: Post-Process Results
 

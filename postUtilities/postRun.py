@@ -1606,13 +1606,13 @@ def _plotBinForceComponent(ax, caseBinData, coeffKey, label, colors):
         ax.imshow(rgba, extent=[caseXMin, caseXMax, 0, yTop], aspect='auto', alpha=imgAlpha, zorder=0)
 
     ax.set_xlim(xMin, xMax)
-    ax.set_ylim(0, yTop)
+    #ax.set_ylim(0, yTop)
     if imgAspect is not None:
         ax.set_box_aspect(imgAspect)
     ax.set_xlabel('Distance (m)')
     ax.set_ylabel('Coefficient')
     ax.set_title(label)
-    ax.legend()
+    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
 
 
 def _plotBinForceDeltaComponent(ax, baseCase, caseBinData, coeffKey, label, colors):
@@ -1664,13 +1664,13 @@ def _plotBinForceDeltaComponent(ax, baseCase, caseBinData, coeffKey, label, colo
         print('\tWARNING! No left-view geometry image found for %s, skipping image overlay.' % (baseCase))
 
     ax.set_xlim(float(np.min(baseX)), float(np.max(baseX)))
-    ax.set_ylim(-yLim, yLim)
+    #ax.set_ylim(-yLim, yLim)
     if imgAspect is not None:
         ax.set_box_aspect(imgAspect)
     ax.set_xlabel('Distance (m)')
     ax.set_ylabel('Coefficient Delta')
     ax.set_title(label)
-    ax.legend()
+    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
 
 
 def buildBinForcePlots(path, caseArray, outputDir):
@@ -1720,14 +1720,14 @@ def buildBinForcePlots(path, caseArray, outputDir):
     colors = plt.cm.tab10.colors
     reportName = buildCaseTag(list(caseBinData.keys()))
 
-    figCl, axCl = plt.subplots()
+    figCl, axCl = plt.subplots(figsize=(10, 8))
     _plotBinForceComponent(axCl, caseBinData, 'zCoeffs', 'Binned Cl (Downforce)', colors)
     figCl.tight_layout()
     clPlotPath = os.path.join(outputDir, '%s_binnedCl.png' % (reportName))
     figCl.savefig(clPlotPath, dpi=300)
     plt.close(figCl)
 
-    figCd, axCd = plt.subplots()
+    figCd, axCd = plt.subplots(figsize=(10, 8))
     _plotBinForceComponent(axCd, caseBinData, 'xCoeffs', 'Binned Cd (Drag)', colors)
     figCd.tight_layout()
     cdPlotPath = os.path.join(outputDir, '%s_binnedCd.png' % (reportName))
@@ -1739,7 +1739,7 @@ def buildBinForcePlots(path, caseArray, outputDir):
     if len(caseBinData) > 1:
         baseCase = next(c for c in caseArray if c in caseBinData)
 
-        figClDelta, axClDelta = plt.subplots()
+        figClDelta, axClDelta = plt.subplots(figsize=(10, 8))
         _plotBinForceDeltaComponent(axClDelta, baseCase, caseBinData, 'zCoeffs',
                                      'Binned Cl Delta vs %s' % (baseCase), colors)
         figClDelta.tight_layout()
@@ -1747,7 +1747,7 @@ def buildBinForcePlots(path, caseArray, outputDir):
         figClDelta.savefig(clDeltaPlotPath, dpi=300)
         plt.close(figClDelta)
 
-        figCdDelta, axCdDelta = plt.subplots()
+        figCdDelta, axCdDelta = plt.subplots(figsize=(10, 8))
         _plotBinForceDeltaComponent(axCdDelta, baseCase, caseBinData, 'xCoeffs',
                                      'Binned Cd Delta vs %s' % (baseCase), colors)
         figCdDelta.tight_layout()

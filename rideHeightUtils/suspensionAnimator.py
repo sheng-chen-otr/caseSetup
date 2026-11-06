@@ -286,19 +286,8 @@ def generateSuspensionAnimation(fullCaseSetupDict, caseDir=None, outputPath=None
               '(set [RIDE_HEIGHT_SETUP] USE_KINEMATIC_SOLVER true and HARDPOINT_FILE).')
         return None
 
-    # per-corner keyword lists -> per-corner/per-component map
-    cornerPidKeywords = {'fl': [], 'fr': [], 'rl': [], 'rr': []}
-    for corner in cornerPidKeywords:
-        cornerPidKeywords[corner].extend(list(kinSetup['corner_pid_keywords'].get(corner, [])))
-        # dedupe, keep order
-        seen = set()
-        dedup = []
-        for kw in cornerPidKeywords[corner]:
-            if kw not in seen:
-                dedup.append(kw)
-                seen.add(kw)
-        cornerPidKeywords[corner] = dedup
-    categorizedKeywords = utilities._categorize_pid_keywords_by_component(cornerPidKeywords)
+    # corner -> component -> keywords, taken from the hardpoint cfg keys
+    categorizedKeywords = kinSetup['corner_component_keywords']
 
     # ride height table with solver columns (same call as the generator)
     print('\tSolving suspension kinematics across the ride-height map...')
