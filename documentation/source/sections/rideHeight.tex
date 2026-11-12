@@ -216,6 +216,8 @@ For every transformed geometry a log is written next to the output file, \codewo
 
 \subsection{Workflow Summary}
 \begin{itemize}
+    \item Optionally, choose the points from a VI-grade lap trace with \codeword{preUtilities/rideHeightPointGenerator.py}, see Section \codeword{Choosing Ride-Height Points}.
+
     \item Set \codeword{RUN_RIDE_HEIGHT} to \codeword{True} and point \codeword{RIDE_HEIGHT_FILE} at your ride-height file.
 
     \item If kinematic motion is required, set \codeword{USE_KINEMATIC_SOLVER} to \codeword{True}, copy and edit the hardpoint template, and set \codeword{HARDPOINT_FILE} and \codeword{HARDPOINT_SCALE}.
@@ -238,4 +240,141 @@ For every transformed geometry a log is written next to the output file, \codewo
     \item \codeword{can't tell which wishbone it is mounted on} - \codeword{PUSHROD_OUTER_STATIC} is about equally far from both wishbones. Check its coordinates.
 
     \item \codeword{Geometry not moving as expected} - verify \codeword{HARDPOINT_SCALE} matches the unit of your hardpoint coordinates, and review the per-part transform log.
+\end{itemize}
+
+\subsection{Choosing Ride-Height Points (rideHeightPointGenerator.py)}
+Picking which ride heights to run by hand is slow, and it's easy to miss the ones that matter. \codeword{preUtilities/rideHeightPointGenerator.py} does this for you from a lap trace exported from VI-grade, so the runs end up where the car actually drives. It also picks the roll, yaw and steer runs, and once the runs are solved it builds the front ride height (FRH) by rear ride height (RRH) lookup tables from the results. How it works, with figures, is explained in Section \ref{sec:rhTheory}.
+
+The script runs on its own. It does not read the \codeword{caseSetup} file, and \codeword{caseSetup} does not call it.
+
+It has three modes, used in this order:
+\begin{itemize}
+    \item \codeword{design} - pick the ride-height runs for the aero map
+    \item \codeword{sweeps} - pick the roll, yaw and steer runs
+    \item \codeword{table} - after the runs are solved, fit the results and write the lookup tables
+\end{itemize}
+The script needs a few Python packages, install them with:
+\begin{lstlisting}
+    pip install numpy pandas scipy scikit-learn matplotlib
+\end{lstlisting}
+All the output files are written to the folder you run it from.
+
+\subsubsection{The Lap Trace}
+The trace is the comma separated export from VI-grade. The first row has the channel names and the second row has the units, which is skipped. These are the channels used:
+\begin{itemize}
+    \item \codeword{time.TIME} [\codeword{float,s}] - sample time
+    \item \codeword{aero_forces.height_front}, \codeword{aero_forces.height_rear} [\codeword{float,m}] - aero reference ride heights
+    \item \codeword{aero_forces.longitudinal_velocity} [\codeword{float,m/s}] - vehicle speed
+    \item \codeword{chassis_accelerations.longitudinal}, \codeword{chassis_accelerations.lateral} [\codeword{float,g}] - accelerations
+    \item \codeword{driving_machine_monitor.driver_throttle} [\codeword{float,%}] - throttle, 0 to 100
+    \item \codeword{aero_forces.roll}, \codeword{aero_forces.side_slip}, \codeword{aero_forces.steer} [\codeword{float,rad}] - roll, yaw and steer, only needed for \codeword{sweeps}
+    \item \codeword{rhl_front_setup_sensor_data.ride_height}, \codeword{rhs_rear_setup_sensor_data.ride_height} [\codeword{float,m}] - optional, only used by \codeword{sweeps}. If they are there, each run is also given at the setup sensor ride heights
+\end{itemize}
+Any row with a missing value in these channels is dropped. Ride heights are worked with as changes from a reference ride height set with \codeword{--ref}, so \codeword{dFRH = FRH - REF} and \codeword{dRRH = RRH - REF}, in mm.
+
+\textbf{NOTE:} The units row is not checked, the script assumes the units listed above. This matters because corners and straights are found with fixed values: 0.3 g, 1.0 g and 90\% throttle.
+
+\subsubsection{Weighting}
+Not every part of the lap matters equally, so each sample in the trace is given a weight. There are three:
+\begin{itemize}
+    \item \textbf{grip weight}, $V^2 \Delta t \, (G/G_{max})^2$ - how much aero load, for how long, and how close the car is to the grip limit ($G$ is the combined acceleration). This is used to pick the ride-height runs and for the downforce and balance tables.
+
+    \item \textbf{drag weight}, $V^3 \Delta t$ - drag power, only counted on the straights ($|a_y| < 0.3$ g and more than 90\% throttle). This is used for the drag tables and the first validation run. If the lap has no straights, for example a skidpad, a warning is printed and the whole lap is used instead.
+
+    \item \textbf{lateral weight}, $V^2 \Delta t \, (a_y/a_{y,max})^2$ - like the grip weight but only counting cornering. This is used by default to pick the roll, yaw and steer runs.
+\end{itemize}
+
+\subsubsection{Ride-Height Runs (design)}
+\begin{lstlisting}
+    python preUtilities/rideHeightPointGenerator.py design vd_export.csv --n 16 --ref 50
+\end{lstlisting}
+This picks the runs for the aero map. The first two runs are always the reference ride height and the lowest heave point in the trace. After that, runs are added one at a time, each one where it removes the most uncertainty about the important parts of the lap. No two runs are closer than 8 mm.
+
+It then picks the validation runs. These are held out of the fit and used to check it, so they go where the car spends a lot of time but the fit runs are furthest away. All ride heights are rounded to 0.5 mm.
+\begin{itemize}
+    \item \codeword{--n} [\codeword{int}] - number of fit runs, default \codeword{16} (\codeword{int})
+    \item \codeword{--nval} [\codeword{int}] - number of validation runs, \codeword{0} for none, default \codeword{2} (\codeword{int})
+    \item \codeword{--ref} [\codeword{float,mm}] - reference aero ride height that the changes are measured from, default \codeword{50} (\codeword{float})
+    \item \codeword{--ls} [[\codeword{float,mm}],[\codeword{float,mm}]] - front and rear length scales, roughly how far apart two ride heights can be and still give similar results. Smaller values spread the runs out more, larger values let fewer runs cover the lap. Default \codeword{12,15} (\codeword{float,float})
+    \item \codeword{--nbp} [\codeword{int}] - number of breakpoints per axis shown on the plots, default \codeword{6} (\codeword{int})
+    \item \codeword{--no-plot} - don't write the PNG files
+\end{itemize}
+Outputs:
+\begin{itemize}
+    \item \codeword{runs.csv} - the run list, with columns \codeword{run}, \codeword{role} (\codeword{fit} or \codeword{validation}), \codeword{dFRH_mm}, \codeword{dRRH_mm}, \codeword{FRH_aero_mm} and \codeword{RRH_aero_mm}
+    \item \codeword{breakpoints.csv} - the weighted breakpoints for each axis
+    \item \codeword{design_points.png} - the runs plotted over the lap trace
+    \item \codeword{design_steps.png} - how the uncertainty over the lap shrinks as runs are added
+\end{itemize}
+
+\subsubsection{Roll, Yaw and Steer Sweeps (sweeps)}
+\begin{lstlisting}
+    python preUtilities/rideHeightPointGenerator.py sweeps vd_export.csv --nsweep 6
+\end{lstlisting}
+We assume the car is the same on the left and right, so only positive angles are run and the results are mirrored for negative angles. The breakpoints for each angle go from 0 up to the biggest angle in the trace.
+
+Each angle is swept on its own at the cornering ride height \codeword{rh1}, which is the average ride height in corners (more than 1 g lateral). The middle and top level of each sweep are run again at a second ride height \codeword{rh2}, to check if the angle effects change with ride height. \codeword{rh2} is the busiest cornering ride height that is at least 8 mm away from \codeword{rh1}. Two more runs, a moderate corner and a hard corner with roll, yaw and steer all applied at once, check that the effects add up.
+
+Each run is given a \codeword{pass}. Do all of pass 1 first. Pass 2 fills in the rest of each sweep, and you only need it if the pass 1 results show the curve bending.
+\begin{itemize}
+    \item \codeword{--nsweep} [\codeword{int}] - number of breakpoints per angle, including 0, default \codeword{6} (\codeword{int})
+    \item \codeword{--roll-bps}, \codeword{--yaw-bps}, \codeword{--steer-bps} [[\codeword{float,deg}],\dots] - set the breakpoints for that angle yourself instead of working them out (\codeword{float,float,...})
+    \item \codeword{--rh1}, \codeword{--rh2} [[\codeword{float,mm}],[\codeword{float,mm}]] - set the sweep ride height and the check ride height yourself, as \codeword{dFRH,dRRH} (\codeword{float,float})
+    \item \codeword{--sweep-weight} [\codeword{str}] - which weight to use for the sweeps, \codeword{lat} for the lateral weight or \codeword{grip} for the grip weight, default \codeword{lat} (\codeword{lat}, \codeword{grip})
+    \item \codeword{--ref}, \codeword{--no-plot} - same as for \codeword{design}
+\end{itemize}
+Outputs:
+\begin{itemize}
+    \item \codeword{sweeps.csv} - the run list, with columns \codeword{run}, \codeword{role}, \codeword{dFRH_mm}, \codeword{dRRH_mm}, \codeword{roll_deg}, \codeword{yaw_deg}, \codeword{steer_deg}, \codeword{pass}, \codeword{FRH_aero_mm}, \codeword{RRH_aero_mm}, and \codeword{FRH_setup_mm}, \codeword{RRH_setup_mm} if the setup sensor channels are in the trace
+    \item \codeword{sweep_breakpoints.csv} - the breakpoints for each angle
+    \item \codeword{sweeps.png} - where the sweeps are run, and the breakpoints over how much time the car spends at each angle
+\end{itemize}
+\textbf{NOTE:} All angles are written as positive values. When you set up the runs, give roll, yaw and steer the sign they would have in the same corner, using the sign convention of the ride-height file.
+
+\subsubsection{Building the Tables (table)}
+\begin{lstlisting}
+    python preUtilities/rideHeightPointGenerator.py table vd_export.csv results.csv --nbp 6
+\end{lstlisting}
+Once the runs are solved, put the results in \codeword{results.csv}, one row per run, with columns \codeword{dFRH_mm}, \codeword{dRRH_mm} and one column per quantity, for example \codeword{CzF}, \codeword{CzR} and \codeword{Cx}. An optional \codeword{role} column marks the validation runs, anything containing \codeword{valid} is left out of the fit. Every other column with numbers in it, apart from \codeword{run}, is treated as a quantity.
+
+For each quantity, a smooth map is fitted through the runs. The script prints how good the fit is (the leave-one-out error), and the error at each validation run if there are any. The map is then read at the breakpoints to fill in the table. Unless you pass \codeword{--no-opt}, the breakpoints are then moved around to make the table match the fitted map as closely as possible where the car drives. If moving them puts two breakpoints on top of each other after rounding to 0.5 mm, a warning is printed and the original breakpoints are kept.
+
+Quantities whose name starts with \codeword{Cx} or \codeword{CD}, or has \codeword{drag} in it, use the drag weight. Everything else uses the grip weight.
+\begin{itemize}
+    \item \codeword{--nbp} [\codeword{int}] - number of breakpoints per axis, default \codeword{6} (\codeword{int})
+    \item \codeword{--no-opt} - keep the weighted breakpoints, don't move them
+    \item \codeword{--drag-cols} [[\codeword{str}],\dots] - list the quantities that should use the drag weight, this replaces the name rule above (\codeword{str,str,...})
+    \item \codeword{--ref}, \codeword{--no-plot} - same as for \codeword{design}
+\end{itemize}
+Outputs:
+\begin{itemize}
+    \item \codeword{table_<quantity>.csv} - the lookup table, rows are RRH and columns are FRH, both as aero ride heights in mm
+    \item \codeword{breakpoints.csv} - the final breakpoints for each axis
+    \item \codeword{table_<quantity>.png} - the fitted map with the runs and breakpoints, and how far the table is off from the fitted map
+\end{itemize}
+
+\subsubsection{Using the Runs in caseSetup}
+The script does not write the ride-height file for you. Copy each run from \codeword{runs.csv} or \codeword{sweeps.csv} into a row of the ride-height file:
+\begin{itemize}
+    \item \codeword{fl}, \codeword{fr} get the front ride height, and \codeword{rl}, \codeword{rr} get the rear. If \codeword{INIT_RH} is blank, use \codeword{dFRH_mm} and \codeword{dRRH_mm}, these are the changes as long as the geometry you supplied is at the \codeword{--ref} ride height. If \codeword{INIT_RH} is set, use the target heights \codeword{FRH_aero_mm} and \codeword{RRH_aero_mm}
+    \item \codeword{roll_deg} - there is no roll column in the ride-height file, so put roll in as a difference between the left and right corners
+    \item \codeword{yaw_deg} - goes in the \codeword{yaw} column
+    \item \codeword{steer_deg} - goes in the \codeword{steer} column, this needs the kinematic solver
+\end{itemize}
+\textbf{NOTE:} The ride heights in the trace are the VI-grade aero reference heights. Make sure they are measured at the same points as \codeword{INIT_RH} and the corner values before you use them as targets.
+
+\subsubsection{Warnings and Errors}
+The script prints a warning, or stops, when the trace can't support the runs you asked for. This mostly happens with traces where the car barely moves, like a skidpad.
+\begin{itemize}
+    \item \codeword{no straights ... in the trace} - nothing in the trace counts as a straight (less than 0.3 g lateral and more than 90\% throttle). The drag tables and the first validation run use the whole lap instead.
+
+    \item \codeword{only N of M runs placed} - every point in the trace is already within 8 mm of a run, so more runs would just repeat the ones you have. \codeword{runs.csv} will have fewer runs than \codeword{--n}.
+
+    \item \codeword{only N of M validation runs placed} - nowhere in the trace is far enough from the fit runs and the other validation runs. Lower \codeword{--nval}, or use the leave-one-out error to judge the fit.
+
+    \item \codeword{no cornering ride height is >= 8 mm from rh1} - the cornering ride heights are too close together for a useful ride-height check. \codeword{rh2} is set to the furthest one it can find. Use \codeword{--rh2} to pick it yourself.
+
+    \item \codeword{range in the trace ... is too small for N breakpoints} - the FRH or RRH range is too narrow to fit \codeword{--nbp} breakpoints 0.5 mm apart. Lower \codeword{--nbp}.
+
+    \item \codeword{optimised breakpoints collapse after 0.5 mm rounding} - see Section \codeword{Building the Tables}, the weighted breakpoints are kept.
 \end{itemize}

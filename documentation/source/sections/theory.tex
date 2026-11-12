@@ -1,6 +1,6 @@
 \section{Theory}
 
-This section gives the theoretical background needed to interpret the turbulence models selected by \codeword{caseSetup}. The equations below use the incompressible, constant-density form for clarity. The same modelling ideas apply to the compressible formulations, with the additional energy equation and density variations.
+This section gives the theoretical background needed to interpret the turbulence models selected by \codeword{caseSetup}, and the method used to choose ride-height runs for an aero map. The equations below use the incompressible, constant-density form for clarity. The same modelling ideas apply to the compressible formulations, with the additional energy equation and density variations.
 
 \subsection{Reynolds-Averaged Navier--Stokes (RANS)}
 
@@ -108,3 +108,249 @@ The repository also contains templates for hybrid RANS--LES and laminar calculat
 \end{itemize}
 
 The currently exposed choices are therefore \codeword{sa}, \codeword{kosst} and \codeword{geko} for steady cases, and \codeword{sa} and \codeword{kosst} for transient cases. The transient mapping uses hybrid models and should not be interpreted as a time-accurate RANS calculation. Confirm the generated \codeword{constant/turbulencePropertiesSolve} file and the installed ESI OpenFOAM version before production runs, especially when using hybrid models or custom templates.
+
+\subsection{Aero Map Run Selection and Table Building}
+\label{sec:rhTheory}
+
+This section explains how \codeword{rideHeightPointGenerator.py} in \codeword{preUtilities} picks the runs and builds the tables. How to use it is covered in Section \codeword{Choosing Ride-Height Points}. You don't need to follow all of the maths to use the script, but it helps to know what it's doing so you can tell when something looks wrong.
+
+The goal is a front ride height (FRH) by rear ride height (RRH) lookup table, usually $6\times6$, that is accurate where the car actually drives, using as few CFD runs as possible. CFD runs are expensive, so we don't want to spend them on ride heights the car never sees. The process has four steps:
+\begin{itemize}
+    \item weight the lap trace, so we know which ride heights matter most
+    \item pick the runs
+    \item fit a smooth map through the results
+    \item place the table breakpoints
+\end{itemize}
+
+The figures in this section are made from a real lap trace by \codeword{makeFigures.py}, which is kept with the figures in \codeword{figures/rideHeight}. All the axes that come from the trace are scaled to $0$--$1$, so they show the shape of the data but not the real values. Figures \ref{fig:rhTrend} and \ref{fig:rhTableError} use made-up aero data, not CFD results.
+
+\subsubsection{Weighting the lap trace}
+
+Not every point on the lap is equally important. A ride height matters more if the car carries a lot of load there, spends a long time there, and needs the grip to go faster. To capture this, each sample $i$ in the trace is given a weight,
+\begin{equation}
+    q_i = V_i^2\,\Delta t_i,
+\end{equation}
+where $V$ is the speed and $\Delta t$ is the time between samples. Aero load goes up with $V^2$, so $q_i$ is roughly "how much aero load, for how long".
+
+Three weights are then built from $q_i$, each one scaled so it adds up to one over the lap:
+\begin{equation}
+    w^{g}_i \propto q_i\left(\frac{G_i}{G_{max}}\right)^2, \qquad G_i = \sqrt{a_{x,i}^2 + a_{y,i}^2},
+\end{equation}
+\begin{equation}
+    w^{d}_i \propto q_i\,V_i\;\mathbf{1}\!\left[\,|a_{y,i}| < 0.3\,g \;\;\mathrm{and}\;\; \mathrm{throttle}_i > 90\%\,\right],
+\end{equation}
+\begin{equation}
+    w^{l}_i \propto q_i\left(\frac{|a_{y,i}|}{\max|a_y|}\right)^2 .
+\end{equation}
+\begin{itemize}
+    \item \textbf{Grip weight} $w^g$ - used for downforce and balance. $G$ is the combined acceleration, so $(G/G_{max})^2$ is close to one when the car is at the limit (corners, braking, traction) and close to zero when it is cruising. Extra downforce only helps lap time when the car is grip limited, so these points count the most.
+
+    \item \textbf{Drag weight} $w^d$ - used for drag. Drag power is $F_D V$, and since $F_D$ goes up with $V^2$, drag power goes up with $V^3$. It only counts on the straights (less than 0.3 g lateral and more than 90\% throttle), because that's where drag costs you top speed. The $\mathbf{1}[\dots]$ is just 1 on a straight and 0 everywhere else. If the lap has no straights, for example a skidpad, the whole lap is used instead and a warning is printed.
+
+    \item \textbf{Lateral weight} $w^l$ - the same idea as the grip weight, but only counting cornering. It is used for the roll, yaw and steer sweeps.
+\end{itemize}
+Figure \ref{fig:rhWeights} shows the difference. The grip weight is spread over the corners, while the drag weight sits almost entirely on the straights. This is why the downforce and drag tables need to be accurate in different places.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/rideHeight/rhWeights.png}
+    \caption{The lap trace plotted as front against rear ride height, coloured by grip weight (left) and drag weight (right). Darker means more important. Corners and straights sit in different places, so the downforce and drag tables need to be accurate in different places.}
+    \label{fig:rhWeights}
+\end{figure}
+
+\subsubsection{Weighted breakpoints}
+
+A first guess at the breakpoints comes straight from the trace. The idea is simple: put more breakpoints where the car spends more time.
+
+The front ride heights of all the samples are sorted into 60 bins, and each bin adds up the grip weight of the samples in it. This gives a histogram $h_k$ of where the car spends its (weighted) time. The histogram is smoothed a little, raised to a power $p$, and then added up from left to right:
+\begin{equation}
+    \tilde h_k = \left(G_\sigma * h\right)_k^{\,p}, \qquad F(x) = \frac{\sum_{x_k \le x}\tilde h_k}{\sum_k \tilde h_k}, \qquad b_j = F^{-1}\!\left(\frac{j}{n-1}\right), \quad j = 0,\dots,n-1.
+\end{equation}
+$G_\sigma *$ is the smoothing. $F(x)$ goes from 0 at the lowest ride height to 1 at the highest, and the breakpoints $b_j$ are placed where $F$ crosses $0, \frac{1}{n-1}, \frac{2}{n-1}, \dots, 1$. The first and last breakpoints always sit at the lowest and highest ride height in the trace. The same is done for the rear.
+
+The power $p$ controls how much the breakpoints bunch up (Figure \ref{fig:rhBreakpointPower}):
+\begin{itemize}
+    \item $p = 0$ - the weights are ignored and the breakpoints are evenly spaced
+    \item $p = 1$ - every gap holds the same amount of weight. The breakpoints bunch up in the busiest area and leave big gaps everywhere else
+    \item $p = 1/3$ - the value used, somewhere in between
+\end{itemize}
+The value of $1/3$ comes from a known result in signal processing (Panter and Dite): when rounding a signal to a set of levels, the best spacing of the levels follows the cube root of how often each value comes up. A lookup table isn't exactly the same problem, so treat $1/3$ as a sensible starting point, not the perfect answer. The breakpoints are improved later anyway, see Section \ref{sec:rhBreakpointOpt}.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/rideHeight/rhBreakpointPower.png}
+    \caption{Top: how much grip weight the car spends at each front ride height. Bottom: the six breakpoints you get with $p = 0$, $1/3$ and $1$. The red ones are what the script uses.}
+    \label{fig:rhBreakpointPower}
+\end{figure}
+
+\subsubsection{Choosing the runs}
+
+\textbf{The idea in one line:} we keep track of how sure we are about the aero map everywhere on the lap, and keep adding the run that makes us most sure about the parts that matter.
+
+To do this we use a Gaussian process (GP). You can think of a GP as a smart way to guess the values between runs, and to say how confident that guess is. Close to a run we are confident, far from any run we are not. How quickly the confidence drops off with distance is set by
+\begin{equation}
+    k(\mathbf{x}, \mathbf{x}') = \exp\!\left(-\frac{1}{2}\sum_{d \in \{F,R\}} \left(\frac{x_d - x'_d}{\ell_d}\right)^2\right).
+\end{equation}
+This says that two ride heights close together should give similar results, and two far apart could be anything. The length scales $\ell_F$ and $\ell_R$ set what "close" means. They are set with \codeword{--ls}, default 12 mm front and 15 mm rear. Figure \ref{fig:rhLengthScale} shows the effect in one dimension. With a short length scale the confidence drops off quickly between runs, so you need more runs to cover the same range.
+
+The uncertainty is given as a standard deviation $\sigma$ between 0 and 1. A value of 0 means we know the answer there exactly, and 1 means we know nothing.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/rideHeight/rhLengthScale.png}
+    \caption{The same four runs with a short and a long length scale $\ell$. The blue line is the best guess and the shaded band is how unsure we are. With a short $\ell$ we quickly become unsure again between runs.}
+    \label{fig:rhLengthScale}
+\end{figure}
+
+The places a run could go (the candidates) are every second sample of the trace, $\mathbf{c}_1,\dots,\mathbf{c}_N$. Once we have runs at a set of points $S$, the uncertainty between all the candidates is
+\begin{equation}
+    \Sigma = K_{CC} - K_{CS}\left(K_{SS} + \epsilon I\right)^{-1}K_{SC}.
+\end{equation}
+Each $K$ is a table of $k$ between two sets of points. The first term is what we knew before any runs, and the second is what the runs have taught us. The small $\epsilon = 10^{-4}$ is only there to keep the maths stable.
+
+Adding a new run at candidate $j$ lowers the uncertainty at every other candidate $i$ by $\Sigma_{ij}^2 / \Sigma_{jj}$. So for each candidate we add up how much uncertainty it would remove, weighted by how important each point is, and pick the best one:
+\begin{equation}
+    j^{*} = \mathop{\mathrm{arg\,max}}_{j}\; \frac{\sum_i m_i\,\Sigma_{ij}^2}{\Sigma_{jj}}, \qquad m_i = \alpha\,\bar w^{g}_i + \frac{1 - \alpha}{N}, \quad \alpha = 0.6.
+\end{equation}
+$m_i$ is how important candidate $i$ is. It is 60\% grip weight and 40\% spread evenly over all the candidates. The even part makes sure ride heights the car rarely visits still get some coverage, because they still end up in the table.
+
+A few rules on top of this:
+\begin{itemize}
+    \item The first two runs are always the reference ride height and the lowest heave point (lowest $dFRH + dRRH$) in the trace.
+    \item No run can be within 8 mm of another. If every candidate is within 8 mm of a run, the script stops early and prints a warning.
+    \item All runs are rounded to 0.5 mm.
+\end{itemize}
+
+One important point: the uncertainty only depends on \textit{where} the runs are, not on their results. This is why the whole run list can be made before any CFD is run. The uncertainty at any single point is
+\begin{equation}
+    \sigma(\mathbf{x}) = \sqrt{1 - \mathbf{k}_S(\mathbf{x})^{\top}\left(K_{SS} + \epsilon I\right)^{-1}\mathbf{k}_S(\mathbf{x})}.
+\end{equation}
+Figure \ref{fig:rhSelectionSteps} shows it shrinking as runs are added, and Figure \ref{fig:rhLengthScaleLayout} shows how the run layout changes with the length scale.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/rideHeight/rhSelectionSteps.png}
+    \caption{The trace coloured by uncertainty after 2, 4, 8 and 16 runs. Dark blue means unsure, white means known. The circle marks where the next run goes, always somewhere important that is still dark.}
+    \label{fig:rhSelectionSteps}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/rideHeight/rhLengthScaleLayout.png}
+    \caption{Sixteen runs picked with half, one and two times the default length scales. With the short length scale there are still unsure areas between the runs. With the long one the map is assumed to be smoother, so the same 16 runs are thought to cover the whole lap.}
+    \label{fig:rhLengthScaleLayout}
+\end{figure}
+
+\textbf{Validation runs} are held out of the fit and used to check it. They are most useful where the car spends a lot of time but the fit runs are furthest away, so each candidate is given a score
+\begin{equation}
+    s_j = \rho_j\,\sigma(\mathbf{c}_j), \qquad \rho_j = \sum_{i:\,|\mathbf{x}_i - \mathbf{c}_j| < 3\,\mathrm{mm}} w_i .
+\end{equation}
+$\rho_j$ adds up the weight of the trace samples within 3 mm of the candidate, so it is high where the car spends time. $\sigma$ is high where the fit runs are far away. The first validation run uses the drag weight and the second uses the grip weight. A validation run must be more than 4 mm from every fit run and more than 8 mm from the other validation runs.
+
+\subsubsection{Roll, yaw and steer sweeps}
+
+We assume the car is the same on the left and right. That means 2 degrees of roll in a left hander gives the mirror image of 2 degrees in a right hander, so only positive angles need to be run.
+
+The breakpoints for each angle are found the same way as the ride-height breakpoints, using the lateral weight on the size of the angle. A few extra details:
+\begin{itemize}
+    \item A breakpoint at 0 is always included.
+    \item The top 1\% of the weight is ignored when spacing the breakpoints, so one extreme sample doesn't stretch everything out. The last breakpoint is still the biggest angle in the trace, rounded up.
+    \item Breakpoints are rounded to 0.1, 0.5 or 1 degree, depending on how big the biggest angle is.
+\end{itemize}
+
+The sweeps are run at the cornering ride height $\mathbf{x}_{rh1}$, which is the weighted average ride height in corners:
+\begin{equation}
+    \mathbf{x}_{rh1} = \frac{\sum_{i \in \mathcal{C}} w^l_i\,\mathbf{x}_i}{\sum_{i \in \mathcal{C}} w^l_i}, \qquad \mathcal{C} = \{\,i : |a_{y,i}| > 1\,g\,\}.
+\end{equation}
+$\mathcal{C}$ is every sample with more than 1 g lateral. Because it is an average, it can land between the lines the car actually drives, you can see this in Figure \ref{fig:rhSweeps}. The second ride height $\mathbf{x}_{rh2}$ is the busiest cornering ride height that is at least 8 mm away from $\mathbf{x}_{rh1}$.
+
+The sweeps rely on two assumptions, and each one has runs to check it:
+\begin{itemize}
+    \item \textbf{The effect of each angle doesn't change with ride height.} To check this, the middle and top level of each sweep are run again at $\mathbf{x}_{rh2}$. If the change in force $\Delta C$ is different there, the angle effects need their own ride-height dependence.
+
+    \item \textbf{The effects add up.}
+    \begin{equation}
+        C(\mathbf{x}, \phi, \beta, \delta) \approx C(\mathbf{x}, 0, 0, 0) + \Delta C_\phi(\phi) + \Delta C_\beta(\beta) + \Delta C_\delta(\delta).
+    \end{equation}
+    In words, the force with roll $\phi$, yaw $\beta$ and steer $\delta$ all together should be the force with none of them, plus the change from each one on its own. To check this, two combined runs are done, one for a moderate corner and one for a hard corner (the hardest quarter of the corners). Each uses the typical (median) roll, yaw and steer for that kind of corner.
+\end{itemize}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/rideHeight/rhSweeps.png}
+    \caption{Left: where the sweeps are run ($rh1$) and where they are checked ($rh2$). Right: how much time the car spends at each roll, yaw and steer angle, with the breakpoints in red. Angles are shown as a fraction of the biggest one.}
+    \label{fig:rhSweeps}
+\end{figure}
+
+\subsubsection{Fitting the results}
+
+Once the runs are solved, we need a smooth map through the results so we can read off a value anywhere, including at the table breakpoints. Each quantity (for example $C_{zF}$) is fitted in two parts:
+\begin{itemize}
+    \item a quadratic, a simple curved surface that captures the overall trend
+    \item a GP on top, to pick up the details the quadratic misses
+\end{itemize}
+The ride heights are first scaled so each axis has an average of 0 and a standard deviation of 1, $\mathbf{z} = (\mathbf{x} - \mu)/\mathbf{s}$. Then
+\begin{equation}
+    \hat y(\mathbf{z}) = \phi(\mathbf{z})^{\top}\beta + s_r\,g(\mathbf{z}), \qquad \phi(\mathbf{z}) = \left[\,1,\; z_F,\; z_R,\; z_F^2,\; z_F z_R,\; z_R^2\,\right]^{\top}.
+\end{equation}
+The first part is the quadratic, its coefficients $\beta$ are a least-squares fit to the runs. Whatever the quadratic misses, $\mathbf{r} = \mathbf{y} - \Phi\beta$, is scaled by its standard deviation $s_r$ and fitted with the GP $g$. This GP uses the same kind of covariance as before, plus a noise term:
+\begin{equation}
+    k_g(\mathbf{z}, \mathbf{z}') = c\,\exp\!\left(-\frac{1}{2}\sum_d \left(\frac{z_d - z'_d}{\lambda_d}\right)^2\right) + \sigma_n^2\,\delta_{\mathbf{z}\mathbf{z}'} .
+\end{equation}
+Unlike the GP used to pick the runs, this one learns its settings from the results. The size $c$, the length scales $\lambda_F$ and $\lambda_R$, and the noise $\sigma_n^2$ are chosen to make the results as likely as possible:
+\begin{equation}
+    \log p(\mathbf{r} \mid \theta) = -\frac{1}{2}\mathbf{r}^{\top}K_g^{-1}\mathbf{r} - \frac{1}{2}\log|K_g| - \frac{n}{2}\log 2\pi.
+\end{equation}
+You don't need to follow this equation. It balances fitting the runs closely against keeping the map smooth. It is tried from five random starting points so it doesn't get stuck on a bad answer. The noise term lets the map pass close to, but not exactly through, runs that are a little noisy from convergence.
+
+Why bother with the quadratic? It matters at the edges of the table. Far from any run, a GP on its own just drifts back to the average of the data, while the quadratic keeps following the overall curve (Figure \ref{fig:rhTrend}). The quadratic has six coefficients, so it needs a lot more than six runs, which is why the default is 16.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/rideHeight/rhSurrogateTrend.png}
+    \caption{A made-up example in one dimension. Inside the grey area, where the runs are, both fits agree. Outside it, the GP on its own flattens out towards the average, while the quadratic plus GP keeps the curve going. Neither should be trusted far from the runs, and the quadratic only helps if the real aero curve is roughly quadratic.}
+    \label{fig:rhTrend}
+\end{figure}
+
+To check the fit, each run is left out in turn, the map is refitted without it, and the error at that run is measured, $e_i = \hat y_{-i}(\mathbf{x}_i) - y_i$. This is called the leave-one-out error. It is printed along with the error at each validation run, both as a percentage of the range of $y$.
+
+\subsubsection{Table error and breakpoint optimisation}
+\label{sec:rhBreakpointOpt}
+
+The table stores the fitted map at the breakpoints, and values in between are found by bilinear interpolation, which basically draws straight lines between the breakpoints. The table is exact at the breakpoints, so all of the error comes from those straight lines. Across a gap of width $h$, the error from a straight line is at most
+\begin{equation}
+    |e| \le \frac{h^2}{8}\,\max|f''|,
+\end{equation}
+where $f''$ is how curved the map is. So you want breakpoints close together where the map is very curved and the car spends time, and they can be further apart everywhere else.
+
+Rather than guess, the script measures this directly. For each quantity $k$ it works out the weighted RMS difference between the table $T_k$ and the fitted map $\hat y_k$ over the trace:
+\begin{equation}
+    E_k = \sqrt{\sum_i \bar w_{k,i}\left(T_k(\mathbf{x}_i) - \hat y_k(\mathbf{x}_i)\right)^2}.
+\end{equation}
+Drag quantities use the drag weight and everything else uses the grip weight. To combine the quantities, each one is divided by its range $R_k$, so a quantity with big numbers doesn't drown out the others:
+\begin{equation}
+    J = \sqrt{\sum_k \left(\frac{E_k}{R_k}\right)^2}.
+\end{equation}
+The script then moves the inner breakpoints around to make $J$ as small as possible, using the Nelder--Mead method and starting from the weighted breakpoints. The first and last breakpoints don't move. To make sure the breakpoints never cross over each other, the optimiser actually moves the gaps between them, $g_m = e^{p_m}$, which are always positive:
+\begin{equation}
+    b_j = b_0 + \left(b_{n-1} - b_0\right)\frac{\sum_{m<j} g_m}{\sum_m g_m}.
+\end{equation}
+After that the breakpoints are rounded to 0.5 mm. If rounding puts two breakpoints on top of each other, the weighted breakpoints are kept instead. Figure \ref{fig:rhTableError} shows the result for a made-up rear downforce map.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/rideHeight/rhTableError.png}
+    \caption{The error between the table and the fitted map for a made-up $C_{zR}$, with the weighted breakpoints (left) and the optimised breakpoints (right). The dotted lines are the breakpoints and the grey dots are the lap trace. The number in each title is the weighted RMS error as a percentage of the range. Moving the rear breakpoints spreads the error out more evenly and lowers it overall.}
+    \label{fig:rhTableError}
+\end{figure}
+
+\subsubsection{Limitations}
+\begin{itemize}
+    \item The table is only as good as the fitted map, and the fitted map is only as good as the runs. The table error $J$ only compares the table to the fitted map, not to CFD. The only checks against real CFD are the leave-one-out and validation errors, so always look at them.
+
+    \item The runs are picked assuming the aero changes smoothly with ride height. If something sudden happens, like the floor stalling, it can be missed between two runs. If you expect this, lower \codeword{--ls} or add runs in that area.
+
+    \item The weights come from one lap with one setup. A different track or setup changes which ride heights matter, so the runs should be picked again.
+
+    \item The sweep assumptions are only checked at two ride heights and two combined corners.
+\end{itemize}

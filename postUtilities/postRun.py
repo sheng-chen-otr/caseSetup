@@ -201,21 +201,22 @@ def plotWingPressure(args, casePathDict, caseLoc):
 
                         color = colors[caseData['index'] % len(colors)]
                         marker = markers[caseData['index'] % len(markers)]
+                        #hollow markers that shrink per case, so near-identical cases drawn on
+                        #top of each other stay visible instead of hiding the earlier ones
+                        style = dict(marker=marker, facecolors='none', edgecolors=color,
+                                     linewidths=0.8, s=max(8, 30 - 8 * caseData['index']),
+                                     label=caseLabel)
 
                         if {'x', variable}.issubset(df.columns):
                             pData = df.dropna(subset=['x', variable]).sort_values('x')
                             if not pData.empty:
-                                pressureAx.scatter(pData['x'], pData[variable], s=18,
-                                                   marker=marker, color=color,
-                                                   label=caseLabel, alpha=0.9)
+                                pressureAx.scatter(pData['x'], pData[variable], **style)
                                 plottedPressure += 1
 
                         if {'x', 'z'}.issubset(df.columns):
                             profileData = df.dropna(subset=['x', 'z']).sort_values('x')
                             if not profileData.empty:
-                                profileAx.scatter(profileData['x'], profileData['z'], s=18,
-                                                  marker=marker, color=color,
-                                                  label=caseLabel, alpha=0.9)
+                                profileAx.scatter(profileData['x'], profileData['z'], **style)
                                 plottedProfile += 1
 
                     if not plottedPressure and not plottedProfile:
@@ -394,22 +395,29 @@ def selectWingPressureVariables(requestedVariables, availableVariables, wingName
     return selected
 
 
+#solver logs checked by isCaseComplete, main solve first: a transient case with a steady
+#initialisation also has a finished log.simpleFoam, which must not count as the case being done
+SOLVER_LOGS = ('log.pisoFoam', 'log.SRFPimpleFoam', 'log.SRFSimpleFoam', 'log.simpleFoam')
+#"End" is the last line OpenFOAM writes, so only the end of the log needs reading
+LOG_TAIL_BYTES = 64 * 1024
+
+
 def isCaseComplete(casePath):
     #a case is done when the solver wrote a standalone "End" line in its log. more robust
     #than comparing latest time vs endTime (residualControl can stop steady early)
-    for logName in ('log.simpleFoam', 'log.pisoFoam', 'log.SRFSimpleFoam', 'log.SRFPimpleFoam'):
+    for logName in SOLVER_LOGS:
         logPath = os.path.join(casePath, logName)
         if not os.path.isfile(logPath):
             continue
         try:
-            with open(logPath, 'r') as solveLog:
-                for line in solveLog:
-                    if line.strip() == 'End':
-                        return True
+            with open(logPath, 'rb') as solveLog:
+                solveLog.seek(0, os.SEEK_END)
+                solveLog.seek(max(0, solveLog.tell() - LOG_TAIL_BYTES))
+                tail = solveLog.read().decode('utf-8', errors='replace')
         except Exception:
             return False
         #log exists but never reached the End marker -> still running or crashed
-        return False
+        return any(line.strip() == 'End' for line in tail.splitlines())
     return False
 
 
@@ -491,13 +499,34 @@ def readChildSummaryCsv(summaryPath):
     return dict(zip(keys, vals))
 
 
+#summary fields that are labels, not measurements: never reformatted (e.g. trial 001 stays 001)
+SUMMARY_TEXT_FIELDS = {'Job', 'Trial', 'Solver', 'Version', 'Run Date', 'Solve Time', 'Mesher',
+                       'Symmetry', 'Simulation Type', 'Moving Ground', 'Rotating Wheels',
+                       'Turbulence Model', 'Cornering', 'Corner Direction'}
+#counts: shown as whole numbers
+SUMMARY_INTEGER_FIELDS = {'Num. Cells', 'Iterations'}
+
+
 def formatSummaryNumericValues(summaryDf, decimals=3):
-    """Format all numeric summary fields to a fixed decimal precision."""
+    """Format numeric result fields to a fixed decimal precision; counts are shown as whole
+    numbers and label fields (job, trial, dates, ...) are left untouched."""
     if summaryDf.empty:
         return summaryDf
 
+    #values are replaced by formatted strings, so hold them as objects
+    summaryDf = summaryDf.astype(object)
     rowIdx = summaryDf.index[0]
     for col in summaryDf.columns:
+        if col in SUMMARY_TEXT_FIELDS:
+            continue
+        if col in SUMMARY_INTEGER_FIELDS:
+            try:
+                numericValue = float(summaryDf.at[rowIdx, col])
+                if np.isfinite(numericValue):
+                    summaryDf.at[rowIdx, col] = '%d' % round(numericValue)
+            except Exception:
+                pass
+            continue
         try:
             numericValue = float(summaryDf.at[rowIdx, col])
             if np.isfinite(numericValue):
@@ -1111,7 +1140,8 @@ def generate_summary():
     numCells, mesher, sym = cellCount(fullCaseSetupDict, casePath, case)
     inletMag, lastTime, yaw, movingGround, rotatingWheels, simType, turbModel = bcParser(fullCaseSetupDict, path, case)
     runDate, runTime, version, solver = getOfVersion(casePath)
-    refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'][0])
+    #configparser values are strings: take the first token, not the first character
+    refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'].split()[0])
 
     rowNames = ['Job','Trial','Solver','Version','Run Date','Solve Time','Num. Cells','Mesher','Symmetry','Ref. Area (m^2)','Iterations','Simulation Type','Moving Ground','Rotating Wheels','Turbulence Model','Velocity','Yaw','Cd','Cl','Cl/Cd','%Front','Cd CI','Cl CI','Cl(f)','Cl(r)','Cs(f)','Cs(r)']
     data = [job, case, solver, version, runDate, runTime, numCells, mesher, sym.lower(), refArea, avgData['endTime'], simType.lower(), movingGround, rotatingWheels, turbModel, inletMag, yaw, avgData['cd'], avgData['cl'], avgData['cl/cd'], avgData['cop'], avgData['cd_ci'], avgData['cl_ci'], avgData.get('clf', np.nan), avgData.get('clr', np.nan), avgData.get('csf', np.nan), avgData.get('csr', np.nan)]
@@ -1487,8 +1517,11 @@ def loadBinForceCoeffs(fullCaseSetupDict, path, case):
     the original forceBinPlot.py's per-bin coefficient/force extraction, plus the real per-bin x
     co-ordinates (in meters) parsed the same way as binPlotForces_v2_0.py. Returns a dict with
     xCoeffs/yCoeffs/zCoeffs/xForce/yForce/zForce/xCoords (100-element arrays), or None if no bin
-    force data (or no x co-ords header) is available for this case."""
-    scale = 2 if 'half' in case else 1
+    force data (or no x co-ords header) is available for this case. Forces are in newtons
+    (coefficient * 0.5 * rho * U^2 * REFAREA)."""
+    #half-symmetry models only see half the car: double, matching summary.py
+    simSym = fullCaseSetupDict['GLOBAL_SIM_CONTROL'].get('SIM_SYM', '').strip().lower()
+    scale = 2 if ('half' in case or simSym == 'half') else 1
     surfaceLoc = glob.glob(os.path.join(path, case, 'postProcessing', 'binForceCoeffs', '*'))
     if not surfaceLoc:
         return None
@@ -1503,7 +1536,9 @@ def loadBinForceCoeffs(fullCaseSetupDict, path, case):
         return None
 
     inletMag = bcParser(fullCaseSetupDict, path, case)[0]
-    forceMultiplier = (float(inletMag) ** 2) * 0.5
+    refArea = float(fullCaseSetupDict['BC_SETUP']['REFAREA'].split()[0])
+    #dynamic pressure * reference area, at sea-level air density
+    forceMultiplier = (float(inletMag) ** 2) * 0.5 * refArea
 
     coeffs = np.loadtxt(coeffFile, dtype='float', comments='#', delimiter=None, skiprows=10)
     coeffs = coeffs[1:]
