@@ -5,7 +5,7 @@
 
     \item \codeword{kinematic} - a double wishbone and pushrod kinematic solver computes the realistic motion of every suspension component (wheel camber and toe, control arm rotation, rocker angle, damper stroke) and applies a per-component transform to the matching parts of the geometry.
 \end{itemize}
-The mode is selected by the \codeword{USE_KINEMATIC_SOLVER} flag described below.
+The mode is selected by the \codeword{USE_KINEMATIC_SOLVER} flag described below. How the corner ride heights become pitch, roll and wheel travel, and how the kinematic solver works, is explained with figures in Section \ref{sec:suspTheory}.
 
 \subsection{Ride-Height Setup}
 Deleting the module \codeword{defaultRideHeight} will expose the following block:
@@ -354,7 +354,7 @@ Outputs:
 \end{itemize}
 
 \subsubsection{Using the Runs in caseSetup}
-The script does not write the ride-height file for you. Copy each run from \codeword{runs.csv} or \codeword{sweeps.csv} into a row of the ride-height file:
+The script does not write the ride-height file for you. Copy each run from the \codeword{runs.csv} or \codeword{sweeps.csv} output into its own row of the ride-height file:
 \begin{itemize}
     \item \codeword{fl}, \codeword{fr} get the front ride height, and \codeword{rl}, \codeword{rr} get the rear. If \codeword{INIT_RH} is blank, use \codeword{dFRH_mm} and \codeword{dRRH_mm}, these are the changes as long as the geometry you supplied is at the \codeword{--ref} ride height. If \codeword{INIT_RH} is set, use the target heights \codeword{FRH_aero_mm} and \codeword{RRH_aero_mm}
     \item \codeword{roll_deg} - there is no roll column in the ride-height file, so put roll in as a difference between the left and right corners

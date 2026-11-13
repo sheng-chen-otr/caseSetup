@@ -27,6 +27,21 @@ from summary import *
 import gspread
 from google.oauth2.service_account import Credentials
 
+# sheet layout. columns are found by name, not letter: HEADER_ROW holds the column names
+# (Trial, Date Run, Description, ...) and GROUP_ROW the merged group labels above them
+# (Boundary Conditions, RAW, FW RAW, ...). a column is written as 'Header', or as
+# ('Group', 'Header') when the header name is used more than once in the sheet
+HEADER_ROW = 7
+GROUP_ROW = HEADER_ROW - 1
+TRIAL_COLUMN = 'Trial'
+
+PROJECT_DIR = Path(__file__).resolve().parent
+DEFAULT_CREDENTIALS_FILE = PROJECT_DIR / "credentials.json"
+
+_WORKSHEET_CACHE = {}
+_HEADER_CACHE = {}
+
+
 def get_credentials_path():
     env_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     if env_path:
@@ -61,15 +76,20 @@ def getSheetId(gsheetConfigPath,jobName):
 def getWorksheetName(path):
     # Get the absolute path of the current script
     current_path = os.path.abspath(path)
-    
+
     # Move two levels up
     two_up_path = os.path.abspath(os.path.join(current_path, os.pardir, os.pardir))
-    
+
     # Return only the directory name (last folder in the path)
     return os.path.basename(two_up_path)
 
 
 def get_worksheet(sheet_id, worksheet_name,jobnumber):
+    # opened once per run and reused, every open costs Google API requests
+    key = (sheet_id, worksheet_name)
+    if key in _WORKSHEET_CACHE:
+        return _WORKSHEET_CACHE[key]
+
     if not sheet_id or sheet_id == "PASTE_YOUR_GOOGLE_SHEET_ID":
         raise ValueError("Please set SHEET_ID in the script before running.")
 
@@ -82,7 +102,9 @@ def get_worksheet(sheet_id, worksheet_name,jobnumber):
     if not jobnumber in spreadsheetName:
         sys.exit('ERROR! Google sheets title does not match job code, please check!')
 
-    return spreadsheet.worksheet(worksheet_name) if worksheet_name else spreadsheet.sheet1
+    worksheet = spreadsheet.worksheet(worksheet_name) if worksheet_name else spreadsheet.sheet1
+    _WORKSHEET_CACHE[key] = worksheet
+    return worksheet
 
 def get_trial_number(case_name=None, case_path=None):
     """
@@ -152,54 +174,303 @@ def get_part_coeff(summary_dict, prefix, coeff_key):
     return ""
 
 
+def _first(value, default=""):
+    """Return the first element of a list/tuple (as produced by caseSetup.py's
+    in-memory caseSetup dict), or the value itself (as returned by configparser
+    when reading a caseSetup file back off disk)."""
+    if isinstance(value, (list, tuple)):
+        return value[0] if len(value) else default
+    if value is None:
+        return default
+    return value
+
+
+def _full_text(value):
+    """Whole text of a caseSetup value. The in-memory dict splits values into words, a
+    caseSetup file read with configparser gives the plain string."""
+    if isinstance(value, (list, tuple)):
+        return ' '.join(str(v) for v in value).strip()
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+def _setup_value(case_setup_dict, section, key):
+    try:
+        return case_setup_dict[section][key]
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------- values to write
+
 def build_sheet_values_from_summary(summary_dict, case_setup_dict):
+    """Result columns from summary.csv, as {column: value}."""
     symmetry = str(summary_dict.get("Symmetry", "")).strip().lower()
     is_half = "TRUE" if symmetry == "half" else "FALSE"
 
     density = 1.225
     wheel_base = ""
     if case_setup_dict is not None:
+        density = parse_float(_first(_setup_value(case_setup_dict, 'GLOBAL_MATERIAL', 'DENSITY')), 1.225)
+        wheel_base = parse_float(_first(_setup_value(case_setup_dict, 'BC_SETUP', 'REFLEN')), "")
+
+    return {
+        'Date Run': summary_dict.get("Run Date", ""),
+        'Solve Time': summary_dict.get("Solve Time", ""),
+        'Cell Count': summary_dict.get("Num. Cells", ""),
+        'Mesher': summary_dict.get("Mesher", ""),
+        'Is Half?': is_half,
+        'Speed (m/s^2)': summary_dict.get("Velocity", ""),
+        'Yaw': summary_dict.get("Yaw", ""),
+        'Density': density,
+        'Frontal Area': summary_dict.get("Ref. Area (m^2)", ""),
+        'Wheel Base': wheel_base,
+        ('RAW', 'CD'): summary_dict.get("Cd", ""),
+        ('RAW', 'CL'): summary_dict.get("Cl", ""),
+        ('RAW', 'CL(F)'): summary_dict.get("Cl(f)", ""),
+        ('RAW', 'CL(R)'): summary_dict.get("Cl(r)", ""),
+        ('RAW', 'CS(F)'): summary_dict.get("Cs(f)", ""),
+        ('RAW', 'CS(R)'): summary_dict.get("Cs(r)", ""),
+        ('RAW', 'CI-CD'): summary_dict.get("Cd CI", ""),
+        ('RAW', 'CI-CL'): summary_dict.get("Cl CI", ""),
+        ('FW RAW', 'CD'): get_part_coeff(summary_dict, "fw", "CD"),
+        ('FW RAW', 'CL'): get_part_coeff(summary_dict, "fw", "CL"),
+        ('RW RAW', 'CD'): get_part_coeff(summary_dict, "rw", "CD"),
+        ('RW RAW', 'CL'): get_part_coeff(summary_dict, "rw", "CL"),
+    }
+
+
+def build_setup_time_values(case_setup_dict):
+    """
+    Setup-time-known columns (symmetry, velocity, yaw, density, reference area,
+    wheelbase) from a case's caseSetup dict, as {column: value}. Result columns (run
+    date, solve time, cell count, Cd, Cl, etc.) are intentionally left out since
+    they are not known until the case has actually run.
+    """
+    sim_sym = str(_first(_setup_value(case_setup_dict, 'GLOBAL_SIM_CONTROL', 'SIM_SYM'), '')).strip().lower()
+    is_half = "TRUE" if sim_sym == 'half' else "FALSE"
+
+    velocity = _first(_setup_value(case_setup_dict, 'BC_SETUP', 'INLET_MAG'))
+    yaw = 0 if sim_sym == 'half' else _first(_setup_value(case_setup_dict, 'BC_SETUP', 'YAW'))
+    density = parse_float(_first(_setup_value(case_setup_dict, 'GLOBAL_MATERIAL', 'DENSITY')), 1.225)
+    ref_area = _first(_setup_value(case_setup_dict, 'BC_SETUP', 'REFAREA'))
+    wheel_base = parse_float(_first(_setup_value(case_setup_dict, 'BC_SETUP', 'REFLEN')), "")
+
+    return {
+        'Is Half?': is_half,
+        'Speed (m/s^2)': velocity,
+        'Yaw': yaw,
+        'Density': density,
+        'Frontal Area': ref_area,
+        'Wheel Base': wheel_base,
+    }
+
+
+def build_title_values(case_setup_dict, point=None):
+    """Description = CASENAME (plus ' - point N' for a ride-height child), Comments =
+    CASEDESCRP. A blank value is left out so the cell keeps what is already there."""
+    values = {}
+    case_name = _full_text(_setup_value(case_setup_dict, 'TITLES', 'CASENAME'))
+    case_descrp = _full_text(_setup_value(case_setup_dict, 'TITLES', 'CASEDESCRP'))
+    if case_name:
+        values['Description'] = case_name if point is None else '%s - point %s' % (case_name, point)
+    if case_descrp:
+        values['Comments'] = case_descrp
+    return values
+
+
+def _ride_height_unit_scale(case_setup_dict):
+    # ride-height values -> mm
+    unit = str(_first(_setup_value(case_setup_dict, 'RIDE_HEIGHT_SETUP', 'RH_UNIT'), 'mm')).strip().lower()
+    return 1000.0 if unit == 'm' else 1.0
+
+
+def _init_rh_mm(case_setup_dict):
+    """INIT_RH (FL FR RL RR) in mm, or None when it is blank or not 4 numbers."""
+    raw = _setup_value(case_setup_dict, 'RIDE_HEIGHT_SETUP', 'INIT_RH')
+    tokens = _full_text(raw).split()
+    if len(tokens) != 4:
+        return None
+    try:
+        scale = _ride_height_unit_scale(case_setup_dict)
+        return [float(t) * scale for t in tokens]
+    except ValueError:
+        return None
+
+
+def build_ride_height_values(case_setup_dict, case_name, parent_case_path=None):
+    """
+    Ride Height Front/Rear (mm) and Roll (deg).
+      ride-height child: from the parent's rideHeights_updated.csv row for this child.
+        Front = (fl + fr)/2, Rear = (rl + rr)/2. These are target ride heights when
+        INIT_RH is set, otherwise the change from the supplied geometry
+      any other case: the INIT_RH averages when set, otherwise 0. Roll 0
+    """
+    if parent_case_path is not None:
+        rh_csv = Path(parent_case_path) / 'rideHeights_updated.csv'
         try:
-            density = parse_float(case_setup_dict['GLOBAL_MATERIAL']['DENSITY'], 1.225)
-        except Exception:
-            density = 1.225
-        try:
-            wheel_base = parse_float(case_setup_dict['BC_SETUP']['REFLEN'], "")
-        except Exception:
-            wheel_base = ""
+            rh_map = pd.read_csv(rh_csv)
+            match = rh_map[rh_map['caseName'].astype(str) == str(case_name)]
+            if len(match) == 0:
+                raise ValueError('no row for %s' % (case_name))
+            row = match.iloc[0]
+            # fl/fr/rl/rr in rideHeights_updated.csv are already in m
+            front = (float(row['fl']) + float(row['fr'])) / 2.0 * 1000.0
+            rear = (float(row['rl']) + float(row['rr'])) / 2.0 * 1000.0
+            roll = float(row['roll']) if 'roll' in rh_map.columns else 0.0
+            return {
+                ('Ride Height', 'Front'): round(front, 3),
+                ('Ride Height', 'Rear'): round(rear, 3),
+                'Roll': round(roll, 3),
+            }
+        except Exception as e:
+            print('\t\tWARNING! Unable to read ride heights for %s from %s: %s' % (case_name, rh_csv, e))
+            return {}
 
-    fw_cd = get_part_coeff(summary_dict, "fw", "CD")
-    fw_cl = get_part_coeff(summary_dict, "fw", "CL")
-    rw_cd = get_part_coeff(summary_dict, "rw", "CD")
-    rw_cl = get_part_coeff(summary_dict, "rw", "CL")
+    init_rh = _init_rh_mm(case_setup_dict) if case_setup_dict is not None else None
+    if init_rh is None:
+        front = rear = 0
+    else:
+        front = round((init_rh[0] + init_rh[1]) / 2.0, 3)
+        rear = round((init_rh[2] + init_rh[3]) / 2.0, 3)
+    return {
+        ('Ride Height', 'Front'): front,
+        ('Ride Height', 'Rear'): rear,
+        'Roll': 0,
+    }
 
-    return [
-        summary_dict.get("Run Date", ""),
-        summary_dict.get("Solve Time", ""),
-        summary_dict.get("Num. Cells", ""),
-        summary_dict.get("Mesher", ""),
-        is_half,
-        summary_dict.get("Velocity", ""),
-        summary_dict.get("Yaw", ""),
-        density,
-        "0",
-        "0",
-        summary_dict.get("Ref. Area (m^2)", ""),
-        wheel_base,
-        summary_dict.get("Cd", ""),
-        summary_dict.get("Cl", ""),
-        summary_dict.get("Cl(f)", ""),
-        summary_dict.get("Cl(r)", ""),
-        summary_dict.get("Cs(f)", ""),
-        summary_dict.get("Cs(r)", ""),
-        summary_dict.get("Cd CI", ""),
-        summary_dict.get("Cl CI", ""),
-        fw_cd,
-        fw_cl,
-        rw_cd,
-        rw_cl,
-    ]
 
+def build_case_identity_values(case_setup_dict, case_path):
+    """Description, Comments, ride heights and roll for a case, working out whether it is
+    a ride-height child (parentName_N) from its folder."""
+    case_path = Path(case_path).resolve()
+    parent_case_path = detect_parent_case_for_child(case_path)
+    point = None
+    if parent_case_path is not None:
+        point = int(re.match(r'^.*_(\d+)$', case_path.name).group(1))
+    values = {}
+    if case_setup_dict is not None:
+        values.update(build_title_values(case_setup_dict, point))
+    values.update(build_ride_height_values(case_setup_dict, case_path.name, parent_case_path))
+    return values
+
+
+# ---------------------------------------------------------------------- sheet access
+
+def _norm(text):
+    return ' '.join(str(text).split()).lower()
+
+
+def _column_letter(index):
+    """0-based column index -> sheet letter (0 -> A, 26 -> AA)."""
+    letters = ''
+    n = index + 1
+    while n:
+        n, r = divmod(n - 1, 26)
+        letters = chr(65 + r) + letters
+    return letters
+
+
+def _column_label(column):
+    return '%s > %s' % column if isinstance(column, tuple) else column
+
+
+def read_sheet_headers(worksheet):
+    """[(group, header), ...] per column, normalised. A merged group label is only stored in
+    its first cell, so each label is carried right until the next one."""
+    key = worksheet.id
+    if key in _HEADER_CACHE:
+        return _HEADER_CACHE[key]
+    groups = worksheet.row_values(GROUP_ROW)
+    headers = worksheet.row_values(HEADER_ROW)
+    if not any(str(h).strip() for h in headers):
+        raise ValueError('header row %d of "%s" is empty. Check HEADER_ROW in gsheetExport.py.'
+                         % (HEADER_ROW, worksheet.title))
+    out = []
+    group = ''
+    for i in range(len(headers)):
+        if i < len(groups) and str(groups[i]).strip():
+            group = _norm(groups[i])
+        out.append((group, _norm(headers[i])))
+    _HEADER_CACHE[key] = out
+    return out
+
+
+def find_column(worksheet, column):
+    """Sheet letter for a column given as 'Header' or ('Group', 'Header'). Returns None when
+    it is not in the sheet. Raises ValueError when it matches more than one column."""
+    headers = read_sheet_headers(worksheet)
+    if isinstance(column, tuple):
+        group, name = _norm(column[0]), _norm(column[1])
+        matches = [i for i, (g, h) in enumerate(headers) if g == group and h == name]
+    else:
+        name = _norm(column)
+        matches = [i for i, (_g, h) in enumerate(headers) if h == name]
+    if len(matches) == 0:
+        return None
+    if len(matches) > 1:
+        letters = ', '.join(_column_letter(i) for i in matches)
+        fix = ('fix the group labels in row %d' % GROUP_ROW if isinstance(column, tuple) else
+               'give it as (group, header) in gsheetExport.py')
+        raise ValueError('column "%s" matches more than one column in rows %d-%d (%s), %s.'
+                         % (_column_label(column), GROUP_ROW, HEADER_ROW, letters, fix))
+    return _column_letter(matches[0])
+
+
+def get_or_create_trial_row(worksheet, trial_name):
+    """
+    Find trial_name in the Trial column and return its row.
+    If missing, write it to the next available row and return that row.
+    """
+    trial_name = str(trial_name).strip()
+    if trial_name == "":
+        raise ValueError("trial name is empty.")
+
+    letter = find_column(worksheet, TRIAL_COLUMN)
+    if letter is None:
+        raise ValueError('no "%s" column in row %d of "%s". Check HEADER_ROW in gsheetExport.py.'
+                         % (TRIAL_COLUMN, HEADER_ROW, worksheet.title))
+    col_index = gspread.utils.a1_to_rowcol('%s1' % letter)[1]
+    column_values = worksheet.col_values(col_index)
+
+    for row_index, value in enumerate(column_values, start=1):
+        if row_index > HEADER_ROW and str(value).strip() == trial_name:
+            return row_index
+
+    target_row = max(len(column_values), HEADER_ROW) + 1
+    worksheet.update(
+        range_name=f"{letter}{target_row}",
+        values=[[trial_name]],
+        value_input_option="RAW",
+    )
+    return target_row
+
+
+def write_row(worksheet, target_row, values_by_column):
+    """Write {column: value} into target_row in one request. Columns not found in the sheet
+    are skipped with a warning. Returns the list of columns written."""
+    if target_row <= HEADER_ROW:
+        raise ValueError("target_row must be below the header row (%d)." % (HEADER_ROW))
+
+    updates, written, missing = [], [], []
+    for column, value in values_by_column.items():
+        letter = find_column(worksheet, column)
+        if letter is None:
+            missing.append(_column_label(column))
+            continue
+        updates.append({'range': f"{letter}{target_row}", 'values': [[str(value)]]})
+        written.append('%s (%s)' % (_column_label(column), letter))
+
+    if missing:
+        print('\t\tWARNING! These columns were not found in rows %d-%d of "%s" and were skipped: %s'
+              % (GROUP_ROW, HEADER_ROW, worksheet.title, ', '.join(missing)))
+    if updates:
+        worksheet.batch_update(updates, value_input_option="RAW")
+    return written
+
+
+# ---------------------------------------------------------------------- prep (before a run)
 
 def resolve_job_context(case_path):
     """Resolve (jobPath, jobName, worksheetName, sheetId) for a given case path,
@@ -225,87 +496,19 @@ def resolve_job_context(case_path):
     return jobPath, jobName, worksheet_name, gsheet_id
 
 
-def _first(value, default=""):
-    """Return the first element of a list/tuple (as produced by caseSetup.py's
-    in-memory caseSetup dict), or the value itself (as returned by configparser
-    when reading a caseSetup file back off disk)."""
-    if isinstance(value, (list, tuple)):
-        return value[0] if len(value) else default
-    if value is None:
-        return default
-    return value
-
-
-def build_setup_time_values(case_setup_dict):
-    """
-    Build the setup-time-known sheet columns (symmetry, velocity, yaw, density,
-    reference area, wheelbase) from a case's caseSetup dict. Result columns (run
-    date, solve time, cell count, Cd, Cl, etc.) are intentionally left out since
-    they are not known until the case has actually run.
-    """
-    try:
-        sim_sym = str(_first(case_setup_dict['GLOBAL_SIM_CONTROL']['SIM_SYM'], '')).strip().lower()
-    except Exception:
-        sim_sym = ''
-    is_half = "TRUE" if sim_sym == 'half' else "FALSE"
-
-    try:
-        velocity = _first(case_setup_dict['BC_SETUP']['INLET_MAG'])
-    except Exception:
-        velocity = ""
-
-    try:
-        yaw = 0 if sim_sym == 'half' else _first(case_setup_dict['BC_SETUP']['YAW'])
-    except Exception:
-        yaw = ""
-
-    try:
-        density = parse_float(_first(case_setup_dict['GLOBAL_MATERIAL']['DENSITY']), 1.225)
-    except Exception:
-        density = 1.225
-
-    try:
-        ref_area = _first(case_setup_dict['BC_SETUP']['REFAREA'])
-    except Exception:
-        ref_area = ""
-
-    try:
-        wheel_base = parse_float(_first(case_setup_dict['BC_SETUP']['REFLEN']), "")
-    except Exception:
-        wheel_base = ""
-
-    return {
-        "M": is_half,
-        "N": velocity,
-        "O": yaw,
-        "P": density,
-        "Q": "0",
-        "R": "0",
-        "S": ref_area,
-        "T": wheel_base,
-    }
-
-
-def write_setup_time_cells(sheet_id, worksheet_name, target_row, values_by_column, jobName):
-    worksheet = get_worksheet(sheet_id, worksheet_name, jobName)
-    for col, value in values_by_column.items():
-        cell = f"{col.upper()}{target_row}"
-        worksheet.update(
-            range_name=cell,
-            values=[[str(value)]],
-            value_input_option="RAW",
-        )
-
-
-def prep_single_case_row(sheet_id, worksheet_name, case_name, job_name, case_setup_dict):
-    """Ensure a row exists for case_name (reserving the next row if missing) and
+def prep_single_case_row(sheet_id, worksheet_name, case_path, job_name, case_setup_dict):
+    """Ensure a row exists for the case (reserving the next row if missing) and
     fill in only the setup-time-known columns, leaving result columns untouched."""
+    case_path = Path(case_path).resolve()
+    case_name = case_path.name
     if case_setup_dict is None:
         print(f"\t\tWARNING! Unable to read caseSetup for {case_name}; skipping gsheet row prep.")
         return
-    target_row = get_or_create_trial_row(sheet_id, worksheet_name, case_name, job_name)
-    setup_values = build_setup_time_values(case_setup_dict)
-    write_setup_time_cells(sheet_id, worksheet_name, target_row, setup_values, job_name)
+    worksheet = get_worksheet(sheet_id, worksheet_name, job_name)
+    target_row = get_or_create_trial_row(worksheet, case_name)
+    values = build_setup_time_values(case_setup_dict)
+    values.update(build_case_identity_values(case_setup_dict, case_path))
+    write_row(worksheet, target_row, values)
     print(f"\t\tPrepared gsheet row {target_row} for {case_name}.")
 
 
@@ -332,7 +535,7 @@ def prep_ride_height_rows(case_path, fullCaseSetupDict, jobName, worksheet_name,
     case_path = Path(case_path).resolve()
 
     #parent row first
-    prep_single_case_row(gsheet_id, worksheet_name, case_path.name, jobName, fullCaseSetupDict)
+    prep_single_case_row(gsheet_id, worksheet_name, case_path, jobName, fullCaseSetupDict)
 
     #then children, in ascending ride-height-point order
     children = find_ride_height_children(case_path)
@@ -341,7 +544,7 @@ def prep_ride_height_rows(case_path, fullCaseSetupDict, jobName, worksheet_name,
         return
     for pointNumber, childPath in children:
         childCfg = load_case_setup(childPath)
-        prep_single_case_row(gsheet_id, worksheet_name, childPath.name, jobName, childCfg)
+        prep_single_case_row(gsheet_id, worksheet_name, childPath, jobName, childCfg)
 
 
 def prep_gsheet_rows(case_path, fullCaseSetupDict=None):
@@ -373,10 +576,12 @@ def prep_gsheet_rows(case_path, fullCaseSetupDict=None):
         if is_ride_height_parent:
             prep_ride_height_rows(case_path, fullCaseSetupDict, jobName, worksheet_name, gsheet_id)
         else:
-            prep_single_case_row(gsheet_id, worksheet_name, case_path.name, jobName, fullCaseSetupDict)
+            prep_single_case_row(gsheet_id, worksheet_name, case_path, jobName, fullCaseSetupDict)
     except Exception as e:
         print('\tWARNING! Unable to prepare gsheet row(s) for %s: %s' % (case_path.name, e))
 
+
+# ---------------------------------------------------------------------- push (after a run)
 
 def detect_parent_case_for_child(case_path):
     """Return parent case path if case is likely parentName_# under parentName folder."""
@@ -414,79 +619,16 @@ def push_case_summary(sheet_id, worksheet_name, case_path, job_name):
     case_name = case_path.name
     summary_dict = read_summary_csv(case_path)
     case_setup_dict = load_case_setup(case_path)
-    data_to_write = build_sheet_values_from_summary(summary_dict, case_setup_dict)
-    target_row = get_or_create_trial_row(sheet_id, worksheet_name, case_name, job_name)
-    write_to_sheet_cells(
-        sheet_id,
-        data_to_write,
-        worksheet_name,
-        target_row,
-        TARGET_COLUMNS,
-        jobName=job_name,
-    )
+    values = build_sheet_values_from_summary(summary_dict, case_setup_dict)
+    values.update(build_case_identity_values(case_setup_dict, case_path))
+
+    worksheet = get_worksheet(sheet_id, worksheet_name, job_name)
+    target_row = get_or_create_trial_row(worksheet, case_name)
+    written = write_row(worksheet, target_row, values)
     print(
         f"Done. Trial {case_name} mapped to row {target_row}. "
-        f"Wrote {len(data_to_write)} value(s) in columns: "
-        f"{', '.join(col.upper() for col in TARGET_COLUMNS)}."
+        f"Wrote {len(written)} value(s): {', '.join(written)}."
     )
-
-TARGET_COLUMNS = ["B","F", "G", "H", "M","N", "O", "P", "Q", "R", "S", "T", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO"]
-PROJECT_DIR = Path(__file__).resolve().parent
-DEFAULT_CREDENTIALS_FILE = PROJECT_DIR / "credentials.json"
-
-def get_or_create_trial_row(sheet_id, worksheet_name, trial_number,jobNumber):
-    """
-    Find trial_number in column A and return its row.
-    If missing, write it to the next available row in column A and return that row.
-    """
-    trial_number = str(trial_number).strip()
-    if trial_number == "":
-        raise ValueError("trial_number is empty.")
-
-    worksheet = get_worksheet(sheet_id, worksheet_name,jobNumber)
-    column_a = worksheet.col_values(1)
-
-    for row_index, value in enumerate(column_a, start=1):
-        if str(value).strip() == trial_number:
-            return row_index
-
-    target_row = len(column_a) + 1
-    worksheet.update(
-        range_name=f"A{target_row}",
-        values=[[trial_number]],
-        value_input_option="RAW",
-    )
-    return target_row
-
-
-def write_to_sheet_cells(
-    sheet_id,
-    values,
-    worksheet_name,
-    target_row,
-    target_columns,
-    jobName
-):
-    if not sheet_id or sheet_id == "PASTE_YOUR_GOOGLE_SHEET_ID":
-        raise ValueError("Please set SHEET_ID in the script before running.")
-    if not values:
-        raise ValueError("DATA_TO_WRITE is empty.")
-    if target_row < 1:
-        raise ValueError("target_row must be >= 1.")
-    if len(values) != len(target_columns):
-        raise ValueError("DATA_TO_WRITE and TARGET_COLUMNS must have the same length.")
-    if not all(col and col.isalpha() for col in target_columns):
-        raise ValueError("TARGET_COLUMNS must contain only column letters (e.g. A, B, AA).")
-
-    worksheet = get_worksheet(sheet_id, worksheet_name,jobName)
-
-    for col, value in zip(target_columns, values):
-        cell = f"{col.upper()}{target_row}"
-        worksheet.update(
-            range_name=cell,
-            values=[[str(value)]],
-            value_input_option="RAW",
-        )
 
 
 def main():

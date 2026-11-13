@@ -279,4 +279,33 @@ Contour plots are always single-case; they are not affected by \codeword{--sensi
 \section{Pushing Results to Google Sheets (gsheetExport.py)}
 \codeword{postUtilities/gsheetExport.py} pushes a case's summary metrics to a Google Sheet, one row per trial, using a service account for authentication. It reads its values directly from the case's \codeword{summary.csv} rather than recomputing anything from the solver output, so it must be run after \codeword{postRun.py --summary} has produced an up to date \codeword{summary.csv}.
 
-When the case being pushed is itself a child of a ride-height mapping parent (its directory name matches \codeword{<parentCaseName>\_<number>}), \codeword{gsheetExport.py} first regenerates the parent's \codeword{summary.csv} by invoking \codeword{postRun.py --summary} in the parent directory, then pushes both the child's row and the parent's (map-averaged) row to the sheet. For a case that is not part of a ride-height map, only that case's own row is pushed. The fixed set of spreadsheet columns written for each row includes run date, solve time, cell count, mesher, half/full symmetry, velocity, yaw, density, reference area and wheelbase, \codeword{Cd}, \codeword{Cl}, \codeword{Cl(f)}, \codeword{Cl(r)}, \codeword{Cs(f)}, \codeword{Cs(r)}, confidence intervals for \codeword{Cd}/\codeword{Cl}, and the front and rear wing \codeword{Cd}/\codeword{Cl}.
+When the case being pushed is itself a child of a ride-height mapping parent (its directory name matches \codeword{<parentCaseName>\_<number>}), \codeword{gsheetExport.py} first regenerates the parent's \codeword{summary.csv} by invoking \codeword{postRun.py --summary} in the parent directory, then pushes both the child's row and the parent's (map-averaged) row to the sheet. For a case that is not part of a ride-height map, only that case's own row is pushed. The columns written for each row are run date, solve time, cell count, mesher, half/full symmetry, speed, yaw, density, roll, front and rear ride height, frontal area and wheelbase, \codeword{Cd}, \codeword{Cl}, \codeword{Cl(f)}, \codeword{Cl(r)}, \codeword{Cs(f)}, \codeword{Cs(r)}, confidence intervals for \codeword{Cd}/\codeword{Cl}, the front and rear wing \codeword{Cd}/\codeword{Cl}, and the Description and Comments.
+
+You can also fill in a row before the case has run. Run \codeword{caseSetup} with \codeword{--gsheetPrep}, or run \codeword{gsheetExport.py --prep} inside the case. This finds or adds the row for the case, and for a ride-height parent also one row per child in point order, and fills in only the values already known from the \codeword{caseSetup} file. The result columns are left alone until the case has run.
+
+\subsection{Sheet Layout}
+The script finds each column by its name, not its letter, so you can add or move columns in the sheet without changing the script. It reads two rows at the top of the trials list:
+\begin{itemize}
+    \item row 7 - the column names (\codeword{Trial}, \codeword{Date Run}, \codeword{Description}, \dots)
+    \item row 6 - the group labels above them (\codeword{Boundary Conditions}, \codeword{Ride Height}, \codeword{RAW}, \codeword{FW RAW}, \dots). A merged label counts for every column under it
+\end{itemize}
+If your sheet uses different rows, change \codeword{HEADER_ROW} at the top of \codeword{gsheetExport.py}. The group row is always the row above it.
+
+Most columns are found by name alone, for example \codeword{Comments}. Some names, like \codeword{CD} and \codeword{CL}, are used more than once in the sheet. Those are found by group and name together, for example \codeword{CD} under \codeword{FW RAW}. Matching ignores upper and lower case and extra spaces.
+
+To write a new column, add one line in \codeword{gsheetExport.py}, written as \codeword{'Header': value} or \codeword{('Group', 'Header'): value}:
+\begin{itemize}
+    \item results go in \codeword{build_sheet_values_from_summary}
+    \item values known before the run go in \codeword{build_setup_time_values}
+\end{itemize}
+
+If a column can't be found, a warning lists it and the rest of the row is still written. If a name matches more than one column, the script stops and lists the columns it matched, so it never writes into the wrong one. Usually this means a group label in row 6 is missing or doubled up.
+
+The values that come from \codeword{caseSetup} rather than \codeword{summary.csv} are:
+\begin{itemize}
+    \item \codeword{Description} - \codeword{CASENAME} from \codeword{[TITLES]}. For a ride-height child, the point number is added on the end, for example \codeword{F27 floor v2 - point 3}
+    \item \codeword{Comments} - \codeword{CASEDESCRP} from \codeword{[TITLES]}
+    \item \codeword{Front} and \codeword{Rear} under \codeword{Ride Height} - in mm. For a ride-height child these are the averages of the front pair and rear pair of corners for that point, read from the parent's \codeword{rideHeights_updated.csv}. If \codeword{INIT_RH} is set they are the actual ride heights, if not they are the change in ride height from the supplied geometry. For any other case they are the \codeword{INIT_RH} averages, or \codeword{0} if \codeword{INIT_RH} is blank
+    \item \codeword{Roll} - the roll angle of the point in degrees, positive when the right side goes up, \codeword{0} for any case that isn't a ride-height child
+\end{itemize}
+These are written every time the row is pushed, so anything typed into those cells by hand is replaced. A blank \codeword{CASENAME} or \codeword{CASEDESCRP} is skipped and the cell keeps what is already there.

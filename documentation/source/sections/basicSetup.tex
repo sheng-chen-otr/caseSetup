@@ -19,8 +19,8 @@ A fresh \codeword{caseSetup} file will be generated. The inside of the file will
 \end{lstlisting}
 The \codeword{DEFAULT_MODULES} line controls the settings that are available. If the setting is not visible, it just means that it will use the default setup. Each setting here is explained below:
 \begin{itemize}
-    \item \codeword{CASENAME} - the case name for your case, it does not do anything at this time, but in the future it could be added to the post processing images.
-    \item \codeword{CASEDESCRP} - case description, see \codeword{CASENAME}
+    \item \codeword{CASENAME} - the case name for your case. It is written to the \codeword{Description} column of the Google Sheet trials list, see Section \codeword{Pushing Results to Google Sheets}.
+    \item \codeword{CASEDESCRP} - case description. It is written to the \codeword{Comments} column of the Google Sheet trials list.
     \item \codeword{JOBCODE} - Two letter initial for the job you are running, just helps identify the job that's running on the cluster queue.
     \item \codeword{GEOM} - List of geometries to use in the case. A comma separates each setting for that particular geometry, the next geometry goes on the subsequent line.
     \begin{itemize}

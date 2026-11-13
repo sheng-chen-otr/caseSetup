@@ -1,6 +1,6 @@
 \section{Theory}
 
-This section gives the theoretical background needed to interpret the turbulence models selected by \codeword{caseSetup}, and the method used to choose ride-height runs for an aero map. The equations below use the incompressible, constant-density form for clarity. The same modelling ideas apply to the compressible formulations, with the additional energy equation and density variations.
+This section gives the theoretical background needed to interpret the turbulence models selected by \codeword{caseSetup}, the method used to choose ride-height runs for an aero map, and how the suspension kinematic solver moves the geometry. The equations below use the incompressible, constant-density form for clarity. The same modelling ideas apply to the compressible formulations, with the additional energy equation and density variations.
 
 \subsection{Reynolds-Averaged Navier--Stokes (RANS)}
 
@@ -353,4 +353,201 @@ After that the breakpoints are rounded to 0.5 mm. If rounding puts two breakpoin
     \item The weights come from one lap with one setup. A different track or setup changes which ride heights matter, so the runs should be picked again.
 
     \item The sweep assumptions are only checked at two ride heights and two combined corners.
+\end{itemize}
+
+\subsection{Suspension Kinematics}
+\label{sec:suspTheory}
+
+This section explains what happens to each ride-height point when the kinematic solver is turned on with \codeword{USE_KINEMATIC_SOLVER}. The solver code is in the \codeword{rideHeightUtils} folder. How to set it up is covered in Section \codeword{Ride-Height and Suspension Kinematics}. Again, you don't need to follow every equation to use it, but knowing what it does makes it much easier to spot a bad hardpoint file.
+
+There are three steps:
+\begin{itemize}
+    \item turn the four corner ride heights into a pitch, roll and heave of the car, and a wheel travel at each corner
+    \item for each corner, solve the linkage to find where every part sits at that wheel travel (and steer)
+    \item move each part of the geometry to its new position
+\end{itemize}
+
+The figures in this section are made by the \codeword{makeFigures.py} script in \codeword{figures/suspension}. It runs the real solver on the hardpoint template. The drawings have no scale, and the plots show every value as a fraction of its largest value, so they show the shape of the results but not the real numbers.
+
+\subsubsection{From corner ride heights to pitch, roll and heave}
+
+The ride-height file gives a change in height $\Delta z$ at each corner, positive when that corner of the car goes up. These are first turned into the motion of the whole car. The front and rear are averaged across the car, and the left and right are averaged along it:
+\begin{equation}
+    \Delta z_F = \frac{\Delta z_{FL} + \Delta z_{FR}}{2}, \qquad \Delta z_R = \frac{\Delta z_{RL} + \Delta z_{RR}}{2}, \qquad h = \frac{\Delta z_F + \Delta z_R}{2},
+\end{equation}
+\begin{equation}
+    \theta = \sin^{-1}\!\left(\frac{\Delta z_F - \Delta z_R}{L}\right), \qquad \phi = \sin^{-1}\!\left(\frac{\Delta z_{FR} - \Delta z_{FL}}{t}\right).
+\end{equation}
+$h$ is the heave, how far the middle of the car moves up. $\theta$ is the pitch, positive when the front goes up. $\phi$ is the roll, positive when the right side goes up. $L$ is the wheelbase and $t$ the track width, taken from \codeword{RH_REF_LEN} and \codeword{RH_REF_WIDTH}, or from \codeword{REFLEN} and \codeword{REFWIDTH} when those are blank. Figure \ref{fig:suspPitchRoll} shows what each one means.
+
+The roll is worked out twice, once from the front pair of corners and once from the rear pair. A rigid car can only heave, pitch and roll, which is three numbers, but the file gives four. So the four corners have to sit on a flat plane, otherwise the chassis would have to twist. If the front and rear roll differ by more than $0.05^\circ$, \codeword{caseSetup} stops with an error, because the point is asking for something the car can't do.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/suspension/suspPitchRoll.png}
+    \caption{How the corner changes become pitch (left) and roll (right). The dashed box is the car at its original height. Heave is the average height change, measured at the middle of the car.}
+    \label{fig:suspPitchRoll}
+\end{figure}
+
+In CFD it is easier to keep the car still and move everything around it. So instead of moving the car body, \codeword{caseSetup} moves the ground and tunnel by the opposite amount: down by $h$, and rotated by $-\theta$ and $-\phi$ about \codeword{REFCOR}. The car body looks exactly the same to the flow either way.
+
+The wheels are the opposite story. If the car goes up at a corner and the tyre stays on the ground, then seen from the car the wheel has dropped. So the wheel travel at each corner, measured from the car body, is
+\begin{equation}
+    s = -\Delta z,
+\end{equation}
+positive in bump (wheel moving up towards the body) and negative in droop. With the simple mode the wheel is just moved up or down by $s$. With the kinematic solver $s$ is the input to the linkage solve below.
+
+\subsubsection{The corner as a linkage}
+
+Figure \ref{fig:suspCornerLayout} shows the front-left corner from the hardpoint template. The upright, which carries the wheel, is treated as one solid part. It is held in place by five rods, each with a fixed length:
+\begin{itemize}
+    \item the upper control arm (UCA), which is two rods from the chassis meeting at one ball joint on the upright
+    \item the lower control arm (LCA), also two rods and one ball joint
+    \item the tie rod, from the steering rack to the upright
+\end{itemize}
+On top of that, the pushrod (or pullrod) runs from one of the wishbones to the rocker, the rocker turns about its pivot, and the damper runs from the rocker to the chassis.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/suspension/suspCornerLayout.png}
+    \caption{The front-left corner of the hardpoint template, seen from behind. Black squares are fixed to the chassis, white circles move with the wheel. The two legs of each wishbone overlap from this angle. The rocker is the shaded triangle.}
+    \label{fig:suspCornerLayout}
+\end{figure}
+
+\textbf{The idea in one line:} if you know how long every rod is, and how high the wheel is, there is only one way the corner can sit.
+
+To find that position the solver needs eight numbers, put together in a list $\mathbf{x}$:
+\begin{itemize}
+    \item three for how the upright is rotated, written as a rotation vector $\mathbf{r}$ (its direction is the axis, its length is the angle)
+    \item three for where the wheel centre $\mathbf{c}$ is
+    \item the rocker angle $\beta$
+    \item how far the steering rack has moved, $d$
+\end{itemize}
+Every point bolted to the upright then moves with it. If $\mathbf{p}^0$ is a point on the upright measured from the static wheel centre, its new position is $R(\mathbf{r})\,\mathbf{p}^0 + \mathbf{c}$, where $R(\mathbf{r})$ is the rotation matrix for $\mathbf{r}$.
+
+Eight unknowns need eight equations. Each one is written as an error $r_k$ that should be zero:
+\begin{equation}
+    r_k = \left\| R(\mathbf{r})\,\mathbf{p}^0_k + \mathbf{c} - \mathbf{q}_k \right\| - L_k, \qquad k = 1\dots5,
+\end{equation}
+\begin{equation}
+    r_6 = \left\| \mathbf{p}_{push} - \mathbf{k}_{push}(\beta) \right\| - L_{push}, \qquad r_7 = c_z - (c_z^0 + s), \qquad r_8 = \mathrm{steer\ equation}.
+\end{equation}
+In words:
+\begin{itemize}
+    \item $r_1$ to $r_5$ - each of the five rods must keep its static length $L_k$. $\mathbf{q}_k$ is the chassis end of the rod and $\mathbf{p}^0_k$ the upright end. For the tie rod the chassis end is the rack, which slides by $d$ along \codeword{RACK_AXIS}.
+    \item $r_6$ - the pushrod must keep its length. Its lower end $\mathbf{p}_{push}$ is bolted to a wishbone, so it swings about that wishbone's two chassis mounts by the same angle as the wishbone. Its upper end $\mathbf{k}_{push}$ is on the rocker, turned by $\beta$ about the rocker axis.
+    \item $r_7$ - the wheel centre must be at the requested height, the static height plus the travel $s$.
+    \item $r_8$ - with no steer, the rack stays put ($d = 0$). When steering the front-left, the toe angle must equal the requested angle. For the front-right, the rack travel must equal the front-left rack travel (see below).
+\end{itemize}
+Everything is in metres, so the steer error is multiplied by the tie rod length to turn an angle into a length. That way all eight errors are the same kind of number and can be added up fairly.
+
+\subsubsection{How the solver finds the answer}
+
+The equations can't be solved directly, so the solver guesses and corrects (Gauss--Newton). Starting from a guess $\mathbf{x}$, it checks how much each error $r_k$ changes when each unknown is nudged a little. This table of slopes is called the Jacobian $J$. It is then used to work out the step that should bring all the errors to zero together:
+\begin{equation}
+    \Delta\mathbf{x} = -\left(J^{T}J + \lambda I\right)^{-1} J^{T}\,\mathbf{r}.
+\end{equation}
+You don't need to follow this equation. It is the "least squares" step: the change in $\mathbf{x}$ that best cancels the current errors if everything were a straight line. The tiny $\lambda$ ($10^{-9}$) keeps it from blowing up when the linkage is close to locking.
+
+The equations aren't straight lines, so a full step can overshoot. If the step makes the total error bigger, it is halved and tried again, up to ten times. The rocker angle is also kept within $\pm 90^\circ$. The loop stops when the total error is below $10^{-9}$ m, or after 80 steps.
+
+Figure \ref{fig:suspSolverConvergence} shows how fast this is. Even starting from the static pose, the error drops by roughly a hundred times each step and passes in two to three steps. In \codeword{caseSetup} each point starts from the answer of the point before it, which makes it even quicker.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.75\textwidth]{figures/suspension/suspSolverConvergence.png}
+    \caption{The total error after each solver step for three cases on the template corner. Note the log scale. Anything under the dashed line passes.}
+    \label{fig:suspSolverConvergence}
+\end{figure}
+
+A point passes when the total error is under $10^{-6}$ m (0.001 mm). If it doesn't, the linkage really can't reach that position, and \codeword{caseSetup} stops with the \codeword{suspension solve did not converge} error. That error lists which of the eight equations are furthest off, which usually points straight at the problem: travel past what the linkage can do, a typo in a hardpoint, or the wrong \codeword{HARDPOINT_SCALE}.
+
+\subsubsection{What comes out}
+
+From the solved upright, the solver works out the wheel's spin axis $\mathbf{a}$ and forward direction $\mathbf{f}$, by rotating \codeword{WHEEL_AXIS_LOCAL} and \codeword{WHEEL_FORWARD_LOCAL}. From these:
+\begin{equation}
+    \gamma = \sin^{-1}\!\left(a_z\right), \qquad \delta = \tan^{-1}\!\left(\frac{f_y}{f_x}\right), \qquad \Delta l_{damper} = \left\| \mathbf{k}_{damper}(\beta) - \mathbf{q}_{damper} \right\| - l^0_{damper}.
+\end{equation}
+\begin{itemize}
+    \item $\gamma$ is the camber. The spin axis $\mathbf{a}$ is flipped first, if needed, so it always points inboard. That way the sign doesn't depend on which way \codeword{WHEEL_AXIS_LOCAL} was typed in. Negative camber means the top of the wheel leans in towards the car. Only the vertical part of the axis is used, so steering doesn't change it.
+    \item $\delta$ is the toe (or steer) angle, the direction the wheel points in the ground plane.
+    \item $\Delta l_{damper}$ is how much the damper has stretched, negative when compressed. $\mathbf{k}_{damper}$ is the rocker end of the damper, $\mathbf{q}_{damper}$ the chassis end.
+\end{itemize}
+All of these are written into the ride-height table for every point and corner, together with the rocker angle and rack travel.
+
+Figure \ref{fig:suspCurves} shows them over the travel range for the template's front-left corner. How much the damper moves for each millimetre of wheel travel is the motion ratio,
+\begin{equation}
+    MR = -\frac{d\,\Delta l_{damper}}{ds},
+\end{equation}
+which is just the slope of the right-hand plot. A straight line means the motion ratio stays about the same through the travel.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/suspension/suspCurves.png}
+    \caption{Camber change, toe change (bump steer) and damper length change against wheel travel, for the front-left of the hardpoint template. Every axis is scaled to the largest value in that plot.}
+    \label{fig:suspCurves}
+\end{figure}
+
+These curves are a good check of your hardpoint file. If the camber or bump steer looks very different to what your suspension design says, a hardpoint is probably wrong.
+
+\subsubsection{Steering}
+
+Both front wheels are connected to one steering rack. So the front-left and front-right can't be given angles separately, they have to share one rack travel. \codeword{caseSetup} does this in two passes:
+\begin{itemize}
+    \item the front-left is solved with $r_8$ set to "toe must equal the requested steer angle". This gives the rack travel $d$ needed.
+    \item the front-right is then solved with $r_8$ set to "rack travel must equal $d$". Its angle comes out of the geometry.
+\end{itemize}
+Because of the way the steering arms are angled, the same rack travel gives a different angle at each wheel. This difference is Ackermann, and Figure \ref{fig:suspAckermann} shows it for the template. It grows with steer angle and depends on which way you are turning. You don't set it anywhere, it simply comes out of the hardpoints, the same as it would on the real car. The front-right also sits at its own ride height, so the difference includes any bump steer too.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/suspension/suspAckermann.png}
+    \caption{Left: the front-right angle for the same rack travel as the front-left, against the dashed line where both wheels would steer the same. Right: the difference between the two. Both at static ride height, with both axes scaled by the largest angle.}
+    \label{fig:suspAckermann}
+\end{figure}
+
+\subsubsection{Moving the geometry}
+
+Once a corner is solved, every part is moved as one rigid piece using
+\begin{equation}
+    \mathbf{v}' = R(\mathbf{r}_c)\left(\mathbf{v} - \mathbf{o}_c\right) + \mathbf{o}_c + \mathbf{t}_c,
+\end{equation}
+where $\mathbf{v}$ is each vertex of the part, and each component $c$ has its own rotation $\mathbf{r}_c$, pivot point $\mathbf{o}_c$ and shift $\mathbf{t}_c$. In words: rotate the part about its pivot, then shift it. The rotation matrix comes from Rodrigues' formula,
+\begin{equation}
+    R = I + \sin\alpha\,K + (1 - \cos\alpha)\,K^2,
+\end{equation}
+where $\alpha$ is the length of $\mathbf{r}_c$ (the angle) and $K$ is a matrix built from its direction (the axis). You never need to work this out by hand, it is just the standard way to turn "rotate by this angle about this axis" into numbers.
+
+How the rotation, pivot and shift are chosen for each component is listed in Section \codeword{Per-Component Transforms}. The main ideas are:
+\begin{itemize}
+    \item the wheel and upright take the full solved pose of the upright
+    \item the wishbones only rotate about the line through their two chassis mounts, so the mounts stay exactly where they are
+    \item the rocker only rotates about its own axis
+    \item the pushrod and tie rod are rotated and shifted so both of their ends land on the parts they are attached to
+    \item the damper turns about its chassis end and is stretched along its length by the damper stroke, so it gets shorter in bump
+\end{itemize}
+Figure \ref{fig:suspPoses} shows the result at full droop, static and full bump. For every child case, \codeword{caseSetup} also saves a 3D before and after plot of each corner, \codeword{linkage_validation_<corner>.png}, in the child folder. It prints a warning if any part turns or moves much more than a suspension normally would. Have a quick look at these the first time you use a new hardpoint file.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{figures/suspension/suspPoses.png}
+    \caption{The template front-left corner at full droop (green), static (black) and full bump (red), seen from behind. The chassis mounts don't move, the wheel gains negative camber in bump, and the rocker turns to compress the damper.}
+    \label{fig:suspPoses}
+\end{figure}
+
+\subsubsection{Limitations}
+\begin{itemize}
+    \item Every part is treated as perfectly stiff. Bushes, flex in the arms and compliance steer are not modelled.
+
+    \item The tyre isn't squashed. The ride height is the body height, so all of the body motion goes into wheel travel. In reality some of it is tyre deflection.
+
+    \item Camber and toe are measured relative to the car body, not the ground. When the car rolls, the angle to the ground is different by about the roll angle.
+
+    \item The four corners have to sit on a flat plane, a ride-height point can't twist the chassis.
+
+    \item Each corner is solved on its own. Anything joining the two sides, like an anti-roll bar, isn't modelled, and its parts won't move unless they are attached to a corner in the hardpoint file.
+
+    \item Only the front is steered, the rack moves in one straight line, and the front-left is always the reference wheel.
+
+    \item The solver finds the position closest to where it started. For normal travel there is only one sensible answer, but for a linkage near its limit, check the linkage plots.
 \end{itemize}
