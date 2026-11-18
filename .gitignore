@@ -6,6 +6,7 @@ __pycache__/
 # C extensions
 *.so
 
+
 # Distribution / packaging
 .Python
 python*
@@ -172,3 +173,6 @@ cython_debug/
 *.toc
 *.dvi
 credentials.json
+
+# clause
+*.md

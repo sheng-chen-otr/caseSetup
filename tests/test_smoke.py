@@ -28,6 +28,7 @@ import py_compile
 import pytest
 
 CORE_MODULES = [
+    "setupCore",
     "utilities",
     "writeConstant",
     "writeScripts",

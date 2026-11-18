@@ -37,6 +37,8 @@ import shutil
 import gzip
 import re
 import multiprocessing
+import setupCore
+from setupCore import __version__
 
 #these lines get the path which the program is run from
 path = os.path.split(os.getcwd())[0] #path of the case
@@ -59,7 +61,7 @@ print('EXECUTING FROM: ' + execDir)
 if not os.path.isdir(templateBaseLoc):
     sys.exit("ERROR: Template path incorrect!")
 
-parser = argparse.ArgumentParser(prog='caseSetup-v5.0.0',description='Set us the case based on settings written out in the caseSetup')
+parser = argparse.ArgumentParser(prog='caseSetup-v%s' % __version__,description='Set us the case based on settings written out in the caseSetup')
                     
 parser.add_argument("-s","--setup", default='default', 
                    
@@ -95,24 +97,40 @@ updateCaseSetupFlag = False
 #available addon keywords
 addonKeyWords = ['POR','FAN','REFX','WAKE','GEOMX','ROTA','MOVG','IDOM','MRFG','GRND']
 
+#(prefix, defaultBCTemplates file, section header), in the order they are checked.
+#FAN is a placeholder for checkFan (extra validation); REFX is handled by checkRefinements
+addonTemplates = [
+    ('GEOMX', 'defaultGeomx',          'GEOMX_SETUP'),
+    ('POR',   'defaultPorous',         'POR_SETUP'),
+    ('FAN',   'defaultFan',            'FAN_SETUP'),
+    ('MRFG',  'defaultMRFG',           'MRF_SETUP'),
+    ('ROTA',  'defaultWheel',          'WH_SETUP'),
+    ('IDOM',  'defaultInternalDomain', 'INTERNAL_DOMAIN'),
+    ('GRND',  'defaultGrnd',           'GRND_SETUP'),
+]
+
 
 #getting default values from template
 def main():
-    titleText = '''\t##############################\n\t\tcaseSetup-v4.2.3\t\n\t##############################'''
+    global updateCaseSetupFlag
+    titleText = '''\t##############################\n\t\tcaseSetup-v%s\t\n\t##############################''' % __version__
     print(titleText)
     getTemplateType(SETUP)
-    
-    
-    
-    defaultDict = getGlobalDefaults()
+    caseDir = os.path.join(path, case)
+
+
+
+    defaultDict = setupCore.getGlobalDefaults(templateLoc, PR_MODULES)
     if NEWCS == True:
-        writeNewCaseSetup(defaultDict)
+        setupCore.writeNewCaseSetup(defaultDict, caseDir)
     else:
         #copy over the pvPostSetup
         if args.postProDict:
             copyPvPostSetup()
             return
-        caseSetupDict,writeCaseSetupDict,fullCaseSetupDict = getCaseSetup(defaultDict)
+        caseSetupDict,writeCaseSetupDict,fullCaseSetupDict,flag = setupCore.getCaseSetup(
+            defaultDict, caseDir, addonKeyWords)
+        updateCaseSetupFlag = updateCaseSetupFlag or flag
 
         #srf cornering: force a full (non-symmetric) model in-memory, leaves caseSetup SIM_SYM alone
         if 'CORNERING_SETUP' in fullCaseSetupDict and \
@@ -130,17 +148,17 @@ def main():
             print('\n\tanimateSuspension enabled: linking geometry then generating the '
                   'suspension motion animation only (the rest of caseSetup is skipped)...')
             writeCaseSetupDict,geomDict,fullCaseSetupDict = getGeometry(fullCaseSetupDict,writeCaseSetupDict)
-            linkGeomFiles(geomDict)
+            setupCore.linkGeomFiles(geomDict, caseDir, jobPath)
             generateSuspensionAnimation(fullCaseSetupDict, caseDir=os.path.join(path, case))
             print('\nSuspension animation completed.')
             return
 
         writeCaseSetupDict,geomDict,fullCaseSetupDict = getGeometry(fullCaseSetupDict,writeCaseSetupDict) 
         
-        cleanUpCaseSetup(geomDict,writeCaseSetupDict,fullCaseSetupDict,defaultDict)
-        writeToCaseSetup(writeCaseSetupDict)
+        setupCore.cleanUpCaseSetup(geomDict,writeCaseSetupDict,fullCaseSetupDict,addonKeyWords)
+        setupCore.writeToCaseSetup(writeCaseSetupDict, caseDir, 'caseSetup', updateCaseSetupFlag)
         if args.rideHeightMode == False:
-            linkGeomFiles(geomDict)
+            setupCore.linkGeomFiles(geomDict, caseDir, jobPath)
                 
         geomDict ,fullCaseSetupDict = writeSnappy(geomDict,fullCaseSetupDict)
         
@@ -167,7 +185,7 @@ def main():
         writeCorneringRelativeFields(fullCaseSetupDict)
         writeTransportProperties(templateLoc, fullCaseSetupDict)
         writeTurbulenceProperties(templateLoc, fullCaseSetupDict)
-        writeToCaseSetup(fullCaseSetupDict,'fullCaseSetupDict')
+        setupCore.writeToCaseSetup(fullCaseSetupDict, caseDir, 'fullCaseSetupDict', updateCaseSetupFlag)
         
         if args.rideHeightMode:
             makeScripts(templateLoc,fullCaseSetupDict)
@@ -689,263 +707,6 @@ def writeSnappy(geomDict,fullCaseSetupDict):
         search_and_replace("%s/%s/system/snappyHexMeshDict" % (path,case), '<%s>' % (snappySec),''.join(snappyDict[snappySec]))
     return geomDict,fullCaseSetupDict
 
-def linkGeomFiles(geomDict):
-    #have to check if constant/triSurface folder exists
-    if os.path.exists("%s/%s/constant" % (path,case)):
-        if os.path.exists("%s/%s/constant/triSurface" % (path,case)):
-            print('\n\t\ttriSurface directory OK!')
-        else:
-            print('\n\t\tWARNING: triSurface directory not found, creating!')
-            try:
-                os.system('mkdir %s/%s/constant/triSurface' % (path,case))
-            except Exception as e:
-                print('\n\t\tERROR: unable to make triSurface directory due to error:')
-                print(e)
-                
-    else:
-        print('\n\t\tWARNING: constant directory not found, creating constant and constant/triSurface!')
-        try:
-            os.system('mkdir %s/%s/constant' % (path,case))
-        except Exception as e:
-                print('\n\t\tERROR: unable to make constant directory due to error:')
-                print(e)
-        try:
-            os.system('mkdir %s/%s/constant/triSurface' % (path,case))
-        except Exception as e:
-                print('\n\t\tERROR: unable to make triSurface due to error:')
-                print(e)
-        
-    print('\n\t\tLinking geometry files:')
-        
-    for geom in geomDict.keys():
-        if not os.path.isfile("%s/02_reference/MSH/%s" % (jobPath,geom)):
-            sys.exit("ERROR! TriSurface: %s not found in MSH folder!" % (geom))
-        elif os.path.isfile("constant/triSurface/%s" % (geom)):
-            print("\t\t\t%s is already linked, skipping..." % (geom))
-            continue
-        else:
-            print('\t\t\t%s' % (geom))
-            cmd = "ln -s ../../../../02_reference/MSH/%s constant/triSurface/%s" % (geom,geom)
-            os.system(cmd)
-            
-#removes any unnecessary sections
-def cleanUpCaseSetup(geomDict,writeCaseSetupDict,fullCaseSetupDict,defaultDict):
-    sectionsToDelete = []
-    #porous and ref check
-    geomNames = [stripExt(i) for i in geomDict.keys()]
-    for key in writeCaseSetupDict.keys():
-        if any(key.startswith(i) for i in addonKeyWords) and key in geomNames:
-            continue
-        elif any(key.startswith(i) for i in addonKeyWords) and key not in geomNames:
-            if key not in sectionsToDelete:
-                sectionsToDelete.append(key)
- 
-    for key in fullCaseSetupDict.keys():
-        if any(key.startswith(i) for i in addonKeyWords) and key in geomNames:
-            continue
-        elif any(key.startswith(i) for i in addonKeyWords) and key not in geomNames:
-            if key not in sectionsToDelete:
-                sectionsToDelete.append(key)
-
-    for sectionsDel in sectionsToDelete:
-        del writeCaseSetupDict[sectionsDel]
-        del fullCaseSetupDict[sectionsDel]
-
-    return writeCaseSetupDict,fullCaseSetupDict
-
-    
-
-       
-def writeNewCaseSetup(defaultDict):
-    print('\tWriting new caseSetup file...')
-    defaultDictKeys = defaultDict.keys()
-    defaultModules = defaultDict['MODULE_LINK']
-    defaultModuleNames = defaultDict['MODULE_LINK'].keys()
-    writeCaseSetupDict = {}
-    toWriteNew = ['DEFAULTS','TITLES','GEOMETRY']
-    for module in defaultModules:
-        
-        sectionName = defaultModules[module][0]
-        if sectionName in toWriteNew:
-            writeCaseSetupDict[sectionName] = {}
-            writeCaseSetupDict[sectionName] = defaultDict[sectionName]
-    
-    writeToCaseSetup(writeCaseSetupDict)
-        
-def writeToCaseSetup(writeCaseSetupDict,output='default'):
-    writeConfig = configparser.ConfigParser()
-    writeConfig.optionxform = str
-    for module in writeCaseSetupDict.keys():
-        writeConfig.add_section(module)
-        for key in writeCaseSetupDict[module].keys():
-            #print(" ".join(list(writeCaseSetupDict[module][key])))
-            writeConfig.set(module,key," ".join(list(writeCaseSetupDict[module][key])))
-    
-    try:
-        #caseSetupConfig.read_file(open("%s/%s/caseSetup" % (path,case)))
-        if output == 'default':
-            with open("%s/%s/caseSetup" % (path,case),'w') as caseSetupFile:
-                writeConfig.write(caseSetupFile)
-        else:
-            with open("%s/%s/%s" % (path,case,output),'w') as caseSetupFile:
-                writeConfig.write(caseSetupFile)
-    except:
-        print('\nERROR! Unable to write caseSetup!')
-        
-    if updateCaseSetupFlag == True:
-        sys.exit('\nWARNING: caseSetup has been updated with default values, please check caseSetup and rerun.')
-        
-        
-def getGlobalDefaults():
-    defaultDict = {}
-    print('\n\tGetting global templates...')
-    config = configparser.ConfigParser()
-    config.optionxform = str
-    config.read_file(open("%s/defaultSetup/defaultOrder" % (templateLoc)))
-    configSections = config.sections()
-    
-    #get the order so that the when writing to the caseSetup file, orders will be right
-    defaultOrder = np.array(config.items('DEFAULT_ORDER')[0])
-    
-    defaultOrder = defaultOrder[1].split(' ')
-    if PR_MODULES == True:
-        print('\tAVAILABLE MODULES:' % (defaultOrder))
-        for module in defaultOrder:
-            print('\t\t' + module)
-        sys.exit()
-    defaultDict['MODULE_LINK'] = {}
-    for file in defaultOrder:
-        print('\t\t%s' % (file))
-        defaultConfigRead = configparser.ConfigParser()
-        defaultConfigRead.optionxform = str
-
-        try:
-            defaultConfigRead.read_file(open("%s/defaultSetup/%s" % (templateLoc,file)))
-        except:
-            print('ERROR! Default %s cannot be opened!' % (file))
-            exit()
-        defaultSections = defaultConfigRead.sections()
-        
-        for section in defaultSections:
-            defaultDict[section] = {}
-            defaultDict['MODULE_LINK'][file] = [section]
-            defaultLine = np.array(defaultConfigRead.items(section))
-            defaultVars = defaultLine[:,0]
-            for i in range(len(defaultVars)):
-                defaultDict[section][defaultVars[i]] = defaultLine[i,1].split(' ')
-    return defaultDict
-    
-#reading in caseSetup
-def getCaseSetup(defaultDict):
-
-    print('\n\tReading caseSetup from case directory...')
-    caseSetupConfig = configparser.ConfigParser()
-    caseSetupConfig.optionxform = str
-    #tries to read the caseSetup file, if it can't find it, it throws an error
-    try:
-        caseSetupConfig.read_file(open("%s/%s/caseSetup" % (path,case)))
-    except Exception as e:
-        print('\n\n\nERROR! caseSetup invalid!')
-        print(e)
-        sys.exit()
-    caseSetupDict = {}
-    caseSetupConfigSections = caseSetupConfig.sections()
-    #getting the modules that are already there
-    for section in caseSetupConfigSections:
-            caseSetupLine = np.array(caseSetupConfig.items(section))
-            if len(caseSetupLine[:]) < 1:
-                updateCaseSetupFlag = True
-            else:
-                caseSetupDict[section] = {}
-                caseSetupVars = caseSetupLine[:,0]
-                for i in range(len(caseSetupVars)):
-                    caseSetupDict[section][caseSetupVars[i]] = caseSetupLine[i,1].split(' ')
-    
-    writeCaseSetupDict,fullCaseSetupDict = getCaseSetupDefaultModules(caseSetupDict,defaultDict)
-    
-    return caseSetupDict,writeCaseSetupDict,fullCaseSetupDict
-
-def getCaseSetupDefaultModules(caseSetupDict,defaultDict):  
-    global updateCaseSetupFlag
-    caseSetupKeys = caseSetupDict.keys()
-    defaultDictKeys = defaultDict.keys()
-    try:
-        defaultSection = caseSetupDict['DEFAULTS']   
-    except:
-        print('\n\nERROR! caseSetup does not have [DEFAULTS] section! To generate a new caseSetup, use the --new flag.')
-        exit()
-    caseSetupModules = caseSetupDict['DEFAULTS']['DEFAULT_MODULES']
-    defaultModules = defaultDict['MODULE_LINK']
-    defaultModuleNames = defaultDict['MODULE_LINK'].keys()
-    
-    #check that modules are valid
-    invalidModules = []
-    for inputModule in caseSetupModules:
-        if inputModule in defaultModuleNames:
-            continue
-        elif inputModule != '':
-            invalidModules.append(inputModule)
-    if len(invalidModules) > 0:
-        
-        print('\n\n\nERROR! The following modules are invalid: ')
-        for invalidModule in invalidModules:
-            print('\t' + invalidModule)
-        exit()
-        
-    
-    #init dict for casesetup to read
-    fullCaseSetupDict = {}
-    #init dict for casesetup to write back
-    writeCaseSetupDict = {}
-    
-    #if loops for default modules if they are there or not
-    for module in defaultModules:
-        sectionName = defaultModules[module][0]
-        if module in caseSetupModules and sectionName in caseSetupKeys:
-            fullCaseSetupDict[sectionName] = {}
-            fullCaseSetupDict[sectionName] = defaultDict[sectionName]    
-        elif module in caseSetupModules and sectionName not in caseSetupKeys:
-            fullCaseSetupDict[sectionName] = {}
-            fullCaseSetupDict[sectionName] = defaultDict[sectionName]
-        elif module not in caseSetupModules and sectionName in caseSetupKeys:
-            fullCaseSetupDict[sectionName] = {}
-            fullCaseSetupDict[sectionName] = caseSetupDict[sectionName]
-            writeCaseSetupDict[sectionName] = {}
-            writeCaseSetupDict[sectionName] = caseSetupDict[sectionName]
-            
-            caseSetupSectionVars = caseSetupDict[sectionName].keys()
-            defaultSectionVars = defaultDict[sectionName].keys()
-            for var in defaultSectionVars:
-                if var in caseSetupSectionVars:
-                    continue
-                elif var not in caseSetupSectionVars:
-                    writeCaseSetupDict[sectionName][var] = defaultDict[sectionName][var]
-                    updateCaseSetupFlag = True
-            
-        elif module not in caseSetupModules and sectionName not in caseSetupKeys:
-            fullCaseSetupDict[sectionName] = {}
-            fullCaseSetupDict[sectionName] = defaultDict[sectionName]
-            writeCaseSetupDict[sectionName] = {}
-            writeCaseSetupDict[sectionName] = defaultDict[sectionName]
-            updateCaseSetupFlag = True
-        elif sectionName.startswith('POR'):
-            writeCaseSetupDict[sectionName] = {}
-            writeCaseSetupDict[sectionName] = caseSetupDict[sectionName]
-        else:
-            print('Some weird error happened!')
-    
-    
-    #addon check sections
-    
-    for section in caseSetupKeys:
-        if any(section.startswith(i) for i in addonKeyWords):
-            writeCaseSetupDict[section] = {}
-            writeCaseSetupDict[section] = caseSetupDict[section]
-            fullCaseSetupDict[section] = {}
-            fullCaseSetupDict[section] = caseSetupDict[section]
-            
-    return writeCaseSetupDict,fullCaseSetupDict
-    
 def checkRefinements(geomDict,writeCaseSetupDict,fullCaseSetupDict):
     global updateCaseSetupFlag
     
@@ -965,8 +726,7 @@ def checkRefinements(geomDict,writeCaseSetupDict,fullCaseSetupDict):
         if geom.startswith('REF'):
             if geom.startswith('REFX'):
                 refName = stripExt(geom)
-                if refName in writeCaseSetupDict.keys():               
-                    tempDict = {}
+                if refName in writeCaseSetupDict.keys():
                     refTypes = {'inside':'REF_SETUP','outside':'REF_SETUP','distance':'REF_SETUP_DISTANCE'}
                     #checking what type of refinement then making sure the required variables are in
                     try:
@@ -981,17 +741,10 @@ def checkRefinements(geomDict,writeCaseSetupDict,fullCaseSetupDict):
                         print('WARNING: Invalid input for [%s]: REF_TYPE' % (refName))
                         refTemplate = 'REF_SETUP'
                         
-                    for defaultRefVar in refConfigRead.items(refTemplate):
-                        defaultVar = defaultRefVar[0]
-                        defaultVal = defaultRefVar[1]
-                        try:
-                            tempDict[defaultVar] = writeCaseSetupDict[refName][defaultVar]      
-                        except:
-                            updateCaseSetupFlag = True
-                            tempDict[defaultVar] = [str(defaultVal)]
-                
-                    writeCaseSetupDict[refName] = tempDict
-                    
+                    if setupCore.fillAddonSection(writeCaseSetupDict, refName,
+                                                  refConfigRead.items(refTemplate)):
+                        updateCaseSetupFlag = True
+
                 else:   
                     try:
                         writeCaseSetupDict[refName] = {}
@@ -1054,7 +807,8 @@ def writeSurfaceFieldAverage(geomDict,fullCaseSetupDict):
     fieldAverageArray = ''.join(fieldAverageArray)
     search_and_replace('system/surfaceFieldAverage','<POROUS_MEDIA>',fieldAverageArray)
         
-def getGeometry(fullCaseSetupDict,writeCaseSetupDict):    
+def getGeometry(fullCaseSetupDict,writeCaseSetupDict):
+    global updateCaseSetupFlag
     geomDict = {}
     geomColumnNames = ['scale','refinement','layers','expansion','wallmodel']
     #getting geometry list from geometry section
@@ -1064,67 +818,25 @@ def getGeometry(fullCaseSetupDict,writeCaseSetupDict):
         print('ERROR! [GEOMETRY] section invalid!')
         exit()
     #breaking down geometry list into geometry dict
-    geomDict = geomToDict(geomDict,geometryList,geomColumnNames)
+    geomDict = setupCore.geomToDict(geomDict,geometryList,geomColumnNames)
     
     for geom in geomDict.keys():
         print('\n\t\t\t%s' % (geom))
         for col in geomDict[geom].keys():
             val = geomDict[geom][col]
             print('\t\t\t%s: %s' % (col,val))
-    writeCaseSetupDict = checkGeom(geomDict,writeCaseSetupDict)
-    writeCaseSetupDict = checkPorous(geomDict,writeCaseSetupDict)
-    writeCaseSetupDict = checkFan(geomDict,writeCaseSetupDict)
-    writeCaseSetupDict = checkMRF(geomDict,writeCaseSetupDict)
-    writeCaseSetupDict = checkRotation(geomDict,writeCaseSetupDict)
-    writeCaseSetupDict = checkInternalDomain(geomDict,writeCaseSetupDict)
-    writeCaseSetupDict = checkGround(geomDict,writeCaseSetupDict)
+    #simple add-ons: fill missing keys from defaultBCTemplates/<template> [<section>]
+    #FAN and REFX need extra validation and keep their own check functions
+    for prefix, template, section in addonTemplates:
+        if prefix == 'FAN':
+            writeCaseSetupDict = checkFan(geomDict,writeCaseSetupDict)
+            continue
+        writeCaseSetupDict, flag = setupCore.checkAddonDefaults(
+            geomDict, writeCaseSetupDict, templateLoc, prefix, template, section)
+        updateCaseSetupFlag = updateCaseSetupFlag or flag
     writeCaseSetupDict,fullCaseSetupDict = checkRefinements(geomDict,writeCaseSetupDict,fullCaseSetupDict)
 
     return writeCaseSetupDict,geomDict,fullCaseSetupDict
-
-def checkPorous(geomDict,writeCaseSetupDict):
-    global updateCaseSetupFlag
-    #getting porous media default module
-    porousConfigRead = configparser.ConfigParser()
-    porousConfigRead.optionxform = str
-    try:
-        porousConfigRead.read_file(open("%s/defaultBCTemplates/defaultPorous" % (templateLoc)))
-    except:
-        print('ERROR! defaultPorous template is invalid!')
-        exit()
-    
-    porousSections = porousConfigRead.sections()
-    
-    for geom in geomDict.keys():
-        if geom.startswith('POR'):
-            porousName = stripExt(geom)
-            if porousName in writeCaseSetupDict.keys():               
-                tempDict = {}
-                for defaultPorousVar in porousConfigRead.items('POR_SETUP'):
-                    defaultVar = defaultPorousVar[0]
-                    defaultVal = defaultPorousVar[1]
-                    try:
-                        tempDict[defaultVar] = writeCaseSetupDict[porousName][defaultVar]
-                    except:
-                        updateCaseSetupFlag = True
-                        tempDict[defaultVar] = [str(defaultVal)]
-                
-                writeCaseSetupDict[porousName] = tempDict
-                    
-            else:   
-                try:
-                    writeCaseSetupDict[porousName] = {}
-                    for var in list(porousConfigRead.items('POR_SETUP')):
-                        var = list(var)
-                        writeCaseSetupDict[porousName][var[0]] = [var[1]]
-                    updateCaseSetupFlag = True
-                except:
-                    print('ERROR! defaultPorous section header is not [POR_SETUP]!')
-                    exit()
-            
-        
-    return writeCaseSetupDict    
-
 
 def _fan_vector_setting(section, key, values, allow_default=True):
     """Validate a FAN three-component setting and return normalized tokens."""
@@ -1209,250 +921,6 @@ def checkFan(geomDict,writeCaseSetupDict):
             sys.exit('ERROR! %s -> FAN_PRESSURE_RISE must be one non-negative scalar.' % fanName)
 
     return writeCaseSetupDict
-
-def checkMRF(geomDict,writeCaseSetupDict):
-    global updateCaseSetupFlag
-    #getting porous media default module
-    mrfConfigRead = configparser.ConfigParser()
-    mrfConfigRead.optionxform = str
-    try:
-        mrfConfigRead.read_file(open("%s/defaultBCTemplates/defaultMRFG" % (templateLoc)))
-    except:
-        print('ERROR! defaultMRFG template is invalid!')
-        exit()
-    
-    porousSections = mrfConfigRead.sections()
-    
-    for geom in geomDict.keys():
-        if geom.startswith('MRFG'):
-            mrfName = stripExt(geom)
-            if mrfName in writeCaseSetupDict.keys():               
-                tempDict = {}
-                for defaultMRFVar in mrfConfigRead.items('MRF_SETUP'):
-                    defaultVar = defaultMRFVar[0]
-                    defaultVal = defaultMRFVar[1]
-                    try:
-                        tempDict[defaultVar] = writeCaseSetupDict[mrfName][defaultVar]
-                    except:
-                        updateCaseSetupFlag = True
-                        tempDict[defaultVar] = [str(defaultVal)]
-                
-                writeCaseSetupDict[mrfName] = tempDict
-                    
-            else:   
-                try:
-                    writeCaseSetupDict[mrfName] = {}
-                    for var in list(mrfConfigRead.items('MRF_SETUP')):
-                        var = list(var)
-                        writeCaseSetupDict[mrfName][var[0]] = [var[1]]
-                    updateCaseSetupFlag = True
-                except:
-                    print('ERROR! defaultMRFG section header is not [MRF_SETUP]!')
-                    exit()
-            
-        
-    return writeCaseSetupDict 
-
-def checkGeom(geomDict,writeCaseSetupDict):
-    global updateCaseSetupFlag
-    #getting custom geom default template
-    geomConfigRead = configparser.ConfigParser()
-    geomConfigRead.optionxform = str
-    try:
-        geomConfigRead.read_file(open("%s/defaultBCTemplates/defaultGeomx" % (templateLoc)))
-    except:
-        print('ERROR! defaultGeomx template is invalid!')
-        exit()
-    
-    porousSections = geomConfigRead.sections()
-    
-    for geom in geomDict.keys():
-        if geom.startswith('GEOMX'):
-            geomName = stripExt(geom)
-            if geomName in writeCaseSetupDict.keys():               
-                tempDict = {}
-                for defaultGeomVar in geomConfigRead.items('GEOMX_SETUP'):
-                    defaultVar = defaultGeomVar[0]
-                    defaultVal = defaultGeomVar[1]
-                    try:
-                        tempDict[defaultVar] = writeCaseSetupDict[geomName][defaultVar]
-                    except:
-                        
-                        updateCaseSetupFlag = True
-                        tempDict[defaultVar] = [str(defaultVal)]
-                
-                writeCaseSetupDict[geomName] = tempDict
-                    
-            else:   
-                try:
-                    writeCaseSetupDict[geomName] = {}
-                    for var in list(geomConfigRead.items('GEOMX_SETUP')):
-                        var = list(var)
-                        writeCaseSetupDict[geomName][var[0]] = [var[1]]
-                    updateCaseSetupFlag = True
-                except:
-                    print('ERROR! defaultGeomx section header is not [GEOMX_SETUP]!')
-                    exit()
-            
-        
-    return writeCaseSetupDict        
-
-def checkInternalDomain(geomDict,writeCaseSetupDict):
-    global updateCaseSetupFlag
-    #getting internal domain default module
-    idomConfigRead = configparser.ConfigParser()
-    idomConfigRead.optionxform = str
-    try:
-        idomConfigRead.read_file(open("%s/defaultBCTemplates/defaultInternalDomain" % (templateLoc)))
-    except:
-        print('ERROR! defaultInternalDomain template is invalid!')
-        exit()
-        
-    idomconfig = idomConfigRead.sections()
-    for geom in geomDict.keys():
-        if geom.startswith('IDOM'):
-            domName = stripExt(geom)
-            
-            if domName in writeCaseSetupDict.keys():               
-                tempDict = {}
-                for defaultDomVar in idomConfigRead.items('INTERNAL_DOMAIN'):
-                    defaultVar = defaultDomVar[0]
-                    defaultVal = defaultDomVar[1]
-                    try:
-                        tempDict[defaultVar] = writeCaseSetupDict[domName][defaultVar]
-                    except:
-                        updateCaseSetupFlag = True
-                        tempDict[defaultVar] = [str(defaultVal)]
-                
-                writeCaseSetupDict[domName] = tempDict
-                    
-            else:   
-                try:
-                    writeCaseSetupDict[domName] = {}
-                    for var in list(idomConfigRead.items('INTERNAL_DOMAIN')):
-                        var = list(var)
-                        writeCaseSetupDict[domName][var[0]] = [var[1]]
-                    updateCaseSetupFlag = True
-                except:
-                    print('ERROR! defaultInternalDomain section header is not [INTERNAL_DOMAIN]!')
-                    exit()
-        
-            
-        
-    return writeCaseSetupDict
-def checkGround(geomDict,writeCaseSetupDict):
-    global updateCaseSetupFlag
-    #getting ground zone default module
-    grndConfigRead = configparser.ConfigParser()
-    grndConfigRead.optionxform = str
-    try:
-        grndConfigRead.read_file(open("%s/defaultBCTemplates/defaultGrnd" % (templateLoc)))
-    except:
-        print('ERROR! defaultGrnd template is invalid!')
-        exit()
-
-    for geom in geomDict.keys():
-        if geom.startswith('GRND'):
-            grndName = stripExt(geom)
-            if grndName in writeCaseSetupDict.keys():
-                tempDict = {}
-                for defaultGrndVar in grndConfigRead.items('GRND_SETUP'):
-                    defaultVar = defaultGrndVar[0]
-                    defaultVal = defaultGrndVar[1]
-                    try:
-                        tempDict[defaultVar] = writeCaseSetupDict[grndName][defaultVar]
-                    except:
-                        updateCaseSetupFlag = True
-                        tempDict[defaultVar] = [str(defaultVal)]
-
-                writeCaseSetupDict[grndName] = tempDict
-
-            else:
-                try:
-                    writeCaseSetupDict[grndName] = {}
-                    for var in list(grndConfigRead.items('GRND_SETUP')):
-                        var = list(var)
-                        writeCaseSetupDict[grndName][var[0]] = [var[1]]
-                    updateCaseSetupFlag = True
-                except:
-                    print('ERROR! defaultGrnd section header is not [GRND_SETUP]!')
-                    exit()
-
-    return writeCaseSetupDict
-def checkRotation(geomDict,writeCaseSetupDict):
-    global updateCaseSetupFlag
-    #getting wheel default module
-    rotationConfigRead = configparser.ConfigParser()
-    rotationConfigRead.optionxform = str
-    try:
-        rotationConfigRead.read_file(open("%s/defaultBCTemplates/defaultWheel" % (templateLoc)))
-    except:
-        print('ERROR! defaultWheel template is invalid!')
-        exit()
-    
-    rotationConfig = rotationConfigRead.sections()
-    for geom in geomDict.keys():
-        if geom.startswith('ROTA'):
-            rotName = stripExt(geom)
-            
-            if rotName in writeCaseSetupDict.keys():               
-                tempDict = {}
-                for defaultWheelVar in rotationConfigRead.items('WH_SETUP'):
-                    defaultVar = defaultWheelVar[0]
-                    defaultVal = defaultWheelVar[1]
-                    try:
-                        tempDict[defaultVar] = writeCaseSetupDict[rotName][defaultVar]
-                    except:
-                        updateCaseSetupFlag = True
-                        tempDict[defaultVar] = [str(defaultVal)]
-                
-                writeCaseSetupDict[rotName] = tempDict
-                    
-            else:   
-                try:
-                    writeCaseSetupDict[rotName] = {}
-                    for var in list(rotationConfigRead.items('WH_SETUP')):
-                        var = list(var)
-                        writeCaseSetupDict[rotName][var[0]] = [var[1]]
-                    updateCaseSetupFlag = True
-                except:
-                    print('ERROR! defaultWheel section header is not [WH_SETUP]!')
-                    exit()
-            
-        
-    return writeCaseSetupDict    
-    
-def geomToDict(geomDict,geometryList,geomColumnNames):
-    
-    try:
-        print('\t\tGetting geometry...')
-        geometryList = geometryList[0].split('\n')
-        nGeoms = len(geometryList)
-        print('\t\t\tFound: %1.0f' % (nGeoms))
-    except:
-        print('ERROR! Geometry input invalid!')
-        
-    #splitting geoms into columns
-    for geometry in geometryList:
-        geometry = geometry.split(',')
-        
-        if len(geometry) != len(geomColumnNames) + 1:
-            print('ERROR! Geometry input invalid! Insufficient options input for: %s' % (geometry[0]))
-            exit()
-        else:
-            geometryName = geometry[0]
-            if geometryName in geomDict.keys():
-                print('ERROR! Duplicate geometry name found: %s' % (geometryName))
-                exit()
-            geomDict[geometryName] = {}
-            n = 0
-            while n < (len(geomColumnNames)):
-                geomCol = geomColumnNames[n]
-                geomDict[geometryName][geomCol] = geometry[n+1]
-                n = n + 1
-    
-    
-    return geomDict
 
 def copyPvPostSetup():
     print('\tCopying pvPostSetup into case directory...')
