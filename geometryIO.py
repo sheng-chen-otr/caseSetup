@@ -114,6 +114,32 @@ def readSurfaceVertices(path):
     return readObjVertices(path)
 
 
+def readSurfacePIDs(path):
+    """Return the PID (region) names of an OBJ or ASCII STL file, in file order.
+
+    STL: the name after each ``solid`` keyword. OBJ: ``g`` group names, or ``o``
+    object names when the file has no groups. These become the snappyHexMesh
+    regions, i.e. patches ``<surfaceName>_<pid>``. Repeated names are listed once.
+    """
+    stl = _looks_like_stl(path)
+    groups, objects = [], []
+    with _open_text_maybe_gz(path, "rt") as handle:
+        for line in handle:
+            tokens = line.split()
+            if not tokens:
+                continue
+            key = tokens[0].lower() if stl else tokens[0]
+            name = " ".join(tokens[1:])
+            if stl and key == "solid":
+                groups.append(name)
+            elif not stl and key == "g" and name:
+                groups.append(name)
+            elif not stl and key == "o" and name:
+                objects.append(name)
+    names = groups if groups or stl else objects
+    return list(dict.fromkeys(names))
+
+
 def surfaceBoundingBox(path):
     """Return the axis-aligned bounding box of a surface file.
 

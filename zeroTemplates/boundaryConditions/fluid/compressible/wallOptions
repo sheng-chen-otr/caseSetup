@@ -53,6 +53,31 @@ heatTransfer
             value       ${:VALUE.T};
         }
     }
+    //heat transfer to an ambient through h (W/m2/K) and Ta (K)
+    convective
+    {
+        T
+        {
+            type        externalWallHeatFluxTemperature;
+            mode        coefficient;
+            h           constant ${:VALUE.h};
+            Ta          constant ${:VALUE.Ta};
+            kappaMethod fluidThermo;
+            value       ${:VALUE.T};
+        }
+    }
+    //fixed heat flux q (W/m2, positive into the fluid)
+    heatFlux
+    {
+        T
+        {
+            type        externalWallHeatFluxTemperature;
+            mode        flux;
+            q           uniform ${:VALUE.q};
+            kappaMethod fluidThermo;
+            value       ${:VALUE.T};
+        }
+    }
     thermalCoupled
     {
         T

@@ -1,0 +1,90 @@
+solid hot
+ facet normal 0 0 -1
+  outer loop
+   vertex -0.05 -0.05 0
+   vertex 0.05 0.05 0
+   vertex 0.05 -0.05 0
+  endloop
+ endfacet
+ facet normal 0 0 -1
+  outer loop
+   vertex -0.05 -0.05 0
+   vertex -0.05 0.05 0
+   vertex 0.05 0.05 0
+  endloop
+ endfacet
+endsolid hot
+solid cold
+ facet normal 0 0 1
+  outer loop
+   vertex -0.05 -0.05 0.06
+   vertex 0.05 -0.05 0.06
+   vertex 0.05 0.05 0.06
+  endloop
+ endfacet
+ facet normal 0 0 1
+  outer loop
+   vertex -0.05 -0.05 0.06
+   vertex 0.05 0.05 0.06
+   vertex -0.05 0.05 0.06
+  endloop
+ endfacet
+endsolid cold
+solid side
+ facet normal -1 0 0
+  outer loop
+   vertex -0.05 -0.05 0
+   vertex -0.05 0.05 0.06
+   vertex -0.05 0.05 0
+  endloop
+ endfacet
+ facet normal -1 0 0
+  outer loop
+   vertex -0.05 -0.05 0
+   vertex -0.05 -0.05 0.06
+   vertex -0.05 0.05 0.06
+  endloop
+ endfacet
+ facet normal 1 0 0
+  outer loop
+   vertex 0.05 -0.05 0
+   vertex 0.05 0.05 0
+   vertex 0.05 0.05 0.06
+  endloop
+ endfacet
+ facet normal 1 0 0
+  outer loop
+   vertex 0.05 -0.05 0
+   vertex 0.05 0.05 0.06
+   vertex 0.05 -0.05 0.06
+  endloop
+ endfacet
+ facet normal 0 -1 0
+  outer loop
+   vertex -0.05 -0.05 0
+   vertex 0.05 -0.05 0
+   vertex 0.05 -0.05 0.06
+  endloop
+ endfacet
+ facet normal 0 -1 0
+  outer loop
+   vertex -0.05 -0.05 0
+   vertex 0.05 -0.05 0.06
+   vertex -0.05 -0.05 0.06
+  endloop
+ endfacet
+ facet normal 0 1 0
+  outer loop
+   vertex -0.05 0.05 0
+   vertex 0.05 0.05 0.06
+   vertex 0.05 0.05 0
+  endloop
+ endfacet
+ facet normal 0 1 0
+  outer loop
+   vertex -0.05 0.05 0
+   vertex -0.05 0.05 0.06
+   vertex 0.05 0.05 0.06
+  endloop
+ endfacet
+endsolid side

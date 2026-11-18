@@ -1,0 +1,16 @@
+{
+    "meshing": {
+        "shebang": "#!/bin/bash",
+        "preamble": ". $WM_PROJECT_DIR/bin/tools/RunFunctions; CORES=$(grep -i 'numberOfSubdomains' system/decomposeParDict | grep -v '//' | tr -cd '0-9');",
+        "blockMesh": "echo 'running blockMesh...'; blockMesh > log.blockMesh 2>&1; if [ $? != 0 ]; then echo 'blockMesh failed'; exit 1; fi;",
+        "decomposePar": "echo 'running decomposePar...'; decomposePar -force > log.decomposePar 2>&1; if [ $? != 0 ]; then echo 'decomposePar failed'; exit 1; fi;",
+        "snappyHexMesh": "echo 'running snappyHexMesh...'; mpirun -np $CORES snappyHexMesh -parallel -overwrite > log.snappyHexMesh 2>&1; if [ $? != 0 ]; then echo 'snappyHexMesh failed'; exit 1; fi;",
+        "checkMesh": "echo 'running checkMesh...'; mpirun -np $CORES checkMesh -parallel > log.checkMesh 2>&1; grep -E 'cells:|Failed|Mesh OK' log.checkMesh;"
+    },
+    "solve": {
+        "shebang": "#!/bin/bash",
+        "preamble": ". $WM_PROJECT_DIR/bin/tools/RunFunctions; CORES=$(grep -i 'numberOfSubdomains' system/decomposeParDict | grep -v '//' | tr -cd '0-9'); caseTemplates='<ZERO_TEMPLATES>';",
+        "createZeroDir": "if [ ! -d processor0/0 ]; then echo 'creating zero directories...'; mpirun -np $CORES createZeroDirectory -parallel -templateDir \"$caseTemplates\" > log.createZeroDirectory 2>&1; if [ $? != 0 ]; then echo 'createZeroDirectory failed'; exit 1; fi; fi;",
+        "solve": "echo 'running <SOLVER>...'; mpirun -np $CORES <SOLVER> -parallel > log.<SOLVER> 2>&1; if [ $? != 0 ]; then echo '<SOLVER> failed'; exit 1; fi;"
+    }
+}

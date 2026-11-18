@@ -1,0 +1,37 @@
+[DEFAULTS]
+DEFAULT_MODULES = defaultGlobalSimControl defaultGlobalMaterial defaultGlobalDecomposition
+ADDON_MODULES = 
+
+[TITLES]
+CASENAME = staticDemo
+CASEDESCRP = closed box, hot floor 600 K, cold ceiling 300 K, adiabatic sides, laminar
+JOBCODE = SD
+
+[GEOMETRY]
+GEOM = WALL-chamber.stl,1,1,2,1.2,low
+
+[GLOBAL_CONTROL]
+STARTFROM = latestTime
+FREQ = 10
+N_CYCLES = 0.1
+MAX_CO = 1
+MAX_DT = 1e-4
+INIT_DT = 1e-6
+WRITE_PER_CYCLE = 20
+
+[GLOBAL_REFINEMENT]
+BASE_CELL = 0.004
+LOC_IN_MESH = 0.011 0.013 0.031
+RESOLVE_FEAT_ANGLE = 30
+N_CELLS_BETWEEN_LEVELS = 2
+FINAL_LAYER_THICKNESS = 0.4
+MIN_LAYER_THICKNESS = 0.1
+
+[WALL-chamber]
+U_DEFAULT = noSlip
+T_DEFAULT = adiabatic
+BC_GROUPS = hotEnd coldEnd
+ANCHOR_PIDS = 
+GAP_PIDS = 
+hotEnd = PIDS hot T fixed 600
+coldEnd = PIDS cold T fixed 300

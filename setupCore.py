@@ -265,8 +265,9 @@ def readAddonTemplate(templateLoc, templateName, sectionHeader):
 #fills one addon section from the template defaults
 #existing section: keeps user values, adds missing keys, drops keys not in the template (template order)
 #missing section: written from the defaults
+#keepExtra: keep keys that are not in the template (after the template keys), e.g. BC group lines
 #returns updateFlag
-def fillAddonSection(writeCaseSetupDict, sectionName, defaultItems):
+def fillAddonSection(writeCaseSetupDict, sectionName, defaultItems, keepExtra=False):
     updateFlag = False
     if sectionName in writeCaseSetupDict.keys():
         tempDict = {}
@@ -276,6 +277,10 @@ def fillAddonSection(writeCaseSetupDict, sectionName, defaultItems):
             except:
                 updateFlag = True
                 tempDict[defaultVar] = [str(defaultVal)]
+        if keepExtra:
+            for var in writeCaseSetupDict[sectionName]:
+                if var not in tempDict:
+                    tempDict[var] = writeCaseSetupDict[sectionName][var]
         writeCaseSetupDict[sectionName] = tempDict
     else:
         writeCaseSetupDict[sectionName] = {}
@@ -287,12 +292,13 @@ def fillAddonSection(writeCaseSetupDict, sectionName, defaultItems):
 
 #generic addon check: every geometry starting with prefix gets a [geometry name] section
 #with all keys from defaultBCTemplates/templateName [sectionHeader]
-def checkAddonDefaults(geomDict, writeCaseSetupDict, templateLoc, prefix, templateName, sectionHeader):
+def checkAddonDefaults(geomDict, writeCaseSetupDict, templateLoc, prefix, templateName, sectionHeader,
+                       keepExtra=False):
     defaultItems = readAddonTemplate(templateLoc, templateName, sectionHeader)
     updateFlag = False
     for geom in geomDict.keys():
         if geom.startswith(prefix):
-            if fillAddonSection(writeCaseSetupDict, stripExt(geom), defaultItems):
+            if fillAddonSection(writeCaseSetupDict, stripExt(geom), defaultItems, keepExtra):
                 updateFlag = True
     return writeCaseSetupDict, updateFlag
 
