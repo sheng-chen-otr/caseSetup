@@ -286,8 +286,8 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, gapRefs=None):
         level = geomDict[geom]['refinement']
         geometryArray.append('    %s { type triSurfaceMesh; name %s; file "%s"; scale %s; }'
                              % (geomFile, geomName, geomFile, geomDict[geom]['scale']))
-        surfaceArray.append('        %s { level (%s %s); patchInfo { type wall; } }' % (geomName, level, level))
-        layerArray.append('        "%s_.*" { nSurfaceLayers %s; expansionRatio %s; }'
+        surfaceArray.append('        %s { level (%s %s); patchInfo { type wall; } regions{#include"snappyRefinementDict"}}' % (geomName, level, level))
+        layerArray.append('        "%s_.*" { nSurfaceLayers %s; expansionRatio %s;}'
                           % (geomName, geomDict[geom]['layers'], geomDict[geom]['expansion']))
     #gap faces: no layers, written after the file-wide entry (last matching regex wins)
     for geom in geomDict:

@@ -16,7 +16,7 @@
         "checkDecomposition": "NPD=$(ls -d processor[0-9]* | wc -l); if [ $NPD != $NP ]; then echo \"case is decomposed into $NPD but this run has $NP tasks\"; exit 1; fi;",
         "createZeroDir": "caseTemplates='<ZERO_TEMPLATES>'; if [ ! -f processor0/0/p ]; then echo 'creating zero directories...'; $RUN createZeroDirectory -parallel -templateDir \"$caseTemplates\" > log.createZeroDirectory 2>&1; if [ $? != 0 ]; then echo 'createZeroDirectory failed'; exit 1; fi; fi;",
         "pointDisplacement": "for d in processor*; do cp system/pointDisplacement $d/0/pointDisplacement; done;",
-        "solve": "echo 'running <SOLVER>...'; $RUN <SOLVER> -parallel > log.<SOLVER> 2>&1; if [ $? != 0 ]; then echo '<SOLVER> failed'; exit 1; fi;",
+        "solve": "n=1; while [ -f log.<SOLVER>.$n ]; do n=$((n+1)); done; if [ -f log.<SOLVER> ]; then mv log.<SOLVER> log.<SOLVER>.$n; fi; echo 'running <SOLVER>...'; $RUN <SOLVER> -parallel > log.<SOLVER> 2>&1; if [ $? != 0 ]; then echo '<SOLVER> failed'; exit 1; fi;",
         "export": "echo 'exporting EnSight (all times)...'; $RUN foamToEnsight -parallel -noZero > log.foamToEnsight 2>&1; if [ $? != 0 ]; then echo 'foamToEnsight failed'; exit 1; fi;",
         "done": "echo 'run done';"
     },
