@@ -30,7 +30,10 @@ castellatedMeshControls
     minRefinementCells 0;
     maxLoadUnbalance 0.1;
     nCellsBetweenLevels <N_CELLS_BETWEEN_LEVELS>;
-    features ();
+    features
+    (
+<FEATURES>
+    );
     refinementSurfaces
     {
 <REFINEMENT_SURFACES>
@@ -51,8 +54,8 @@ snapControls
     nSolveIter 50;
     nRelaxIter 5;
     nFeatureSnapIter 10;
-    implicitFeatureSnap true;
-    explicitFeatureSnap false;
+    implicitFeatureSnap <IMPLICIT_SNAP>;
+    explicitFeatureSnap <EXPLICIT_SNAP>;
     multiRegionFeatureSnap false;
 }
 

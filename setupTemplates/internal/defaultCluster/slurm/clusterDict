@@ -6,6 +6,7 @@
         "environment": "cd \"${SLURM_SUBMIT_DIR:-$(dirname \"$0\")}\" || exit 1;\nif [ -n \"$SLURM_JOB_ID\" ]; then module --force purge; module load <MODULES>; NP=$SLURM_NTASKS; RUN=\"srun\"; else NP=<LOCAL_PROCS>; RUN=\"mpirun -np $NP\"; fi;\nMESHONLY=no; if [ \"$1\" = \"--meshOnly\" ]; then MESHONLY=yes; fi;",
         "meshStart": "if [ ! -f .meshDone ]; then\nfoamDictionary system/decomposeParDict -entry numberOfSubdomains -set $NP > /dev/null;",
         "blockMesh": "echo 'running blockMesh...'; blockMesh > log.blockMesh 2>&1; if [ $? != 0 ]; then echo 'blockMesh failed'; exit 1; fi;",
+        "surfaceFeatureExtract": "echo 'running surfaceFeatureExtract...'; surfaceFeatureExtract > log.surfaceFeatureExtract 2>&1; if [ $? != 0 ]; then echo 'surfaceFeatureExtract failed'; exit 1; fi;",
         "decomposePar": "echo 'running decomposePar...'; decomposePar -force -constant > log.decomposePar 2>&1; if [ $? != 0 ]; then echo 'decomposePar failed'; exit 1; fi;",
         "snappyHexMesh": "echo 'running snappyHexMesh...'; $RUN snappyHexMesh -parallel -overwrite > log.snappyHexMesh 2>&1; if [ $? != 0 ]; then echo 'snappyHexMesh failed'; exit 1; fi;",
         "topoSet": "echo 'running topoSet (motion zones)...'; $RUN topoSet -parallel > log.topoSet 2>&1; if [ $? != 0 ]; then echo 'topoSet failed'; exit 1; fi;",

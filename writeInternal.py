@@ -279,13 +279,26 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, gapRefs=None):
         [float(v) for v in locInMesh]
     except ValueError:
         sys.exit('ERROR! GLOBAL_REFINEMENT LOC_IN_MESH must be 3 numbers, got %s!' % (locInMesh))
-    geometryArray, surfaceArray, layerArray = [], [], []
+    #feature edges: surfaceFeatureExtract writes constant/triSurface/<geom>.eMesh (run before snappy),
+    #refined at each geometry's surface level (FEATURE_LEVEL surface) or a fixed level
+    featureLevel = refinement.get('FEATURE_LEVEL', ['surface'])[0]
+    featureSnap = refinement.get('FEATURE_SNAP', ['explicit'])[0].lower()
+    if featureSnap not in ('explicit', 'implicit'):
+        sys.exit('ERROR! GLOBAL_REFINEMENT FEATURE_SNAP must be explicit or implicit!')
+    if featureLevel != 'surface' and not featureLevel.isdigit():
+        sys.exit('ERROR! GLOBAL_REFINEMENT FEATURE_LEVEL must be surface or a refinement level, got %s!' % (featureLevel))
+    featAngle = refinement.get('FEAT_EDGE_ANGLE', ['150'])[0]
+    geometryArray, surfaceArray, layerArray, featureArray, extractArray = [], [], [], [], []
     for geom in geomDict:
         geomName = stripExt(geom)
         geomFile = geom.replace('.gz', '')
         level = geomDict[geom]['refinement']
         geometryArray.append('    %s { type triSurfaceMesh; name %s; file "%s"; scale %s; }'
                              % (geomFile, geomName, geomFile, geomDict[geom]['scale']))
+        featureArray.append('        { file "%s.eMesh"; scale %s; level %s; }'
+                            % (geomName, geomDict[geom]['scale'], level if featureLevel == 'surface' else featureLevel))
+        extractArray.append('%s { extractionMethod extractFromSurface; includedAngle %s; '
+                            'subsetFeatures { nonManifoldEdges no; openEdges yes; } writeObj no; }' % (geomFile, featAngle))
         #per-region levels by PID name (regex) from system/snappyRefinementDict
         surfaceArray.append('        %s { level (%s %s); patchInfo { type wall; } regions { #include "snappyRefinementDict" } }'
                             % (geomName, level, level))
@@ -312,8 +325,14 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, gapRefs=None):
                    'RESOLVE_FEAT_ANGLE': refinement['RESOLVE_FEAT_ANGLE'][0],
                    'N_CELLS_BETWEEN_LEVELS': refinement['N_CELLS_BETWEEN_LEVELS'][0],
                    'FINAL_LAYER_THICKNESS': refinement['FINAL_LAYER_THICKNESS'][0],
-                   'MIN_LAYER_THICKNESS': refinement['MIN_LAYER_THICKNESS'][0]}
+                   'MIN_LAYER_THICKNESS': refinement['MIN_LAYER_THICKNESS'][0],
+                   'FEATURES': '\n'.join(featureArray),
+                   'EXPLICIT_SNAP': 'true' if featureSnap == 'explicit' else 'false',
+                   'IMPLICIT_SNAP': 'false' if featureSnap == 'explicit' else 'true'}
+    print('\t\tfeature edges: includedAngle %s, level %s, %s snapping' % (featAngle, featureLevel, featureSnap))
     copyTemplate(templateLoc, 'system/snappyHexMeshDict', 'system/snappyHexMeshDict', replaceDict)
+    copyTemplate(templateLoc, 'system/surfaceFeatureExtractDict', 'system/surfaceFeatureExtractDict',
+                 {'SURFACE_FEAT_EXTRACT': '\n'.join(extractArray)})
     copyTemplate(templateLoc, 'system/snappyRefinementDict', 'system/snappyRefinementDict', {})
 
 
