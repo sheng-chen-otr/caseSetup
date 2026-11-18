@@ -1,0 +1,98 @@
+#!/bin/bash
+# Copyright (c) 2026 Zhi Sheng Chen
+#
+# Licensed under the PolyForm Noncommercial License 1.0.0 (the "License").
+# You may not use this file except in compliance with the License. Any
+# commercial use requires a separate commercial license from the copyright
+# holder.
+#
+# You may obtain a copy of the License at:
+#     https://polyformproject.org/licenses/noncommercial/1.0.0
+#
+# Or see the LICENSE file in the root of this repository.
+#
+# This software is provided "as is", without warranty of any kind, express or
+# implied. See the License for the specific language governing permissions
+# and limitations.
+
+#OpenFOAM v2412 check case for internalSetup (see README.md)
+#usage: ./Allrun [runDir] [--noReorder]
+#   runDir      where the case is built and run (default /tmp/of2412Check), the repo dir stays clean
+#   --noReorder skip the faceZone reorder to reproduce the displacementInterpolation zone-order bug
+
+OF_BASHRC=${OF_BASHRC:-/usr/lib/openfoam/openfoam2412/etc/bashrc}
+NP=4
+srcDir="$(cd "$(dirname "$0")" && pwd)"
+runDir=/tmp/of2412Check
+reorder=1
+for arg in "$@"; do
+    case "$arg" in
+        --noReorder) reorder=0 ;;
+        *) runDir="$arg" ;;
+    esac
+done
+
+source "$OF_BASHRC" || { echo "cannot source $OF_BASHRC"; exit 1; }
+step() { echo; echo "========== $1"; }
+fail() { echo "FAILED: $1"; exit 1; }
+
+#copy the scripts without CRLF (in case git converted them on Windows)
+rm -rf "$runDir"; mkdir -p "$runDir"
+for f in genGeom.py genTables.py makeCase.sh reorderZones.py checkMotion.py checkFlux.py; do
+    tr -d '\r' < "$srcDir/$f" > "$runDir/$f"
+done
+cd "$runDir"
+echo "running in $runDir"
+
+python3 genGeom.py && bash makeCase.sh && python3 genTables.py || fail "case generation (needs python3 + numpy)"
+
+step "blockMesh + snappyHexMesh ($NP procs)"
+blockMesh > log.blockMesh 2>&1 || fail blockMesh
+decomposePar -force > log.decompose 2>&1
+mpirun -np $NP snappyHexMesh -parallel -overwrite > log.snappy 2>&1 || fail snappyHexMesh
+reconstructParMesh -constant > log.reconstruct 2>&1; rm -rf processor*
+grep -A5 "Cells per refinement level" log.snappy | tail -5
+step "patches (expect <surface>_<solid>)"
+grep -E "^\s+[A-Za-z].*$" constant/polyMesh/boundary | grep -v "type\|inGroups\|nFaces\|startFace\|FoamFile\|version\|format\|class\|arch\|location\|object" | head -12
+step "layers (expect: WALL-chamber_side absent = 0 layers, MOVE-displacer_side 2 = last regex wins)"
+sed -n '/patch.*faces.*layers/,/^$/p' log.snappy | tail -12
+step "checkMesh"
+checkMesh > log.checkMesh 2>&1; grep -E "cells:|Failed|Mesh OK" log.checkMesh
+
+step "topoSet: motion zones (patchToFace regex) + sample zones (planeToFaceZone, searchableSurfaceToFaceZone)"
+topoSet > log.topoSet 2>&1 || fail topoSet
+grep "faceZoneSet .* now size" log.topoSet
+if [ $reorder -eq 1 ]; then
+    step "reorder faceZones: motion zones first, in interpolationTables order (zone-order bug workaround)"
+    python3 reorderZones.py
+else
+    step "NOT reordering faceZones: expect the motion check to FAIL (zones get the wrong displacement)"
+fi
+
+step "moveDynamicMesh over one cycle (0/pointDisplacement is required)"
+rm -rf 0; cp -r 0.orig 0
+cat > 0/pointDisplacement <<'EOF'
+FoamFile { version 2.0; format ascii; class pointVectorField; object pointDisplacement; }
+dimensions [0 1 0 0 0 0 0];
+internalField uniform (0 0 0);
+boundaryField { ".*" { type calculated; value uniform (0 0 0); } }
+EOF
+moveDynamicMesh > log.moveMesh 2>&1 || fail moveDynamicMesh
+step "motion check (moved points vs expected z-interpolation)"
+python3 checkMotion.py || fail "motion check (zone order?)"
+step "checkMesh at the stroke positions"
+checkMesh -time '0.025,0.05,0.075' > log.checkMeshMoved 2>&1
+grep -E "^Time =|Failed|Mesh OK|Max skewness" log.checkMeshMoved
+
+step "rhoPimpleFoam, 20 steps (codedSource LTNE, porosity, movingWallVelocity, externalWallHeatFluxTemperature)"
+rm -rf 0.0* 0.1
+sed -i 's/^endTime .*/endTime 0.0004;/; s/^deltaT .*/deltaT 2e-05;/; s/^writeInterval .*/writeInterval 0.0002;/' system/controlDict
+echo 'functions { #include "samplingFOs" }' >> system/controlDict
+rhoPimpleFoam > log.rhoPimpleFoam 2>&1 || { grep -A12 "FOAM FATAL" log.rhoPimpleFoam | head -20; fail rhoPimpleFoam; }
+grep -q "wmake libso" log.rhoPimpleFoam && echo "codedSource compiled at run time"
+grep "regenLTNE: mean Ts" log.rhoPimpleFoam | sed -n '$p'
+[ -f 0.0004/Ts ] && echo "Ts written to 0.0004 (persists for restarts)"
+
+step "zone flux check (sum(meshPhi) vs displacer velocity x fluid area)"
+postProcess -dict system/meshFluxFOs -latestTime -fields '(phi meshPhi)' > log.meshFlux 2>&1 || fail "postProcess meshPhi"
+python3 checkFlux.py && echo "ALL CHECKS PASSED" || fail "zone flux check"

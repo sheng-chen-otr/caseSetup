@@ -16,15 +16,9 @@ implied. See the License for the specific language governing permissions
 and limitations.
 """
 
-"""Shared config / geometry plumbing for the setup tools (caseSetup.py,
-internalSetup.py).
-
-Nothing in here reads module globals or parses the command line: the template
-location, case directory, config file name and add-on prefixes are passed in,
-and functions that can add default values return an ``updateFlag`` instead of
-setting a global. The caller decides what to do with the flag (normally pass
-it to ``writeToCaseSetup``, which exits asking the user to check the file).
-"""
+#shared config/geometry functions for caseSetup.py and internalSetup.py
+#no module globals: templateLoc, caseDir, config name and addon prefixes are passed in,
+#functions that add default values return updateFlag instead of setting a global
 
 import os
 import sys
@@ -42,10 +36,9 @@ def stripExt(geom):
     return geom.split('.')[0]
 
 
+#reads defaultSetup/defaultOrder and every default module in it
+#MODULE_LINK maps module file name -> [section name]
 def getGlobalDefaults(templateLoc, printModules=False):
-    """Read setupTemplates/<setup>/defaultSetup/defaultOrder and every default
-    module it lists. Returns defaultDict with a MODULE_LINK entry mapping
-    module file name -> [section name]."""
     defaultDict = {}
     print('\n\tGetting global templates...')
     config = configparser.ConfigParser()
@@ -84,11 +77,9 @@ def getGlobalDefaults(templateLoc, printModules=False):
     return defaultDict
 
 
+#reads the case config file and merges it with the defaults
+#returns caseSetupDict, writeCaseSetupDict, fullCaseSetupDict, updateFlag
 def getCaseSetup(defaultDict, caseDir, addonKeyWords, configName='caseSetup'):
-    """Read <caseDir>/<configName> and merge it with the defaults.
-
-    Returns (caseSetupDict, writeCaseSetupDict, fullCaseSetupDict, updateFlag).
-    """
     print('\n\tReading %s from case directory...' % (configName))
     caseSetupConfig = configparser.ConfigParser()
     caseSetupConfig.optionxform = str
@@ -120,17 +111,10 @@ def getCaseSetup(defaultDict, caseDir, addonKeyWords, configName='caseSetup'):
     return caseSetupDict,writeCaseSetupDict,fullCaseSetupDict,updateFlag
 
 
+#modules in DEFAULT_MODULES use the template values and are hidden from the written file,
+#other modules are written out with missing keys filled from the defaults
+#addon sections (addonKeyWords) are passed through as is
 def getCaseSetupDefaultModules(caseSetupDict, defaultDict, addonKeyWords):
-    """Build the dict used by the writers (fullCaseSetupDict) and the dict
-    written back to the case config (writeCaseSetupDict).
-
-    Modules listed in DEFAULTS/DEFAULT_MODULES use the template values and are
-    hidden from the written file; other modules are exposed, with any missing
-    keys filled from the defaults. Sections starting with one of
-    addonKeyWords are passed through unchanged.
-
-    Returns (writeCaseSetupDict, fullCaseSetupDict, updateFlag).
-    """
     updateFlag = False
     caseSetupKeys = caseSetupDict.keys()
     try:
@@ -197,9 +181,8 @@ def getCaseSetupDefaultModules(caseSetupDict, defaultDict, addonKeyWords):
     return writeCaseSetupDict,fullCaseSetupDict,updateFlag
 
 
+#writes a config dict to caseDir/filename, exits after writing if updateFlag is set
 def writeToCaseSetup(writeCaseSetupDict, caseDir, filename='caseSetup', updateFlag=False):
-    """Write a config dict to <caseDir>/<filename>. If updateFlag is set,
-    exit afterwards asking the user to check the updated file."""
     writeConfig = configparser.ConfigParser()
     writeConfig.optionxform = str
     for module in writeCaseSetupDict.keys():
@@ -218,9 +201,9 @@ def writeToCaseSetup(writeCaseSetupDict, caseDir, filename='caseSetup', updateFl
                  % (filename, filename))
 
 
+#writes a new config with only the toWriteNew sections
 def writeNewCaseSetup(defaultDict, caseDir, configName='caseSetup',
                       toWriteNew=('DEFAULTS','TITLES','GEOMETRY')):
-    """Write a fresh config containing only the toWriteNew sections."""
     print('\tWriting new %s file...' % (configName))
     defaultModules = defaultDict['MODULE_LINK']
     writeCaseSetupDict = {}
@@ -232,9 +215,8 @@ def writeNewCaseSetup(defaultDict, caseDir, configName='caseSetup',
     writeToCaseSetup(writeCaseSetupDict, caseDir, configName)
 
 
+#splits the GEOM line into geomDict[geometryName][column]
 def geomToDict(geomDict, geometryList, geomColumnNames):
-    """Split the GEOM line (one geometry per line, comma separated columns)
-    into geomDict[geometryName][column] = value."""
     try:
         print('\t\tGetting geometry...')
         geometryList = geometryList[0].split('\n')
@@ -265,9 +247,8 @@ def geomToDict(geomDict, geometryList, geomColumnNames):
     return geomDict
 
 
+#reads defaultBCTemplates/templateName and returns the [sectionHeader] items in file order
 def readAddonTemplate(templateLoc, templateName, sectionHeader):
-    """Read defaultBCTemplates/<templateName> and return the items of
-    [sectionHeader] as a list of (key, value) tuples, in file order."""
     configRead = configparser.ConfigParser()
     configRead.optionxform = str
     try:
@@ -281,14 +262,11 @@ def readAddonTemplate(templateLoc, templateName, sectionHeader):
     return list(configRead.items(sectionHeader))
 
 
+#fills one addon section from the template defaults
+#existing section: keeps user values, adds missing keys, drops keys not in the template (template order)
+#missing section: written from the defaults
+#returns updateFlag
 def fillAddonSection(writeCaseSetupDict, sectionName, defaultItems):
-    """Fill one add-on section from template defaults.
-
-    An existing section is rebuilt in template order: user values are kept,
-    missing keys get the default, and keys not in the template are dropped
-    from the written file. A missing section is created from the defaults.
-    Returns updateFlag (True if anything was added).
-    """
     updateFlag = False
     if sectionName in writeCaseSetupDict.keys():
         tempDict = {}
@@ -307,13 +285,9 @@ def fillAddonSection(writeCaseSetupDict, sectionName, defaultItems):
     return updateFlag
 
 
+#generic addon check: every geometry starting with prefix gets a [geometry name] section
+#with all keys from defaultBCTemplates/templateName [sectionHeader]
 def checkAddonDefaults(geomDict, writeCaseSetupDict, templateLoc, prefix, templateName, sectionHeader):
-    """Generic add-on check: for every geometry whose name starts with prefix,
-    make sure its [<geometry name>] section has every key of
-    defaultBCTemplates/<templateName> [sectionHeader].
-
-    Returns (writeCaseSetupDict, updateFlag).
-    """
     defaultItems = readAddonTemplate(templateLoc, templateName, sectionHeader)
     updateFlag = False
     for geom in geomDict.keys():
@@ -323,8 +297,8 @@ def checkAddonDefaults(geomDict, writeCaseSetupDict, templateLoc, prefix, templa
     return writeCaseSetupDict, updateFlag
 
 
+#removes addon sections that no longer have a geometry in GEOM
 def cleanUpCaseSetup(geomDict, writeCaseSetupDict, fullCaseSetupDict, addonKeyWords):
-    """Remove add-on sections whose geometry is no longer in the GEOM list."""
     sectionsToDelete = []
     geomNames = [stripExt(i) for i in geomDict.keys()]
     for key in list(writeCaseSetupDict.keys()) + list(fullCaseSetupDict.keys()):
@@ -339,9 +313,8 @@ def cleanUpCaseSetup(geomDict, writeCaseSetupDict, fullCaseSetupDict, addonKeyWo
     return writeCaseSetupDict,fullCaseSetupDict
 
 
+#links each geometry from jobPath/02_reference/MSH into constant/triSurface
 def linkGeomFiles(geomDict, caseDir, jobPath):
-    """Symlink each geometry from <jobPath>/02_reference/MSH into
-    constant/triSurface (relative to the current directory, which is the case)."""
     #have to check if constant/triSurface folder exists
     if os.path.exists("%s/constant" % (caseDir)):
         if os.path.exists("%s/constant/triSurface" % (caseDir)):
