@@ -59,7 +59,7 @@ print('EXECUTING FROM: ' + execDir)
 if not os.path.isdir(templateBaseLoc):
     sys.exit("ERROR: Template path incorrect!")
 
-parser = argparse.ArgumentParser(prog='caseSetup-v4.1.1',description='Set us the case based on settings written out in the caseSetup')
+parser = argparse.ArgumentParser(prog='caseSetup-v5.0.0',description='Set us the case based on settings written out in the caseSetup')
                     
 parser.add_argument("-s","--setup", default='default', 
                    
