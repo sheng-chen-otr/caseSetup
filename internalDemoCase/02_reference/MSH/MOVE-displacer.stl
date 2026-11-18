@@ -1,0 +1,232 @@
+solid top
+ facet normal 0 0 1
+  outer loop
+   vertex -0.048 -0.048 0.047
+   vertex -0.005 -0.048 0.047
+   vertex -0.005 0.048 0.047
+  endloop
+ endfacet
+ facet normal 0 0 1
+  outer loop
+   vertex -0.048 -0.048 0.047
+   vertex -0.005 0.048 0.047
+   vertex -0.048 0.048 0.047
+  endloop
+ endfacet
+ facet normal 0 0 1
+  outer loop
+   vertex 0.005 -0.048 0.047
+   vertex 0.048 -0.048 0.047
+   vertex 0.048 0.048 0.047
+  endloop
+ endfacet
+ facet normal 0 0 1
+  outer loop
+   vertex 0.005 -0.048 0.047
+   vertex 0.048 0.048 0.047
+   vertex 0.005 0.048 0.047
+  endloop
+ endfacet
+ facet normal 0 0 1
+  outer loop
+   vertex -0.005 -0.048 0.047
+   vertex 0.005 -0.048 0.047
+   vertex 0.005 -0.005 0.047
+  endloop
+ endfacet
+ facet normal 0 0 1
+  outer loop
+   vertex -0.005 -0.048 0.047
+   vertex 0.005 -0.005 0.047
+   vertex -0.005 -0.005 0.047
+  endloop
+ endfacet
+ facet normal 0 0 1
+  outer loop
+   vertex -0.005 0.005 0.047
+   vertex 0.005 0.005 0.047
+   vertex 0.005 0.048 0.047
+  endloop
+ endfacet
+ facet normal 0 0 1
+  outer loop
+   vertex -0.005 0.005 0.047
+   vertex 0.005 0.048 0.047
+   vertex -0.005 0.048 0.047
+  endloop
+ endfacet
+endsolid top
+solid bottom
+ facet normal 0 0 -1
+  outer loop
+   vertex -0.048 -0.048 0.013
+   vertex -0.005 0.048 0.013
+   vertex -0.005 -0.048 0.013
+  endloop
+ endfacet
+ facet normal 0 0 -1
+  outer loop
+   vertex -0.048 -0.048 0.013
+   vertex -0.048 0.048 0.013
+   vertex -0.005 0.048 0.013
+  endloop
+ endfacet
+ facet normal 0 0 -1
+  outer loop
+   vertex 0.005 -0.048 0.013
+   vertex 0.048 0.048 0.013
+   vertex 0.048 -0.048 0.013
+  endloop
+ endfacet
+ facet normal 0 0 -1
+  outer loop
+   vertex 0.005 -0.048 0.013
+   vertex 0.005 0.048 0.013
+   vertex 0.048 0.048 0.013
+  endloop
+ endfacet
+ facet normal 0 0 -1
+  outer loop
+   vertex -0.005 -0.048 0.013
+   vertex 0.005 -0.005 0.013
+   vertex 0.005 -0.048 0.013
+  endloop
+ endfacet
+ facet normal 0 0 -1
+  outer loop
+   vertex -0.005 -0.048 0.013
+   vertex -0.005 -0.005 0.013
+   vertex 0.005 -0.005 0.013
+  endloop
+ endfacet
+ facet normal 0 0 -1
+  outer loop
+   vertex -0.005 0.005 0.013
+   vertex 0.005 0.048 0.013
+   vertex 0.005 0.005 0.013
+  endloop
+ endfacet
+ facet normal 0 0 -1
+  outer loop
+   vertex -0.005 0.005 0.013
+   vertex -0.005 0.048 0.013
+   vertex 0.005 0.048 0.013
+  endloop
+ endfacet
+endsolid bottom
+solid side
+ facet normal -1 0 0
+  outer loop
+   vertex -0.048 -0.048 0.013
+   vertex -0.048 0.048 0.047
+   vertex -0.048 0.048 0.013
+  endloop
+ endfacet
+ facet normal -1 0 0
+  outer loop
+   vertex -0.048 -0.048 0.013
+   vertex -0.048 -0.048 0.047
+   vertex -0.048 0.048 0.047
+  endloop
+ endfacet
+ facet normal 1 0 0
+  outer loop
+   vertex 0.048 -0.048 0.013
+   vertex 0.048 0.048 0.013
+   vertex 0.048 0.048 0.047
+  endloop
+ endfacet
+ facet normal 1 0 0
+  outer loop
+   vertex 0.048 -0.048 0.013
+   vertex 0.048 0.048 0.047
+   vertex 0.048 -0.048 0.047
+  endloop
+ endfacet
+ facet normal 0 -1 0
+  outer loop
+   vertex -0.048 -0.048 0.013
+   vertex 0.048 -0.048 0.013
+   vertex 0.048 -0.048 0.047
+  endloop
+ endfacet
+ facet normal 0 -1 0
+  outer loop
+   vertex -0.048 -0.048 0.013
+   vertex 0.048 -0.048 0.047
+   vertex -0.048 -0.048 0.047
+  endloop
+ endfacet
+ facet normal 0 1 0
+  outer loop
+   vertex -0.048 0.048 0.013
+   vertex 0.048 0.048 0.047
+   vertex 0.048 0.048 0.013
+  endloop
+ endfacet
+ facet normal 0 1 0
+  outer loop
+   vertex -0.048 0.048 0.013
+   vertex -0.048 0.048 0.047
+   vertex 0.048 0.048 0.047
+  endloop
+ endfacet
+endsolid side
+solid holewall
+ facet normal 1 0 0
+  outer loop
+   vertex -0.005 -0.005 0.013
+   vertex -0.005 0.005 0.013
+   vertex -0.005 0.005 0.047
+  endloop
+ endfacet
+ facet normal 1 0 0
+  outer loop
+   vertex -0.005 -0.005 0.013
+   vertex -0.005 0.005 0.047
+   vertex -0.005 -0.005 0.047
+  endloop
+ endfacet
+ facet normal -1 0 0
+  outer loop
+   vertex 0.005 -0.005 0.013
+   vertex 0.005 0.005 0.047
+   vertex 0.005 0.005 0.013
+  endloop
+ endfacet
+ facet normal -1 0 0
+  outer loop
+   vertex 0.005 -0.005 0.013
+   vertex 0.005 -0.005 0.047
+   vertex 0.005 0.005 0.047
+  endloop
+ endfacet
+ facet normal 0 1 0
+  outer loop
+   vertex -0.005 -0.005 0.013
+   vertex 0.005 -0.005 0.047
+   vertex 0.005 -0.005 0.013
+  endloop
+ endfacet
+ facet normal 0 1 0
+  outer loop
+   vertex -0.005 -0.005 0.013
+   vertex -0.005 -0.005 0.047
+   vertex 0.005 -0.005 0.047
+  endloop
+ endfacet
+ facet normal 0 -1 0
+  outer loop
+   vertex -0.005 0.005 0.013
+   vertex 0.005 0.005 0.013
+   vertex 0.005 0.005 0.047
+  endloop
+ endfacet
+ facet normal 0 -1 0
+  outer loop
+   vertex -0.005 0.005 0.013
+   vertex 0.005 0.005 0.047
+   vertex -0.005 0.005 0.047
+  endloop
+ endfacet
+endsolid holewall

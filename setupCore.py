@@ -304,11 +304,12 @@ def checkAddonDefaults(geomDict, writeCaseSetupDict, templateLoc, prefix, templa
 
 
 #removes addon sections that no longer have a geometry in GEOM
-def cleanUpCaseSetup(geomDict, writeCaseSetupDict, fullCaseSetupDict, addonKeyWords):
+#keepSections: addon sections kept without a geometry (e.g. internal MOVE sections with FROM)
+def cleanUpCaseSetup(geomDict, writeCaseSetupDict, fullCaseSetupDict, addonKeyWords, keepSections=()):
     sectionsToDelete = []
     geomNames = [stripExt(i) for i in geomDict.keys()]
     for key in list(writeCaseSetupDict.keys()) + list(fullCaseSetupDict.keys()):
-        if any(key.startswith(i) for i in addonKeyWords) and key not in geomNames:
+        if any(key.startswith(i) for i in addonKeyWords) and key not in geomNames and key not in keepSections:
             if key not in sectionsToDelete:
                 sectionsToDelete.append(key)
 

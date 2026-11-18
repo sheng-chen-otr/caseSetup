@@ -1,0 +1,31 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \    /   O peration     | Version:  v2412                                 |
+|   \  /    A nd           | Website:  www.openfoam.com                      |
+|    \/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       pointVectorField;
+    object      pointDisplacement;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+//required by displacementInterpolation, but its BCs are not used (motion comes from the zone tables)
+dimensions      [0 1 0 0 0 0 0];
+internalField   uniform (0 0 0);
+boundaryField
+{
+    //processor/cyclic patches by patch group
+    #includeEtc "caseDicts/setConstraintTypes"
+    ".*"
+    {
+        type            calculated;
+        value           uniform (0 0 0);
+    }
+}
+
+// ************************************************************************* //

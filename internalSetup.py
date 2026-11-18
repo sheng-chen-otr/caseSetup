@@ -17,7 +17,7 @@ and limitations.
 """
 
 #internal flow / Stirling engine case setup, reads the internalSetup file in the case directory
-#phase 2: static closed volume (WALL geometry only), rhoPimpleFoam, no mesh motion
+#phase 3: closed volume with WALL geometry and MOVE bodies (displacementInterpolation), rhoPimpleFoam
 
 import os
 import sys
@@ -27,9 +27,9 @@ import setupCore
 from setupCore import __version__
 import writeInternal
 
-#available addon keywords (MOVE, REGN, SMP come in later phases)
+#available addon keywords (REGN, SMP come in a later phase)
 addonKeyWords = ['WALL', 'MOVE', 'REGN', 'SMP']
-supportedPrefixes = ['WALL']
+supportedPrefixes = ['WALL', 'MOVE']
 geomColumnNames = ['scale', 'refinement', 'layers', 'expansion', 'wallmodel']
 configName = 'internalSetup'
 
@@ -62,7 +62,7 @@ def checkGeomPrefixes(geomDict):
             sys.exit('ERROR! %s has no internal prefix, name geometry files %s-<name>.stl'
                      % (geom, '/'.join(addonKeyWords)))
         if prefix not in supportedPrefixes:
-            sys.exit('ERROR! %s: %s geometry is not supported yet (static cases only use %s)'
+            sys.exit('ERROR! %s: %s geometry is not supported yet (available: %s)'
                      % (geom, prefix, '/'.join(supportedPrefixes)))
 
 
@@ -101,30 +101,47 @@ def main(argv=None):
         sys.exit('ERROR! [GEOMETRY] section invalid!')
     geomDict = setupCore.geomToDict({}, geometryList, geomColumnNames)
     checkGeomPrefixes(geomDict)
-    writeCaseSetupDict, flag = setupCore.checkAddonDefaults(
-        geomDict, writeCaseSetupDict, templateLoc, 'WALL', 'defaultWall', 'WALL_SETUP', keepExtra=True)
-    updateFlag = updateFlag or flag
-    setupCore.cleanUpCaseSetup(geomDict, writeCaseSetupDict, fullCaseSetupDict, addonKeyWords)
+    for prefix, template, header in (('WALL', 'defaultWall', 'WALL_SETUP'), ('MOVE', 'defaultMove', 'MOVE_SETUP')):
+        writeCaseSetupDict, flag = setupCore.checkAddonDefaults(
+            geomDict, writeCaseSetupDict, templateLoc, prefix, template, header, keepExtra=True)
+        updateFlag = updateFlag or flag
+    #MOVE sections without their own file (FROM = <geometry>, e.g. a piston crown PID in the chamber)
+    geomNames = [setupCore.stripExt(geom) for geom in geomDict]
+    fromSections = [s for s in writeCaseSetupDict if s.startswith('MOVE') and s not in geomNames]
+    moveItems = setupCore.readAddonTemplate(templateLoc, 'defaultMove', 'MOVE_SETUP')
+    for section in fromSections:
+        if setupCore.fillAddonSection(writeCaseSetupDict, section, moveItems, keepExtra=True):
+            updateFlag = True
+    setupCore.cleanUpCaseSetup(geomDict, writeCaseSetupDict, fullCaseSetupDict, addonKeyWords, fromSections)
     setupCore.writeToCaseSetup(writeCaseSetupDict, caseDir, configName, updateFlag)
 
-    #PIDs and BC groups, checked before anything is written to the case
+    #PIDs, mesh motion and BC groups, checked before anything is written to the case
     pidDict = writeInternal.readGeomPIDs(geomDict, mshDir)
-    wallGroups = writeInternal.getWallGroups(geomDict, fullCaseSetupDict, pidDict)
+    motionInfo = writeInternal.buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir)
+    movingPids = motionInfo['movingPids'] if motionInfo else {}
+    wallGroups = writeInternal.getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids)
 
     setupCore.linkGeomFiles(geomDict, caseDir, jobPath)
-    writeInternal.writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict, mshDir)
-    writeInternal.writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict)
+    if motionInfo:
+        writeInternal.writeMotionGeometry(motionInfo, mshDir)
+    writeInternal.writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict)
+    writeInternal.writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict,
+                                      motionInfo['gapRefs'] if motionInfo else None)
     writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGroups)
     writeInternal.writeThermoInternal(templateLoc, fullCaseSetupDict)
     writeInternal.writeTurbulenceInternal(templateLoc, fullCaseSetupDict)
     writeInternal.writeControlDictInternal(templateLoc, fullCaseSetupDict)
     writeInternal.writeNumericsInternal(templateLoc, fullCaseSetupDict)
     writeInternal.writeFunctionObjectsInternal(wallGroups)
-    writeInternal.makeScriptsInternal(templateLoc, fullCaseSetupDict, os.path.join(execDir, 'zeroTemplates'))
+    motionZones = writeInternal.writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict) if motionInfo else None
+    writeInternal.makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones)
 
     fullCaseSetupDict = writeInternal.addSetupInfo(fullCaseSetupDict, wallGroups)
     setupCore.writeToCaseSetup(fullCaseSetupDict, caseDir, 'fullCaseSetupDict')
-    print('\nCase setup completed successfully! Run ./meshingScript then ./solveScript')
+    if motionInfo:
+        print('\nCase setup completed successfully! Run ./meshingScript, ./motionCheckScript (mesh motion dry run), then ./solveScript')
+    else:
+        print('\nCase setup completed successfully! Run ./meshingScript then ./solveScript')
 
 
 if __name__ == '__main__':

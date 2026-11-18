@@ -27,6 +27,7 @@ import math
 import numpy as np
 
 import geometryIO
+import motionUtilities
 from setupCore import stripExt, __version__
 
 #gas presets: molWeight, Cp, mu at Tref, Pr, Sutherland mu0/T0/S (As is worked out from them)
@@ -186,20 +187,25 @@ def resolveBCGroups(wallName, wallSetup, pids):
     return groups
 
 
-def getWallGroups(geomDict, fullCaseSetupDict, pidDict):
-    #wallGroups[geomName] = groups, prints the PID -> group -> U, T table
+def getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids=None):
+    #wallGroups[geomName] = groups for WALL and MOVE geometry, prints the PID -> group -> U, T table
+    #movingPids[geomName] = PIDs that move with a body (U becomes movingWallVelocity)
+    movingPids = movingPids or {}
     wallGroups = {}
     print('\n\tBoundary condition groups:')
-    print('\t\t%-28s %-20s %-8s %s' % ('patch', 'group', 'U', 'T'))
+    print('\t\t%-32s %-20s %-14s %s' % ('patch', 'group', 'U', 'T'))
     for geom in geomDict:
         geomName = stripExt(geom)
-        if not geomName.startswith('WALL'):
+        if not geomName.startswith(('WALL', 'MOVE')):
             continue
         groups = resolveBCGroups(geomName, fullCaseSetupDict[geomName], pidDict[geomName])
+        moving = movingPids.get(geomName, [])
         for group in groups:
+            group['moving'] = [pid for pid in group['pids'] if pid in moving]
             for pid in group['pids']:
-                print('\t\t%-28s %-20s %-8s %s' % ('%s_%s' % (geomName, pid), group['name'], group['U'],
-                                                   ' '.join(str(t) for t in group['T'])))
+                uLabel = 'movingWall' if pid in moving else group['U']
+                print('\t\t%-32s %-20s %-14s %s' % ('%s_%s' % (geomName, pid), group['name'], uLabel,
+                                                    ' '.join(str(t) for t in group['T'])))
         wallGroups[geomName] = groups
     return wallGroups
 
@@ -214,13 +220,19 @@ def getBackgroundMesh(bbox, baseCell, nMargin=2):
     return lo, hi, n
 
 
-def writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict, mshDir):
+def caseGeomPath(geom):
+    #geometry file as snappy reads it: shifted copies are written without .gz
+    plain = os.path.join('constant', 'triSurface', geom.replace('.gz', ''))
+    return plain if os.path.isfile(plain) else os.path.join('constant', 'triSurface', geom)
+
+
+def writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict):
     print('\n\tWriting blockMeshDict...')
     baseCell = float(getVal(fullCaseSetupDict, 'GLOBAL_REFINEMENT', 'BASE_CELL'))
     allBox = []
     for geom in geomDict:
         scale = float(geomDict[geom]['scale'])
-        allBox.append(np.array(geometryIO.surfaceBoundingBox(os.path.join(mshDir, geom)))*scale)
+        allBox.append(np.array(geometryIO.surfaceBoundingBox(caseGeomPath(geom)))*scale)
     allBox = np.array(allBox)
     bbox = list(allBox[:, :3].min(axis=0)) + list(allBox[:, 3:].max(axis=0))
     lo, hi, n = getBackgroundMesh(bbox, baseCell)
@@ -232,7 +244,7 @@ def writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict, mshDir):
     return bbox
 
 
-def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict):
+def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, gapRefs=None):
     print('\n\tWriting snappyHexMeshDict...')
     refinement = fullCaseSetupDict['GLOBAL_REFINEMENT']
     locInMesh = [v for v in refinement['LOC_IN_MESH'] if v != '']
@@ -258,9 +270,16 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict):
         gapPids = [p for p in fullCaseSetupDict[geomName].get('GAP_PIDS', ['']) if p != '']
         for kw in gapPids:
             layerArray.append('        "%s_.*%s.*" { nSurfaceLayers 0; }' % (geomName, kw))
+    #gap refinement: distance band around a per-body STL of the gap faces
+    regionArray = []
+    for gapRef in (gapRefs or []):
+        geometryArray.append('    %s { type triSurfaceMesh; name %s; file "%s"; }'
+                             % (gapRef['file'], gapRef['name'], gapRef['file']))
+        regionArray.append('        %s { mode distance; levels ((%.6g %d)); }'
+                           % (gapRef['name'], gapRef['distance'], gapRef['level']))
     replaceDict = {'GEOMETRY': '\n'.join(geometryArray),
                    'REFINEMENT_SURFACES': '\n'.join(surfaceArray),
-                   'REFINEMENT_REGIONS': '',
+                   'REFINEMENT_REGIONS': '\n'.join(regionArray),
                    'LAYERS': '\n'.join(layerArray),
                    'LOC_IN_MESH': ' '.join(locInMesh),
                    'RESOLVE_FEAT_ANGLE': refinement['RESOLVE_FEAT_ANGLE'][0],
@@ -302,23 +321,29 @@ def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGr
         if wallModel not in wallFunctionNames:
             sys.exit('ERROR! %s wall model column must be low or high!' % (geom))
         for group in wallGroups[geomName]:
-            patches = ' '.join('"%s_%s"' % (geomName, pid) for pid in group['pids'])
-            mode = group['T'][0]
-            heat = {'adiabatic': 'adiabatic', 'fixed': 'fixedTemperature',
-                    'convective': 'convective', 'flux': 'heatFlux'}[mode]
-            values = '$:initialConditions;'
-            if mode == 'fixed':
-                values += ' T uniform %.9g;' % (group['T'][1])
-            elif mode == 'convective':
-                values += ' h %.9g; Ta %.9g;' % (group['T'][1], group['T'][2])
-            elif mode == 'flux':
-                values += ' q %.9g;' % (group['T'][1])
-            if group['U'] == 'slip':
-                options = 'heatTransfer %s;' % (heat)
-            else:
-                options = 'wallFunction %s; motion stationary; heatTransfer %s;' % (wallFunctionNames[wallModel], heat)
-            bcArray.append('    %s { category wall; type %s; patches (%s); options { %s } values { %s } }'
-                           % (group['name'], group['U'], patches, options, values))
+            moving = group.get('moving', [])
+            static = [pid for pid in group['pids'] if pid not in moving]
+            for pids, motion, suffix in ((static, 'stationary', ''), (moving, 'movingMesh', '_moving')):
+                if len(pids) == 0:
+                    continue
+                patches = ' '.join('"%s_%s"' % (geomName, pid) for pid in pids)
+                mode = group['T'][0]
+                heat = {'adiabatic': 'adiabatic', 'fixed': 'fixedTemperature',
+                        'convective': 'convective', 'flux': 'heatFlux'}[mode]
+                values = '$:initialConditions;'
+                if mode == 'fixed':
+                    values += ' T uniform %.9g;' % (group['T'][1])
+                elif mode == 'convective':
+                    values += ' h %.9g; Ta %.9g;' % (group['T'][1], group['T'][2])
+                elif mode == 'flux':
+                    values += ' q %.9g;' % (group['T'][1])
+                uType = 'noSlip' if motion == 'movingMesh' else group['U']
+                if uType == 'slip':
+                    options = 'heatTransfer %s;' % (heat)
+                else:
+                    options = 'wallFunction %s; motion %s; heatTransfer %s;' % (wallFunctionNames[wallModel], motion, heat)
+                bcArray.append('    %s%s { category wall; type %s; patches (%s); options { %s } values { %s } }'
+                               % (group['name'], suffix, uType, patches, options, values))
     with open('%s/defaultDicts/system/caseProperties' % (templateLoc)) as f:
         text = f.read()
     text = text.replace('<INITIAL_CONDITIONS>', '\n'.join('    ' + s for s in initArray))
@@ -433,16 +458,257 @@ wallHeatFlux
         f.write(text)
 
 
+#----- mesh motion (MOVE bodies, displacementInterpolation)
+
+def matchPids(keywords, pids, where):
+    #PIDs containing any of the keywords (case-insensitive), every keyword must match
+    matched = []
+    for kw in keywords:
+        hits = [pid for pid in pids if kw.lower() in pid.lower()]
+        if len(hits) == 0:
+            sys.exit('ERROR! %s: keyword "%s" matches no PID. PIDs are: %s' % (where, kw, pids))
+        matched += [pid for pid in hits if pid not in matched]
+    return matched
+
+
+def getMoveSections(fullCaseSetupDict):
+    return [section for section in fullCaseSetupDict if section.startswith('MOVE')]
+
+
+def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
+    #zones, bodies, start angle, geometry shifts and gap refinement for the MOVE bodies
+    #returns None for a static case
+    moveSections = getMoveSections(fullCaseSetupDict)
+    if len(moveSections) == 0:
+        return None
+    print('\n\tSetting up mesh motion...')
+    meshMotion = fullCaseSetupDict['MESH_MOTION']
+    if meshMotion['METHOD'][0] != 'displacementInterpolation' or meshMotion['AXIS'][0] != 'z':
+        sys.exit('ERROR! MESH_MOTION: only METHOD displacementInterpolation along AXIS z is available')
+    step = float(meshMotion['STEP_DEG'][0])
+    if step <= 0 or step > 1:
+        sys.exit('ERROR! MESH_MOTION STEP_DEG must be > 0 and <= 1 deg')
+    maxDeformation = float(meshMotion['MAX_DEFORMATION'][0])
+    flatTol = float(meshMotion['ZONE_FLAT_TOL'][0])
+    control = fullCaseSetupDict['GLOBAL_CONTROL']
+    freq, nCycles = float(control['FREQ'][0]), float(control['N_CYCLES'][0])
+    baseCell = float(getVal(fullCaseSetupDict, 'GLOBAL_REFINEMENT', 'BASE_CELL'))
+
+    #triangles per PID of every geometry, scaled to metres
+    geomFiles = {stripExt(geom): geom for geom in geomDict}
+    tris = {}
+    for geomName, geom in geomFiles.items():
+        scale = float(geomDict[geom]['scale'])
+        tris[geomName] = {pid: t*scale for pid, t in
+                          geometryIO.readSurfaceTriangles(os.path.join(mshDir, geom)).items()}
+
+    #anchors: flat fixed faces of the WALL geometry
+    zones = []
+    for geomName in geomFiles:
+        if not geomName.startswith('WALL'):
+            continue
+        keywords = [k for k in fullCaseSetupDict[geomName].get('ANCHOR_PIDS', ['']) if k != '']
+        for pid in matchPids(keywords, pidDict[geomName], '[%s] ANCHOR_PIDS' % (geomName)):
+            t = tris[geomName][pid]
+            zones.append(motionUtilities.Zone('motion_%s_%s' % (geomName, pid), '%s_%s' % (geomName, pid),
+                                              motionUtilities.flatZoneZ('%s_%s' % (geomName, pid), t, flatTol),
+                                              motionUtilities.projectedArea(t)))
+    if len(zones) == 0:
+        sys.exit('ERROR! Mesh motion needs fixed anchor faces: set ANCHOR_PIDS in a WALL section (e.g. hot cold)')
+
+    #bodies and their zones
+    bodies, movingPids, profiles = [], {}, {}
+    for section in moveSections:
+        setup = fullCaseSetupDict[section]
+        name = section[len('MOVE-'):]
+        source = section if setup['FROM'][0] == 'self' else setup['FROM'][0]
+        if source not in geomFiles:
+            sys.exit('ERROR! [%s] FROM %s is not a geometry in GEOM' % (section, source))
+        motionFile = os.path.join(caseDir, setup['MOTION_FILE'][0])
+        if motionFile not in profiles:
+            profiles[motionFile] = motionUtilities.readMotionFile(motionFile)
+        theta, columns = profiles[motionFile]
+        column = setup['MOTION_COLUMN'][0]
+        if column not in columns:
+            sys.exit('ERROR! [%s] MOTION_COLUMN %s not in %s (columns: %s)'
+                     % (section, column, setup['MOTION_FILE'][0], list(columns.keys())))
+        thetaC, pos = motionUtilities.periodicProfile(theta, columns[column], column)
+        body = motionUtilities.Body(name, thetaC, pos, float(setup['REF_ANGLE'][0]), float(setup['TDC_CLEARANCE'][0]))
+        body.source = source
+        keywords = [k for k in setup['ZONE_PIDS'] if k != '']
+        if len(keywords) == 0:
+            sys.exit('ERROR! [%s] ZONE_PIDS is empty: list the flat faces that drive the motion (e.g. top bottom)' % (section))
+        zonePids = matchPids(keywords, pidDict[source], '[%s] ZONE_PIDS' % (section))
+        for pid in zonePids:
+            t = tris[source][pid]
+            zones.append(motionUtilities.Zone('motion_%s_%s' % (source, pid), '%s_%s' % (source, pid),
+                                              motionUtilities.flatZoneZ('%s_%s' % (source, pid), t, flatTol),
+                                              motionUtilities.projectedArea(t), body))
+        #own file: the whole body moves, FROM: only the zone faces (e.g. a piston crown)
+        body.movedPids = list(pidDict[source]) if source == section else zonePids
+        movingPids.setdefault(source, [])
+        movingPids[source] += [pid for pid in body.movedPids if pid not in movingPids[source]]
+        bodies.append(body)
+
+    anchorPatches = [zone.patch for zone in zones if zone.body is None]
+    for body in bodies:
+        clash = ['%s_%s' % (body.source, pid) for pid in body.movedPids if '%s_%s' % (body.source, pid) in anchorPatches]
+        if clash:
+            sys.exit('ERROR! %s are both anchors and part of the moving body %s' % (clash, body.name))
+
+    #clearance, order, start angle, deformation
+    offsets = motionUtilities.applyClearance(zones, bodies, step)
+    for bodyName, (offset, addedVolume) in offsets.items():
+        print('\t\t%s moved %+.4g m to keep its TDC clearance: dead volume +%.4g m3 (%.4g cm3)'
+              % (bodyName, offset, addedVolume, addedVolume*1e6))
+    motionUtilities.checkZoneOrder(zones, step)
+    startSetting = meshMotion['START_ANGLE'][0]
+    startAngle = motionUtilities.autoStartAngle(zones, step) if startSetting == 'auto' else float(startSetting)
+    ratio, pair = motionUtilities.deformationRatio(zones, startAngle, step)
+    print('\t\tstart (meshing) angle %.1f deg%s, worst squash/stretch %.2fx (%s - %s)'
+          % (startAngle, ' (auto)' if startSetting == 'auto' else '', ratio, pair[0], pair[1]))
+    if ratio > maxDeformation:
+        sys.exit('ERROR! Squash/stretch %.2fx exceeds MAX_DEFORMATION %.2f: increase TDC_CLEARANCE or the limit'
+                 % (ratio, maxDeformation))
+    print('\t\tzones in z order at the start angle:')
+    order = motionUtilities.sortedZones(zones, step)
+    for zone in order:
+        print('\t\t\t%-40s z %.6g m  %s' % (zone.name, float(motionUtilities.zoneZ(zone, startAngle)),
+                                            'fixed' if zone.body is None else 'moves with %s' % (zone.body.name)))
+    for body in bodies:
+        kin = motionUtilities.bodyKinematics(body, freq, step)
+        print('\t\t%s: stroke %.4g m, peak velocity %.4g m/s, peak acceleration %.4g m/s2'
+              % (body.name, kin['stroke'], kin['vMax'], kin['aMax']))
+        if kin['vJump'] > 0.2*kin['vMax']:
+            print('\t\tWARNING: %s velocity jumps by %.4g m/s between samples: a sharp change in the profile '
+                  'gives pressure spikes' % (body.name, kin['vJump']))
+
+    #static wall faces dragged by the mesh (horizontal faces inside a stretching band)
+    zonePatches = [zone.patch for zone in zones]
+    staticTris = {}
+    for geomName in geomFiles:
+        if not geomName.startswith('WALL'):
+            continue
+        for pid, t in tris[geomName].items():
+            if '%s_%s' % (geomName, pid) not in zonePatches and pid not in movingPids.get(geomName, []):
+                staticTris['%s_%s' % (geomName, pid)] = t
+    zoneZs = [float(motionUtilities.zoneZ(zone, startAngle)) for zone in zones]
+    for label, zLo, zHi in motionUtilities.unanchoredHorizontalFaces(staticTris, zoneZs, zones, startAngle, step, flatTol):
+        print('\t\tWARNING: %s has horizontal faces at z %.6g..%.6g m inside a stretching band: they will move '
+              'with the mesh. Add them to ANCHOR_PIDS if they are fixed steps or port ends' % (label, zLo, zHi))
+
+    #geometry shifts to the start angle (file units)
+    shifts = {}
+    for body in bodies:
+        dz = float(body.shift(startAngle))
+        scale = float(geomDict[geomFiles[body.source]]['scale'])
+        for pid in body.movedPids:
+            shifts.setdefault(body.source, {})[pid] = (0.0, 0.0, dz/scale)
+
+    #gap refinement around the GAP_PIDS of each body
+    wallGap = []
+    for geomName in geomFiles:
+        if geomName.startswith('WALL'):
+            keywords = [k for k in fullCaseSetupDict[geomName].get('GAP_PIDS', ['']) if k != '']
+            for pid in matchPids(keywords, pidDict[geomName], '[%s] GAP_PIDS' % (geomName)):
+                wallGap.append(tris[geomName][pid])
+    gapRefs = []
+    for body, section in zip(bodies, moveSections):
+        setup = fullCaseSetupDict[section]
+        keywords = [k for k in setup.get('GAP_PIDS', ['']) if k != '']
+        if len(keywords) == 0:
+            continue
+        if len(wallGap) == 0:
+            sys.exit('ERROR! [%s] GAP_PIDS set but no WALL section has GAP_PIDS (the wall side of the gap)' % (section))
+        dz = float(body.shift(startAngle))
+        bodyGap = {pid: tris[body.source][pid] + np.array([0.0, 0.0, dz])
+                   for pid in matchPids(keywords, pidDict[body.source], '[%s] GAP_PIDS' % (section))}
+        gap = motionUtilities.gapWidth(np.vstack(list(bodyGap.values())), np.vstack(wallGap))
+        gapCells = float(setup['GAP_CELLS'][0])
+        level, distance, cell = motionUtilities.gapRefinement(gap, baseCell, gapCells)
+        print('\t\t%s gap %.4g m: refinement level %d (cell %.4g m, %.1f cells across) within %.4g m'
+              % (body.name, gap, level, cell, gap/cell, distance))
+        gapRefs.append({'name': 'GAPREF-%s' % (body.name), 'file': 'GAPREF-%s.stl' % (body.name),
+                        'distance': distance, 'level': level, 'tris': bodyGap})
+
+    return {'zones': order, 'bodies': bodies, 'startAngle': startAngle, 'step': step, 'freq': freq,
+            'nCycles': nCycles, 'shifts': shifts, 'movingPids': movingPids, 'gapRefs': gapRefs,
+            'geomFiles': geomFiles}
+
+
+def writeMotionGeometry(motionInfo, mshDir):
+    #moved bodies: shifted copies in constant/triSurface (never write through a symlink), gap STLs
+    os.makedirs(os.path.join('constant', 'triSurface'), exist_ok=True)
+    for geomName, pidShift in motionInfo['shifts'].items():
+        geom = motionInfo['geomFiles'][geomName]
+        dest = os.path.join('constant', 'triSurface', geom.replace('.gz', ''))
+        for path in (dest, os.path.join('constant', 'triSurface', geom)):
+            if os.path.islink(path) or os.path.isfile(path):
+                os.remove(path)
+        geometryIO.translateSurfacePIDs(os.path.join(mshDir, geom), dest, pidShift)
+        print('\t\t%s shifted to the start angle: %s' % (geom, ', '.join('%s %+.4g' % (pid, s[2])
+                                                                          for pid, s in pidShift.items())))
+    for gapRef in motionInfo['gapRefs']:
+        motionUtilities.writeStlTriangles(os.path.join('constant', 'triSurface', gapRef['file']), gapRef['tris'])
+
+
+def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
+    #tables, dynamicMeshDict, topoSetDict (motion zones), pointDisplacement, controlDictMotion
+    print('\n\tWriting mesh motion dicts...')
+    zones = motionInfo['zones']
+    motionUtilities.writeTables(motionInfo['bodies'], motionInfo['startAngle'], motionInfo['freq'],
+                                motionInfo['nCycles'], motionInfo['step'], 'constant/tables')
+    tableLines = ['        (%s %s)' % (zone.name, 'zeroTable' if zone.body is None else '%sTable' % (zone.body.name))
+                  for zone in zones]
+    copyTemplate(templateLoc, 'constant/dynamicMeshDict', 'constant/dynamicMeshDict',
+                 {'INTERPOLATION_TABLES': '\n'.join(tableLines)})
+    actions = []
+    for zone in zones:
+        actions.append('    { name %sSet; type faceSet; action new; source patchToFace; patch "%s"; }'
+                       % (zone.name, zone.patch))
+        actions.append('    { name %s; type faceZoneSet; action new; source setToFaceZone; faceSet %sSet; }'
+                       % (zone.name, zone.name))
+    with open('system/topoSetDict', 'w') as f:
+        f.write('FoamFile { version 2.0; format ascii; class dictionary; object topoSetDict; }\n\n')
+        f.write('//motion zones from the zone patches (written by internalSetup)\nactions\n(\n%s\n);\n' % ('\n'.join(actions)))
+    copyTemplate(templateLoc, 'system/pointDisplacement', 'system/pointDisplacement', {})
+    #one cycle of pure mesh motion for the dry run: no function objects, fixed 5 deg steps
+    freq = motionInfo['freq']
+    with open('%s/defaultDicts/system/controlDict' % (templateLoc)) as f:
+        text = f.read()
+    replaceDict = {'<SOLVER>': 'moveDynamicMesh', '<STARTFROM>': 'startTime', '<ENDTIME>': '%.9g' % (1.0/freq),
+                   '<INIT_DT>': '%.9g' % (1.0/(72.0*freq)), '<WRITE_INTERVAL>': '%.9g' % (1.0/(8.0*freq)),
+                   '<MAX_CO>': '1e6', '<MAX_DT>': '1', 'adjustTimeStep  yes': 'adjustTimeStep  no',
+                   '#include "internalFunctionObjects"': ''}
+    for key, val in replaceDict.items():
+        text = text.replace(key, val)
+    with open('system/controlDictMotion', 'w') as f:
+        f.write(text)
+    print('\t\t%d motion zones, tables for %g cycles from %.1f deg' % (len(zones), motionInfo['nCycles'],
+                                                                      motionInfo['startAngle']))
+    return [zone.name for zone in zones]
+
+
 #----- scripts
 
-def makeScriptsInternal(templateLoc, fullCaseSetupDict, zeroTemplatesDir):
-    print('\n\tWriting meshingScript, solveScript...')
+def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None):
+    #meshingScript and solveScript (+ motionCheckScript with mesh motion) from the clusterDict sections
+    print('\n\tWriting scripts...')
     with open('%s/defaultCluster/slurm/clusterDict' % (templateLoc)) as f:
         clusterDict = json.load(f)
     solver = getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER')
-    for section, scriptName in [('meshing', 'meshingScript'), ('solve', 'solveScript')]:
-        script = '\n'.join(clusterDict[section][line] for line in clusterDict[section])
-        script = script.replace('<ZERO_TEMPLATES>', zeroTemplatesDir).replace('<SOLVER>', solver)
+    motionSteps = ['topoSet', 'reorderFaceZones', 'pointDisplacement']
+    scripts = [('meshing', 'meshingScript'), ('solve', 'solveScript')]
+    if motionZones:
+        scripts.append(('motionCheck', 'motionCheckScript'))
+    replaceDict = {'<ZERO_TEMPLATES>': os.path.join(execDir, 'zeroTemplates'), '<EXEC_DIR>': execDir,
+                   '<SOLVER>': solver, '<MOTION_ZONES>': ' '.join(motionZones or [])}
+    for section, scriptName in scripts:
+        lines = [clusterDict[section][key] for key in clusterDict[section]
+                 if motionZones or key not in motionSteps]
+        script = '\n'.join(lines)
+        for key, val in replaceDict.items():
+            script = script.replace(key, val)
         with open(scriptName, 'w') as f:
             f.write(script + '\n')
         os.chmod(scriptName, 0o755)

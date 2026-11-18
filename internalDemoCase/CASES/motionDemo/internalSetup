@@ -1,0 +1,73 @@
+[DEFAULTS]
+DEFAULT_MODULES = defaultGlobalSimControl defaultGlobalMaterial defaultGlobalDecomposition
+ADDON_MODULES = 
+
+[TITLES]
+CASENAME = motionDemo
+CASEDESCRP = displacer (dwell profile, 2 mm side gap, one hole) + y-offset piston crown flush at TDC
+JOBCODE = MD
+
+[GEOMETRY]
+GEOM = WALL-engine.stl,1,1,2,1.2,low
+	MOVE-displacer.stl,1,2,2,1.2,low
+
+[GLOBAL_CONTROL]
+STARTFROM = latestTime
+FREQ = 10
+N_CYCLES = 1
+MAX_CO = 1
+MAX_DT = 1e-4
+INIT_DT = 1e-6
+WRITE_PER_CYCLE = 20
+
+[GLOBAL_REFINEMENT]
+BASE_CELL = 0.004
+LOC_IN_MESH = 0.0031 0.0271 0.0605
+RESOLVE_FEAT_ANGLE = 30
+N_CELLS_BETWEEN_LEVELS = 2
+FINAL_LAYER_THICKNESS = 0.4
+MIN_LAYER_THICKNESS = 0.1
+
+[MESH_MOTION]
+METHOD = displacementInterpolation
+AXIS = z
+START_ANGLE = auto
+STEP_DEG = 1
+MAX_DEFORMATION = 15
+ZONE_FLAT_TOL = 1e-4
+
+[WALL-engine]
+U_DEFAULT = noSlip
+T_DEFAULT = adiabatic
+BC_GROUPS = hotEnd coldEnd
+ANCHOR_PIDS = hot cold
+GAP_PIDS = side
+hotEnd = PIDS hot T fixed 600
+coldEnd = PIDS cold T fixed 300
+
+[MOVE-displacer]
+FROM = self
+MOTION_FILE = engineMotion.csv
+MOTION_COLUMN = displacer
+REF_ANGLE = 0
+TDC_CLEARANCE = 0.002
+ZONE_PIDS = top bottom
+U_DEFAULT = noSlip
+T_DEFAULT = adiabatic
+BC_GROUPS = 
+GAP_PIDS = side
+GAP_CELLS = 4
+
+[MOVE-piston]
+FROM = WALL-engine
+MOTION_FILE = engineMotion.csv
+MOTION_COLUMN = piston
+REF_ANGLE = 0
+TDC_CLEARANCE = 0.002
+ZONE_PIDS = crown
+U_DEFAULT = noSlip
+T_DEFAULT = adiabatic
+BC_GROUPS = 
+GAP_PIDS = 
+GAP_CELLS = 6
+

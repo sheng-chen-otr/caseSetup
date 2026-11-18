@@ -1,0 +1,7 @@
+[MESH_MOTION]
+METHOD = displacementInterpolation
+AXIS = z
+START_ANGLE = auto
+STEP_DEG = 1
+MAX_DEFORMATION = 15
+ZONE_FLAT_TOL = 1e-4

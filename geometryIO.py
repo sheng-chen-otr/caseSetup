@@ -140,6 +140,119 @@ def readSurfacePIDs(path):
     return list(dict.fromkeys(names))
 
 
+def _objIndex(token, nVertices):
+    """0-based vertex index from an OBJ face token (``7``, ``7/1``, ``7//2``, ``-1``)."""
+    idx = int(token.split("/")[0])
+    return idx - 1 if idx > 0 else nVertices + idx
+
+
+def readSurfaceTriangles(path):
+    """Return ``{pid: (N, 3, 3) array}`` of triangles per PID, in file order.
+
+    STL: facets grouped by ``solid`` name. OBJ: faces grouped by the current
+    ``g`` (or ``o`` when there are no groups) name; polygons are fan
+    triangulated. Faces before any group go to PID ``""``.
+    """
+    tris = {}
+    if _looks_like_stl(path):
+        current, facet = "", []
+        with _open_text_maybe_gz(path, "rt") as handle:
+            for line in handle:
+                tokens = line.split()
+                if not tokens:
+                    continue
+                key = tokens[0].lower()
+                if key == "solid":
+                    current = " ".join(tokens[1:])
+                    tris.setdefault(current, [])
+                elif key == "vertex":
+                    facet.append([float(t) for t in tokens[1:4]])
+                    if len(facet) == 3:
+                        tris.setdefault(current, []).append(facet)
+                        facet = []
+    else:
+        hasGroups = False
+        with _open_text_maybe_gz(path, "rt") as handle:
+            for line in handle:
+                if line.startswith("g ") and line.split()[1:]:
+                    hasGroups = True
+                    break
+        vertices, current = [], ""
+        with _open_text_maybe_gz(path, "rt") as handle:
+            for line in handle:
+                tokens = line.split()
+                if not tokens:
+                    continue
+                if tokens[0] == "v":
+                    vertices.append([float(t) for t in tokens[1:4]])
+                elif (tokens[0] == "g" and hasGroups) or (tokens[0] == "o" and not hasGroups):
+                    current = " ".join(tokens[1:])
+                    tris.setdefault(current, [])
+                elif tokens[0] == "f":
+                    idx = [_objIndex(t, len(vertices)) for t in tokens[1:]]
+                    for k in range(1, len(idx) - 1):
+                        tris.setdefault(current, []).append(
+                            [vertices[idx[0]], vertices[idx[k]], vertices[idx[k + 1]]])
+    return {pid: np.asarray(t, dtype=np.float64).reshape(-1, 3, 3) for pid, t in tris.items()}
+
+
+def translateSurfacePIDs(path, outPath, shifts):
+    """Write a copy of an OBJ / ASCII STL with the vertices of some PIDs translated.
+
+    ``shifts`` maps PID name -> (dx, dy, dz) in file units. Output is plain text
+    (not gzipped). For OBJ, a vertex shared by PIDs with different shifts is an
+    error (the parts must be separate shells so they can move apart).
+    """
+    shifts = {pid: np.asarray(s, dtype=np.float64) for pid, s in shifts.items()}
+    with _open_text_maybe_gz(path, "rt") as handle:
+        lines = handle.readlines()
+    out = []
+    if _looks_like_stl(path):
+        current = ""
+        for line in lines:
+            tokens = line.split()
+            if tokens and tokens[0].lower() == "solid":
+                current = " ".join(tokens[1:])
+            if tokens and tokens[0].lower() == "vertex" and current in shifts:
+                p = np.array([float(t) for t in tokens[1:4]]) + shifts[current]
+                indent = line[:len(line) - len(line.lstrip())]
+                line = "%svertex %.9g %.9g %.9g\n" % (indent, p[0], p[1], p[2])
+            out.append(line)
+    else:
+        hasGroups = any(l.startswith("g ") and l.split()[1:] for l in lines)
+        #which shift each vertex gets, from the faces that use it
+        vertexShift, vertexCount, current = {}, 0, ""
+        for line in lines:
+            tokens = line.split()
+            if not tokens:
+                continue
+            if tokens[0] == "v":
+                vertexCount += 1
+            elif (tokens[0] == "g" and hasGroups) or (tokens[0] == "o" and not hasGroups):
+                current = " ".join(tokens[1:])
+            elif tokens[0] == "f":
+                for t in tokens[1:]:
+                    vi = _objIndex(t, vertexCount)
+                    prev = vertexShift.get(vi)
+                    if prev is not None and prev != current and (
+                            prev in shifts or current in shifts):
+                        raise ValueError("Vertex %d is shared by PIDs %s and %s, which move "
+                                         "differently: make them separate shells in %s"
+                                         % (vi + 1, prev, current, path))
+                    vertexShift[vi] = current
+        vi = 0
+        for line in lines:
+            if line.startswith("v "):
+                pid = vertexShift.get(vi)
+                if pid in shifts:
+                    p = np.array([float(t) for t in line.split()[1:4]]) + shifts[pid]
+                    line = "v %.9g %.9g %.9g\n" % (p[0], p[1], p[2])
+                vi += 1
+            out.append(line)
+    with open(outPath, "w") as handle:
+        handle.writelines(out)
+
+
 def surfaceBoundingBox(path):
     """Return the axis-aligned bounding box of a surface file.
 

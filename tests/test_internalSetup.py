@@ -211,5 +211,6 @@ def test_geom_prefix_check():
     internalSetup.checkGeomPrefixes({'WALL-chamber.stl': {}})
     with pytest.raises(SystemExit):
         internalSetup.checkGeomPrefixes({'chamber.stl': {}})
+    internalSetup.checkGeomPrefixes({'MOVE-displacer.stl': {}})
     with pytest.raises(SystemExit):
-        internalSetup.checkGeomPrefixes({'MOVE-displacer.stl': {}})
+        internalSetup.checkGeomPrefixes({'REGN-matrix.stl': {}})

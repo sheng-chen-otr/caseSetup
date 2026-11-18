@@ -1,0 +1,31 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \    /   O peration     | Version:  v2412                                 |
+|   \  /    A nd           | Website:  www.openfoam.com                      |
+|    \/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      dynamicMeshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dynamicFvMesh   dynamicMotionSolverFvMesh;
+motionSolver    displacementInterpolation;
+
+//tables in constant/tables: (time (dx dy dz)), class scalarVectorTable
+//NOTE (v2412): the zones below must be the first faceZones of the mesh, in this order
+//(meshUtilities/reorderFaceZones.py does that after topoSet)
+displacementInterpolationCoeffs
+{
+    interpolationTables
+    (
+<INTERPOLATION_TABLES>
+    );
+}
+
+// ************************************************************************* //

@@ -1,0 +1,12 @@
+[MOVE_SETUP]
+FROM = self
+MOTION_FILE = engineMotion.csv
+MOTION_COLUMN = 
+REF_ANGLE = 0
+TDC_CLEARANCE = 0.002
+ZONE_PIDS = 
+U_DEFAULT = noSlip
+T_DEFAULT = adiabatic
+BC_GROUPS = 
+GAP_PIDS = 
+GAP_CELLS = 6
