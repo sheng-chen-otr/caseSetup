@@ -231,27 +231,39 @@ def _writeScripts(tmp_path, monkeypatch, repo_root, motionZones):
 
 def test_scripts_slurm_header_and_placeholders(tmp_path, monkeypatch, repo_root):
     case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a', 'motion_b'])
-    for name in ['meshingScript', 'motionCheckScript', 'solveScript', 'submitScript']:
+    for name in ['runScript', 'motionCheckScript', 'submitScript']:
         text = (case / name).read_bytes().decode()
         assert '\r' not in text and text.startswith('#!/bin/bash\n')
         assert re.search(r'<[A-Z_]+>', text) is None
-    mesh = (case / 'meshingScript').read_text()
-    assert '#SBATCH --account=def-brendan8' in mesh and '#SBATCH --ntasks=192' in mesh
-    assert '#SBATCH --job-name=engineRun01_mesh' in mesh and '#SBATCH --time=0-03:00' in mesh
-    assert 'module load StdEnv/2023 gcc/12.3 openmpi/4.1.5 openfoam/v2412' in mesh
-    assert 'NP=4' in mesh and '$RUN snappyHexMesh' in mesh
-    assert "reorderFaceZones.py' motion_a motion_b" in mesh
-    solve = (case / 'solveScript').read_text()
-    assert '#SBATCH --time=0-12:00' in solve and 'SLURM_NTASKS != $NP' in solve
-    assert 'motionCheckScript' in (case / 'submitScript').read_text()
+    run = (case / 'runScript').read_text()
+    assert '#SBATCH --account=def-brendan8' in run and '#SBATCH --ntasks=192' in run
+    assert '#SBATCH --job-name=engineRun01\n' in run and '#SBATCH --time=0-12:00' in run
+    assert 'module load StdEnv/2023 gcc/12.3 openmpi/4.1.5 openfoam/v2412' in run
+    assert 'NP=4' in run and '$RUN snappyHexMesh' in run
+    assert "reorderFaceZones.py' motion_a motion_b" in run
+    #mesh, solve, export in order, the mesh is skipped once done
+    assert run.index('snappyHexMesh') < run.index('createZeroDirectory') < run.index('foamToEnsight')
+    assert '.meshDone' in run and '--meshOnly' in run
+    motion = (case / 'motionCheckScript').read_text()
+    assert '#SBATCH --job-name=engineRun01_motion' in motion and 'SLURM_NTASKS != $NP' in motion
+    submit = (case / 'submitScript').read_text()
+    assert 'runScript --meshOnly' in submit and 'motionCheckScript' in submit
 
 
-def test_scripts_no_motion(tmp_path, monkeypatch, repo_root):
+def test_scripts_no_motion_and_no_export(tmp_path, monkeypatch, repo_root):
     case = _writeScripts(tmp_path, monkeypatch, repo_root, None)
     assert not (case / 'motionCheckScript').exists()
-    assert 'topoSet' not in (case / 'meshingScript').read_text()
-    submit = (case / 'submitScript').read_text()
-    assert 'motionCheckScript' not in submit and 'afterok:$jid solveScript' in submit
+    run = (case / 'runScript').read_text()
+    assert 'topoSet' not in run and 'pointDisplacement' not in run and 'foamToEnsight' in run
+    assert 'motionCheckScript' not in (case / 'submitScript').read_text()
+    #EXPORT none drops the export step, old separate scripts are removed
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    full['GLOBAL_COMPUTE_SETUP']['EXPORT'] = ['none']
+    (case / 'meshingScript').write_text('old')
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
+    assert 'foamToEnsight' not in (case / 'runScript').read_text()
+    assert not (case / 'meshingScript').exists()
 
 
 #----- incompressible (pimpleFoam) option

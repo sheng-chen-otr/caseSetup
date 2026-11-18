@@ -139,11 +139,10 @@ def main(argv=None):
 
     fullCaseSetupDict = writeInternal.addSetupInfo(fullCaseSetupDict, wallGroups)
     setupCore.writeToCaseSetup(fullCaseSetupDict, caseDir, 'fullCaseSetupDict')
+    print('\nCase setup completed successfully! runScript does mesh + solve + export in one job')
     if motionInfo:
-        print('\nCase setup completed successfully! Locally: ./meshingScript, ./motionCheckScript (mesh motion dry run), then ./solveScript')
-    else:
-        print('\nCase setup completed successfully! Locally: ./meshingScript then ./solveScript')
-    print('On the cluster (from the case directory in $SCRATCH): ./submitScript, or ./submitScript --noSolve to look at the mesh first')
+        print('Mesh motion dry run first: ./runScript --meshOnly then ./motionCheckScript (cluster: ./submitScript --check)')
+    print('Run: ./runScript locally, or ./submitScript on the cluster (from the case directory in $SCRATCH)')
 
 
 if __name__ == '__main__':

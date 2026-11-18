@@ -459,7 +459,9 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict):
         pRef = '    pRefPoint ( %s );\n    pRefValue 0;' % (locInMesh)
     else:
         divSchemes = ['div(phi,U)      Gauss limitedLinearV 1;', 'div(phi,e)      Gauss limitedLinear 1;',
-                      'div(phi,K)      Gauss linear;', 'div(phiv,p)     Gauss linear;', 'div(meshPhi,p)  Gauss linear;'] \
+                      'div(phi,K)      Gauss linear;',
+                      'div(phiv,p)     Gauss linear;           // pressure work in the e equation',
+                      'div(meshPhi,p)  Gauss linear;           // pressure work from the moving mesh'] \
                      + divTurb + ['div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;']
         pRef = ''
     copyTemplate(templateLoc, 'system/fvSchemes', 'system/fvSchemes',
@@ -771,16 +773,26 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
 #----- scripts
 
 def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None):
-    #meshingScript and solveScript (+ motionCheckScript with mesh motion) from the clusterDict sections,
-    #each runs as a Slurm job (sbatch) or locally (./script), submitScript chains them on the cluster
+    #runScript (mesh + solve + export in one job) and motionCheckScript (mesh motion dry run) from the
+    #clusterDict sections, each runs as a Slurm job (sbatch) or locally (./script), submitScript submits them
     print('\n\tWriting scripts...')
     with open('%s/defaultCluster/slurm/clusterDict' % (templateLoc)) as f:
         clusterDict = json.load(f)
     solver = getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER')
     motionSteps = ['topoSet', 'reorderFaceZones', 'pointDisplacement', 'motionCheck']
-    scripts = [('meshing', 'meshingScript'), ('solve', 'solveScript'), ('submit', 'submitScript')]
+    skipSteps = list(motionSteps) if not motionZones else []
+    export = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('EXPORT', ['ensight'])[0].lower()
+    if export not in ('ensight', 'none'):
+        sys.exit('ERROR! GLOBAL_COMPUTE_SETUP EXPORT must be ensight or none!')
+    if export == 'none':
+        skipSteps.append('export')
+    scripts = [('run', 'runScript'), ('submit', 'submitScript')]
     if motionZones:
         scripts.append(('motionCheck', 'motionCheckScript'))
+    #scripts of earlier versions (separate meshing and solve jobs)
+    for oldScript in ['meshingScript', 'solveScript'] + ([] if motionZones else ['motionCheckScript']):
+        if os.path.isfile(oldScript):
+            os.remove(oldScript)
     replaceDict = {'<ZERO_TEMPLATES>': os.path.join(execDir, 'zeroTemplates'), '<EXEC_DIR>': execDir,
                    '<SOLVER>': solver, '<MOTION_ZONES>': ' '.join(motionZones or [])}
     #slurm header and environment from GLOBAL_COMPUTE_SETUP, job name defaults to the case directory name
@@ -790,8 +802,7 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     if replaceDict.get('<JOB_NAME>', 'auto') == 'auto':
         replaceDict['<JOB_NAME>'] = os.path.basename(os.getcwd())
     for section, scriptName in scripts:
-        lines = [clusterDict[section][key] for key in clusterDict[section]
-                 if motionZones or key not in motionSteps]
+        lines = [clusterDict[section][key] for key in clusterDict[section] if key not in skipSteps]
         script = '\n'.join(lines)
         for key, val in replaceDict.items():
             script = script.replace(key, val)
