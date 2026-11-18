@@ -116,6 +116,7 @@ def main(argv=None):
     setupCore.writeToCaseSetup(writeCaseSetupDict, caseDir, configName, updateFlag)
 
     #PIDs, mesh motion and BC groups, checked before anything is written to the case
+    writeInternal.getFlow(fullCaseSetupDict)
     pidDict = writeInternal.readGeomPIDs(geomDict, mshDir)
     motionInfo = writeInternal.buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir)
     movingPids = motionInfo['movingPids'] if motionInfo else {}
@@ -132,16 +133,17 @@ def main(argv=None):
     writeInternal.writeTurbulenceInternal(templateLoc, fullCaseSetupDict)
     writeInternal.writeControlDictInternal(templateLoc, fullCaseSetupDict)
     writeInternal.writeNumericsInternal(templateLoc, fullCaseSetupDict)
-    writeInternal.writeFunctionObjectsInternal(wallGroups)
+    writeInternal.writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo)
     motionZones = writeInternal.writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict) if motionInfo else None
     writeInternal.makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones)
 
     fullCaseSetupDict = writeInternal.addSetupInfo(fullCaseSetupDict, wallGroups)
     setupCore.writeToCaseSetup(fullCaseSetupDict, caseDir, 'fullCaseSetupDict')
     if motionInfo:
-        print('\nCase setup completed successfully! Run ./meshingScript, ./motionCheckScript (mesh motion dry run), then ./solveScript')
+        print('\nCase setup completed successfully! Locally: ./meshingScript, ./motionCheckScript (mesh motion dry run), then ./solveScript')
     else:
-        print('\nCase setup completed successfully! Run ./meshingScript then ./solveScript')
+        print('\nCase setup completed successfully! Locally: ./meshingScript then ./solveScript')
+    print('On the cluster (from the case directory in $SCRATCH): ./submitScript, or ./submitScript --noSolve to look at the mesh first')
 
 
 if __name__ == '__main__':

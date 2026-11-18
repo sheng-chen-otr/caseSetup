@@ -97,6 +97,31 @@ def getGasProperties(fullCaseSetupDict):
     return props
 
 
+def getFlow(fullCaseSetupDict):
+    #compressible (rhoPimpleFoam) or incompressible (pimpleFoam: kinematic p, no energy equation)
+    solver = getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER')
+    flows = {'rhoPimpleFoam': 'compressible', 'pimpleFoam': 'incompressible'}
+    if solver not in flows:
+        sys.exit('ERROR! GLOBAL_SIM_CONTROL SOLVER must be rhoPimpleFoam (compressible) or pimpleFoam (incompressible), got %s!'
+                 % (solver))
+    return flows[solver]
+
+
+def getGasDensity(fullCaseSetupDict):
+    #ideal gas density at CHARGE_PRESSURE and INIT_T
+    props = getGasProperties(fullCaseSetupDict)
+    material = fullCaseSetupDict['GLOBAL_MATERIAL']
+    return float(material['CHARGE_PRESSURE'][0])*props['MOL_WEIGHT']/(8314.46*float(material['INIT_T'][0]))
+
+
+def getNu(fullCaseSetupDict):
+    #kinematic viscosity for incompressible runs: NU if given, else mu/rho of the gas at the charge state
+    nu = fullCaseSetupDict['GLOBAL_MATERIAL'].get('NU', ['default'])[0]
+    if nu.lower() != 'default':
+        return float(nu)
+    return getGasProperties(fullCaseSetupDict)['MU']/getGasDensity(fullCaseSetupDict)
+
+
 #----- geometry PIDs and BC groups
 
 def readGeomPIDs(geomDict, mshDir):
@@ -305,7 +330,15 @@ def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGr
     material = fullCaseSetupDict['GLOBAL_MATERIAL']
     pInit = float(material['CHARGE_PRESSURE'][0])
     tInit = float(material['INIT_T'][0])
-    initArray = ['U uniform (0 0 0);', 'p uniform %.9g;' % (pInit), 'T uniform %.9g;' % (tInit)]
+    #incompressible: kinematic p relative to pRefValue 0, no T (wall thermal settings are ignored)
+    incompressible = getFlow(fullCaseSetupDict) == 'incompressible'
+    if incompressible:
+        initArray = ['U uniform (0 0 0);', 'p uniform 0;']
+        thermal = sorted(g['name'] for name in wallGroups for g in wallGroups[name] if g['T'][0] != 'adiabatic')
+        if thermal:
+            print('\t\tNOTE: incompressible run, the T settings of %s are ignored' % (' '.join(thermal)))
+    else:
+        initArray = ['U uniform (0 0 0);', 'p uniform %.9g;' % (pInit), 'T uniform %.9g;' % (tInit)]
     turbModel = getTurbulence(fullCaseSetupDict)
     wallFunctionNames = {'low': 'lowReynolds', 'high': 'highReynolds'}
     if turbModel != 'laminar':
@@ -339,9 +372,13 @@ def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGr
                     values += ' q %.9g;' % (group['T'][1])
                 uType = 'noSlip' if motion == 'movingMesh' else group['U']
                 if uType == 'slip':
-                    options = 'heatTransfer %s;' % (heat)
+                    options = '' if incompressible else 'heatTransfer %s;' % (heat)
                 else:
-                    options = 'wallFunction %s; motion %s; heatTransfer %s;' % (wallFunctionNames[wallModel], motion, heat)
+                    options = 'wallFunction %s; motion %s;' % (wallFunctionNames[wallModel], motion)
+                    if not incompressible:
+                        options += ' heatTransfer %s;' % (heat)
+                if incompressible:
+                    values = '$:initialConditions;'
                 bcArray.append('    %s%s { category wall; type %s; patches (%s); options { %s } values { %s } }'
                                % (group['name'], suffix, uType, patches, options, values))
     with open('%s/defaultDicts/system/caseProperties' % (templateLoc)) as f:
@@ -353,8 +390,16 @@ def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGr
 
 
 def writeThermoInternal(templateLoc, fullCaseSetupDict):
-    print('\n\tWriting thermophysicalProperties...')
+    #thermophysicalProperties (compressible) or transportProperties (incompressible)
     props = getGasProperties(fullCaseSetupDict)
+    if getFlow(fullCaseSetupDict) == 'incompressible':
+        print('\n\tWriting transportProperties...')
+        nu = getNu(fullCaseSetupDict)
+        print('\t\tgas %s, nu %.4g m2/s, reference density %.4g kg/m3 (forces only, p is kinematic)'
+              % (getVal(fullCaseSetupDict, 'GLOBAL_MATERIAL', 'GAS'), nu, getGasDensity(fullCaseSetupDict)))
+        copyTemplate(templateLoc, 'constant/transportProperties', 'constant/transportProperties', {'NU': '%.6g' % nu})
+        return
+    print('\n\tWriting thermophysicalProperties...')
     if props['TRANSPORT'] == 'const':
         coeffs = 'mu %.6g; Pr %.6g;' % (props['MU'], props['PR'])
     else:
@@ -406,56 +451,74 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict):
     print('\n\tWriting fvSchemes, fvSolution, decomposeParDict...')
     simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
     compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
-    copyTemplate(templateLoc, 'system/fvSchemes', 'system/fvSchemes', {})
+    #divergence schemes per flow type, closed incompressible volume needs a pressure reference
+    divTurb = ['div(phi,k)      Gauss limitedLinear 1;', 'div(phi,omega)  Gauss limitedLinear 1;']
+    if getFlow(fullCaseSetupDict) == 'incompressible':
+        divSchemes = ['div(phi,U)      Gauss limitedLinearV 1;'] + divTurb + ['div((nuEff*dev2(T(grad(U))))) Gauss linear;']
+        locInMesh = ' '.join(v for v in fullCaseSetupDict['GLOBAL_REFINEMENT']['LOC_IN_MESH'] if v != '')
+        pRef = '    pRefPoint ( %s );\n    pRefValue 0;' % (locInMesh)
+    else:
+        divSchemes = ['div(phi,U)      Gauss limitedLinearV 1;', 'div(phi,e)      Gauss limitedLinear 1;',
+                      'div(phi,K)      Gauss linear;', 'div(phiv,p)     Gauss linear;', 'div(meshPhi,p)  Gauss linear;'] \
+                     + divTurb + ['div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;']
+        pRef = ''
+    copyTemplate(templateLoc, 'system/fvSchemes', 'system/fvSchemes',
+                 {'DIV_SCHEMES': '\n'.join('    ' + s for s in divSchemes)})
     copyTemplate(templateLoc, 'system/fvSolution', 'system/fvSolution',
                  {'N_OUTER_CORR': simControl['N_OUTER_CORR'][0], 'N_CORR': simControl['N_CORR'][0],
-                  'N_NONORTH_CORR': simControl['N_NONORTH_CORR'][0]})
+                  'N_NONORTH_CORR': simControl['N_NONORTH_CORR'][0], 'P_REF': pRef})
     copyTemplate(templateLoc, 'system/decomposeParDict', 'system/decomposeParDict',
                  {'NUM_PROCS': compute['NUM_PROCS'][0], 'DECOMP_METHOD': compute['DECOMP_METHOD'][0]})
 
 
-def writeFunctionObjectsInternal(wallGroups):
-    #gas averages and mass (mass must stay constant in a closed volume), wall heat flux per patch
+def functionObject(name, entries):
+    #one function object block, written every time step
+    lines = ['%s' % (name), '{'] + ['    %-15s %s' % (key, val) for key, val in entries]
+    lines += ['    writeControl    timeStep;', '    writeInterval   1;', '}']
+    return '\n'.join(lines)
+
+
+def writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo=None):
+    #gas averages, mass (must stay constant in a closed volume) and wall heat flux for compressible runs,
+    #pressure force per moving body and area-averaged p on each motion face (both flow types)
     #gas volume for post: V = volIntegrate(rho)/volAverage(rho), no extra function object needed
     print('\n\tWriting internalFunctionObjects...')
+    incompressible = getFlow(fullCaseSetupDict) == 'incompressible'
     allPatches = []
     for geomName in wallGroups:
         for group in wallGroups[geomName]:
             allPatches += ['"%s_%s"' % (geomName, pid) for pid in group['pids']]
-    text = '''gasAvg
-{
-    type            volFieldValue;
-    libs            (fieldFunctionObjects);
-    regionType      all;
-    operation       volAverage;
-    fields          (p T rho);
-    writeFields     false;
-    writeControl    timeStep;
-    writeInterval   1;
-}
-gasMass
-{
-    type            volFieldValue;
-    libs            (fieldFunctionObjects);
-    regionType      all;
-    operation       volIntegrate;
-    fields          (rho);
-    writeFields     false;
-    writeControl    timeStep;
-    writeInterval   1;
-}
-wallHeatFlux
-{
-    type            wallHeatFlux;
-    libs            (fieldFunctionObjects);
-    patches         (%s);
-    writeFields     false;
-    writeControl    timeStep;
-    writeInterval   1;
-}
-''' % (' '.join(allPatches))
+    volume = [('type', 'volFieldValue;'), ('libs', '(fieldFunctionObjects);'), ('regionType', 'all;')]
+    fos = [functionObject('gasAvg', volume + [('operation', 'volAverage;'),
+                                              ('fields', '(p);' if incompressible else '(p T rho);'),
+                                              ('writeFields', 'false;')])]
+    if not incompressible:
+        fos.append(functionObject('gasMass', volume + [('operation', 'volIntegrate;'), ('fields', '(rho);'),
+                                                       ('writeFields', 'false;')]))
+        fos.append(functionObject('wallHeatFlux', [('type', 'wallHeatFlux;'), ('libs', '(fieldFunctionObjects);'),
+                                                   ('patches', '(%s);' % (' '.join(allPatches))),
+                                                   ('writeFields', 'false;')]))
+    if motionInfo:
+        #kinematic p for incompressible runs: forces scaled by the gas density at the charge state
+        if incompressible:
+            rho = [('rho', 'rhoInf;'), ('rhoInf', '%.6g;' % (getGasDensity(fullCaseSetupDict)))]
+        else:
+            rho = [('rho', 'rho;')]
+        for body in motionInfo['bodies']:
+            patches = ' '.join('"%s_%s"' % (body.source, pid) for pid in body.movedPids)
+            fos.append(functionObject('force_%s' % (body.name), [('type', 'forces;'), ('libs', '(forces);'),
+                                                                 ('patches', '(%s);' % (patches))] + rho
+                                      + [('CofR', '(0 0 0);')]))
+        for zone in motionInfo['zones']:
+            if zone.body is None:
+                continue
+            fos.append(functionObject('p_%s' % (zone.patch), [('type', 'surfaceFieldValue;'),
+                                                              ('libs', '(fieldFunctionObjects);'),
+                                                              ('regionType', 'patch;'), ('name', '%s;' % (zone.patch)),
+                                                              ('operation', 'areaAverage;'), ('fields', '(p);'),
+                                                              ('writeFields', 'false;')]))
     with open('system/internalFunctionObjects', 'w') as f:
-        f.write(text)
+        f.write('\n'.join(fos) + '\n')
 
 
 #----- mesh motion (MOVE bodies, displacementInterpolation)
@@ -692,24 +755,31 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
 #----- scripts
 
 def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None):
-    #meshingScript and solveScript (+ motionCheckScript with mesh motion) from the clusterDict sections
+    #meshingScript and solveScript (+ motionCheckScript with mesh motion) from the clusterDict sections,
+    #each runs as a Slurm job (sbatch) or locally (./script), submitScript chains them on the cluster
     print('\n\tWriting scripts...')
     with open('%s/defaultCluster/slurm/clusterDict' % (templateLoc)) as f:
         clusterDict = json.load(f)
     solver = getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER')
-    motionSteps = ['topoSet', 'reorderFaceZones', 'pointDisplacement']
-    scripts = [('meshing', 'meshingScript'), ('solve', 'solveScript')]
+    motionSteps = ['topoSet', 'reorderFaceZones', 'pointDisplacement', 'motionCheck']
+    scripts = [('meshing', 'meshingScript'), ('solve', 'solveScript'), ('submit', 'submitScript')]
     if motionZones:
         scripts.append(('motionCheck', 'motionCheckScript'))
     replaceDict = {'<ZERO_TEMPLATES>': os.path.join(execDir, 'zeroTemplates'), '<EXEC_DIR>': execDir,
                    '<SOLVER>': solver, '<MOTION_ZONES>': ' '.join(motionZones or [])}
+    #slurm header and environment from GLOBAL_COMPUTE_SETUP, job name defaults to the case directory name
+    compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
+    for key in compute:
+        replaceDict['<%s>' % key] = ' '.join(compute[key])
+    if replaceDict.get('<JOB_NAME>', 'auto') == 'auto':
+        replaceDict['<JOB_NAME>'] = os.path.basename(os.getcwd())
     for section, scriptName in scripts:
         lines = [clusterDict[section][key] for key in clusterDict[section]
                  if motionZones or key not in motionSteps]
         script = '\n'.join(lines)
         for key, val in replaceDict.items():
             script = script.replace(key, val)
-        with open(scriptName, 'w') as f:
+        with open(scriptName, 'w', newline='\n') as f:
             f.write(script + '\n')
         os.chmod(scriptName, 0o755)
         print('\t\t%s' % (scriptName))
@@ -719,7 +789,8 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
 
 def addSetupInfo(fullCaseSetupDict, wallGroups):
     #marker read by postRun (internal vs aero) and the resolved BC groups for post
-    fullCaseSetupDict['SETUP_INFO'] = {'TOOL': ['internal'], 'VERSION': [__version__]}
+    fullCaseSetupDict['SETUP_INFO'] = {'TOOL': ['internal'], 'VERSION': [__version__],
+                                        'FLOW': [getFlow(fullCaseSetupDict)]}
     groupDict = {}
     for geomName in wallGroups:
         for group in wallGroups[geomName]:

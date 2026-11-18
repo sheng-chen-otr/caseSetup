@@ -19,6 +19,7 @@ and limitations.
 #unit tests for the internal flow tool (no OpenFOAM needed)
 import gzip
 import os
+import re
 
 import numpy as np
 import pytest
@@ -214,3 +215,90 @@ def test_geom_prefix_check():
     internalSetup.checkGeomPrefixes({'MOVE-displacer.stl': {}})
     with pytest.raises(SystemExit):
         internalSetup.checkGeomPrefixes({'REGN-matrix.stl': {}})
+
+
+#----- scripts
+
+def _writeScripts(tmp_path, monkeypatch, repo_root, motionZones):
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    case = tmp_path / 'engineRun01'
+    case.mkdir()
+    monkeypatch.chdir(case)
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', motionZones)
+    return case
+
+
+def test_scripts_slurm_header_and_placeholders(tmp_path, monkeypatch, repo_root):
+    case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a', 'motion_b'])
+    for name in ['meshingScript', 'motionCheckScript', 'solveScript', 'submitScript']:
+        text = (case / name).read_bytes().decode()
+        assert '\r' not in text and text.startswith('#!/bin/bash\n')
+        assert re.search(r'<[A-Z_]+>', text) is None
+    mesh = (case / 'meshingScript').read_text()
+    assert '#SBATCH --account=def-brendan8' in mesh and '#SBATCH --ntasks=192' in mesh
+    assert '#SBATCH --job-name=engineRun01_mesh' in mesh and '#SBATCH --time=0-03:00' in mesh
+    assert 'module load StdEnv/2023 gcc/12.3 openmpi/4.1.5 openfoam/v2412' in mesh
+    assert 'NP=4' in mesh and '$RUN snappyHexMesh' in mesh
+    assert "reorderFaceZones.py' motion_a motion_b" in mesh
+    solve = (case / 'solveScript').read_text()
+    assert '#SBATCH --time=0-12:00' in solve and 'SLURM_NTASKS != $NP' in solve
+    assert 'motionCheckScript' in (case / 'submitScript').read_text()
+
+
+def test_scripts_no_motion(tmp_path, monkeypatch, repo_root):
+    case = _writeScripts(tmp_path, monkeypatch, repo_root, None)
+    assert not (case / 'motionCheckScript').exists()
+    assert 'topoSet' not in (case / 'meshingScript').read_text()
+    submit = (case / 'submitScript').read_text()
+    assert 'motionCheckScript' not in submit and 'afterok:$jid solveScript' in submit
+
+
+#----- incompressible (pimpleFoam) option
+
+def _fullDefaults(repo_root, solver):
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    full['GLOBAL_SIM_CONTROL']['SOLVER'] = [solver]
+    full['GLOBAL_REFINEMENT']['LOC_IN_MESH'] = ['0.001', '0.002', '0.003']
+    return templateLoc, full
+
+
+def test_flow_type_and_nu(repo_root):
+    templateLoc, full = _fullDefaults(repo_root, 'pimpleFoam')
+    assert writeInternal.getFlow(full) == 'incompressible'
+    #air at 1 bar, 300 K: rho 1.161, nu = mu/rho
+    assert writeInternal.getGasDensity(full) == pytest.approx(1.161, rel=1e-3)
+    assert writeInternal.getNu(full) == pytest.approx(writeInternal.getGasProperties(full)['MU']/1.161, rel=1e-3)
+    full['GLOBAL_MATERIAL']['NU'] = ['1.5e-5']
+    assert writeInternal.getNu(full) == 1.5e-5
+    full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['simpleFoam']
+    with pytest.raises(SystemExit):
+        writeInternal.getFlow(full)
+
+
+def test_incompressible_dicts(tmp_path, monkeypatch, repo_root):
+    templateLoc, full = _fullDefaults(repo_root, 'pimpleFoam')
+    monkeypatch.chdir(tmp_path)
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    writeInternal.writeThermoInternal(templateLoc, full)
+    writeInternal.writeFunctionObjectsInternal({}, full)
+    schemes = (tmp_path / 'system/fvSchemes').read_text()
+    assert 'div((nuEff*dev2(T(grad(U)))))' in schemes and 'meshPhi' not in schemes and 'div(phi,e)' not in schemes
+    assert 'pRefPoint ( 0.001 0.002 0.003 );' in (tmp_path / 'system/fvSolution').read_text()
+    assert 'nu ' in (tmp_path / 'constant/transportProperties').read_text()
+    assert not (tmp_path / 'constant/thermophysicalProperties').exists()
+    fos = (tmp_path / 'system/internalFunctionObjects').read_text()
+    assert 'fields          (p);' in fos and 'gasMass' not in fos and 'wallHeatFlux' not in fos
+
+
+def test_compressible_dicts_unchanged(tmp_path, monkeypatch, repo_root):
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    monkeypatch.chdir(tmp_path)
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    writeInternal.writeFunctionObjectsInternal({}, full)
+    schemes = (tmp_path / 'system/fvSchemes').read_text()
+    assert 'div(meshPhi,p)' in schemes and 'div(((rho*nuEff)*dev2(T(grad(U)))))' in schemes
+    assert 'pRef' not in (tmp_path / 'system/fvSolution').read_text()
+    fos = (tmp_path / 'system/internalFunctionObjects').read_text()
+    assert 'gasMass' in fos and 'fields          (p T rho);' in fos

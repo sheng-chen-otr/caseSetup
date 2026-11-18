@@ -19,14 +19,7 @@ gradSchemes     { default Gauss linear; }
 divSchemes
 {
     default         none;
-    div(phi,U)      Gauss limitedLinearV 1;
-    div(phi,e)      Gauss limitedLinear 1;
-    div(phi,K)      Gauss linear;
-    div(phiv,p)     Gauss linear;
-    div(meshPhi,p)  Gauss linear;
-    div(phi,k)      Gauss limitedLinear 1;
-    div(phi,omega)  Gauss limitedLinear 1;
-    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
+<DIV_SCHEMES>
 }
 laplacianSchemes { default Gauss linear limited 0.5; }
 interpolationSchemes { default linear; }

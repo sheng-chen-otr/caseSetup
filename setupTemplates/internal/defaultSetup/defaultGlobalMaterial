@@ -6,6 +6,7 @@ TRANSPORT = const
 MOL_WEIGHT = default
 CP = default
 MU = default
+NU = default
 PR = default
 SUTHERLAND_AS = default
 SUTHERLAND_TS = default

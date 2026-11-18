@@ -28,6 +28,7 @@ PIMPLE
     nCorrectors <N_CORR>;
     nNonOrthogonalCorrectors <N_NONORTH_CORR>;
     correctPhi no;
+<P_REF>
 }
 
 // ************************************************************************* //
