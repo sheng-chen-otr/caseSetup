@@ -302,3 +302,27 @@ def test_compressible_dicts_unchanged(tmp_path, monkeypatch, repo_root):
     assert 'pRef' not in (tmp_path / 'system/fvSolution').read_text()
     fos = (tmp_path / 'system/internalFunctionObjects').read_text()
     assert 'gasMass' in fos and 'fields          (p T rho);' in fos
+
+
+#----- motion file path
+
+def test_motion_file_path(tmp_path, monkeypatch):
+    case = tmp_path / 'job' / 'CASES' / 'run1'
+    case.mkdir(parents=True)
+    ref = tmp_path / 'job' / '02_reference'
+    ref.mkdir()
+    (ref / 'engine motion.csv').write_text('theta,d\n0,0\n')
+    (case / 'local.csv').write_text('theta,d\n0,0\n')
+    get = writeInternal.getMotionFilePath
+    #relative to the case directory, path with a space (config values are split on spaces)
+    assert get({'MOTION_FILE': ['../../02_reference/engine', 'motion.csv']}, 'MOVE-d', str(case)) \
+        == os.path.normpath(str(ref / 'engine motion.csv'))
+    assert get({'MOTION_FILE': ['local.csv']}, 'MOVE-d', str(case)) == os.path.normpath(str(case / 'local.csv'))
+    #absolute and environment variables
+    assert get({'MOTION_FILE': [str(case / 'local.csv')]}, 'MOVE-d', '/elsewhere') == os.path.normpath(str(case / 'local.csv'))
+    monkeypatch.setenv('MOTIONDIR', str(ref))
+    assert get({'MOTION_FILE': ['$MOTIONDIR/engine', 'motion.csv']}, 'MOVE-d', '/elsewhere') \
+        == os.path.normpath(str(ref / 'engine motion.csv'))
+    for value in (['required'], [''], ['missing.csv']):
+        with pytest.raises(SystemExit):
+            get({'MOTION_FILE': value}, 'MOVE-d', str(case))

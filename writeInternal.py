@@ -534,6 +534,21 @@ def matchPids(keywords, pids, where):
     return matched
 
 
+def getMotionFilePath(setup, section, caseDir):
+    #MOTION_FILE is a path (no default): absolute, ~ and $VARS expanded, relative paths from the case directory
+    value = ' '.join(v for v in setup['MOTION_FILE'] if v != '')
+    if value in ('', 'required'):
+        sys.exit('ERROR! [%s] MOTION_FILE is required: path to the motion csv (absolute, or relative to the case directory)'
+                 % (section))
+    path = os.path.expandvars(os.path.expanduser(value))
+    if not os.path.isabs(path):
+        path = os.path.join(caseDir, path)
+    path = os.path.normpath(path)
+    if not os.path.isfile(path):
+        sys.exit('ERROR! [%s] MOTION_FILE %s not found (looked for %s)' % (section, value, path))
+    return path
+
+
 def getMoveSections(fullCaseSetupDict):
     return [section for section in fullCaseSetupDict if section.startswith('MOVE')]
 
@@ -587,8 +602,9 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
         source = section if setup['FROM'][0] == 'self' else setup['FROM'][0]
         if source not in geomFiles:
             sys.exit('ERROR! [%s] FROM %s is not a geometry in GEOM' % (section, source))
-        motionFile = os.path.join(caseDir, setup['MOTION_FILE'][0])
+        motionFile = getMotionFilePath(setup, section, caseDir)
         if motionFile not in profiles:
+            print('\t\t%s motion from %s' % (name, motionFile))
             profiles[motionFile] = motionUtilities.readMotionFile(motionFile)
         theta, columns = profiles[motionFile]
         column = setup['MOTION_COLUMN'][0]

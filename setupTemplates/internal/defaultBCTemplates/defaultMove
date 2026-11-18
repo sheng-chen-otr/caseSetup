@@ -1,6 +1,6 @@
 [MOVE_SETUP]
 FROM = self
-MOTION_FILE = engineMotion.csv
+MOTION_FILE = required
 MOTION_COLUMN = 
 REF_ANGLE = 0
 TDC_CLEARANCE = 0.002
