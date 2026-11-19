@@ -474,13 +474,15 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict):
     simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
     compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
     #divergence schemes per flow type, closed incompressible volume needs a pressure reference
-    divTurb = ['div(phi,k)      Gauss limitedLinear 1;', 'div(phi,omega)  Gauss limitedLinear 1;']
+    #linearUpwind (upwind implicit + explicit correction) keeps the matrices diagonally dominant at large Co, as
+    #in the hand-built 006/007/009 (limitedLinearV is implicit linear/upwind: 010 diverged at Co 2.4 with it)
+    divTurb = ['div(phi,k)      Gauss linearUpwind grad(k);', 'div(phi,omega)  Gauss linearUpwind grad(omega);']
     if getFlow(fullCaseSetupDict) == 'incompressible':
-        divSchemes = ['div(phi,U)      Gauss limitedLinearV 1;'] + divTurb + ['div((nuEff*dev2(T(grad(U))))) Gauss linear;']
+        divSchemes = ['div(phi,U)      Gauss linearUpwind grad(U);'] + divTurb + ['div((nuEff*dev2(T(grad(U))))) Gauss linear;']
         locInMesh = ' '.join(v for v in fullCaseSetupDict['GLOBAL_REFINEMENT']['LOC_IN_MESH'] if v != '')
         pRef = '    pRefPoint ( %s );\n    pRefValue 0;' % (locInMesh)
     else:
-        divSchemes = ['div(phi,U)      Gauss limitedLinearV 1;', 'div(phi,e)      Gauss limitedLinear 1;',
+        divSchemes = ['div(phi,U)      Gauss linearUpwind grad(U);', 'div(phi,e)      Gauss linearUpwind grad(e);',
                       'div(phi,K)      Gauss linear;',
                       'div(phiv,p)     Gauss linear;           // pressure work in the e equation',
                       'div(meshPhi,p)  Gauss linear;           // pressure work from the moving mesh'] \
