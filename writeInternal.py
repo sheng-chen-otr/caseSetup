@@ -918,7 +918,16 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     for oldScript in ['meshingScript', 'solveScript'] + ([] if motionZones else ['motionCheckScript']):
         if os.path.isfile(oldScript):
             os.remove(oldScript)
-    replaceDict = {'<ZERO_TEMPLATES>': os.path.join(execDir, 'zeroTemplates'), '<EXEC_DIR>': execDir,
+    #processor count of the run into decomposeParDict; hierarchical/simple also need the split n (nx ny nz),
+    #chosen for the task count at run time (for clusters without scotch)
+    decompMethod = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']['DECOMP_METHOD'][0]
+    if decompMethod in ('hierarchical', 'simple'):
+        setDecomp = ("python3 '<EXEC_DIR>/meshUtilities/decompCoeffs.py' system/decomposeParDict $NP; "
+                     "if [ $? != 0 ]; then exit 1; fi;")
+    else:
+        setDecomp = 'foamDictionary system/decomposeParDict -entry numberOfSubdomains -set $NP > /dev/null;'
+    replaceDict = {'<SET_DECOMP>': setDecomp,
+                   '<ZERO_TEMPLATES>': os.path.join(execDir, 'zeroTemplates'), '<EXEC_DIR>': execDir,
                    '<SOLVER>': solver, '<MOTION_ZONES>': ' '.join(motionZones or [])}
     #slurm header and environment from GLOBAL_COMPUTE_SETUP, job name defaults to the case directory name
     compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']

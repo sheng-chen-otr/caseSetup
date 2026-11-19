@@ -392,3 +392,55 @@ def test_crank_scripts_compile_the_library(tmp_path, monkeypatch, repo_root):
     assert run.index('wmake libso') < run.index('createZeroDirectory')
     motion = (case / 'motionCheckScript').read_text()
     assert motion.index('wmake libso') < motion.index('moveDynamicMesh -parallel')
+
+
+#----- decomposition without scotch
+
+def _decompTool(repo_root):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        'decompCoeffs', os.path.join(repo_root, 'meshUtilities', 'decompCoeffs.py'))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_decomp_split_and_dict(tmp_path, monkeypatch, repo_root):
+    tool = _decompTool(repo_root)
+    #flat box (Stirling chamber): no splits across the thin direction while the others can take them
+    assert tool.chooseSplit(4, [0.4, 0.4, 0.07]) == (2, 2, 1)
+    n = tool.chooseSplit(192, [0.4, 0.4, 0.07])
+    assert n[0]*n[1]*n[2] == 192 and n[2] < n[0] and n[2] < n[1]
+    assert tool.chooseSplit(7, [1.0, 1.0, 1.0]) in [(7, 1, 1), (1, 7, 1), (1, 1, 7)]
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'system').mkdir()
+    (tmp_path / 'system' / 'blockMeshDict').write_text(
+        'vertices\n(\n    (-0.2 -0.2 0) (0.2 -0.2 0) (0.2 0.2 0) (-0.2 0.2 0)\n'
+        '    (-0.2 -0.2 0.07) (0.2 -0.2 0.07) (0.2 0.2 0.07) (-0.2 0.2 0.07)\n);\n')
+    path = tmp_path / 'system' / 'decomposeParDict'
+    path.write_text('FoamFile {}\nnumberOfSubdomains 192;\nmethod          hierarchical;\n\n// ***** //\n')
+    tool.main([str(path), '4'])
+    #running again (other task count) replaces the entries, no duplicates
+    tool.main([str(path), '6'])
+    text = path.read_text()
+    assert 'numberOfSubdomains 6;' in text and text.count('coeffs') == 1
+    assert re.search(r'n\s+\((\d+) (\d+) 1\);', text) and text.rstrip().endswith('// ***** //')
+
+
+def test_scripts_hierarchical_decomposition(tmp_path, monkeypatch, repo_root):
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    case = tmp_path / 'run'
+    case.mkdir()
+    monkeypatch.chdir(case)
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    run = (case / 'runScript').read_text()
+    assert run.count('-entry numberOfSubdomains -set $NP') == 2 and 'decompCoeffs' not in run
+    full['GLOBAL_COMPUTE_SETUP']['DECOMP_METHOD'] = ['hierarchical']
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    run = (case / 'runScript').read_text()
+    motion = (case / 'motionCheckScript').read_text()
+    #before the meshing (decomposePar) and before the solve, and in the motion check
+    call = "python3 '/opt/caseSetup/meshUtilities/decompCoeffs.py' system/decomposeParDict $NP"
+    assert run.count(call) == 2 and run.index(call) < run.index('decomposePar -force')
+    assert call in motion and 'numberOfSubdomains -set' not in run + motion
