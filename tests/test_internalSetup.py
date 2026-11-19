@@ -444,3 +444,43 @@ def test_scripts_hierarchical_decomposition(tmp_path, monkeypatch, repo_root):
     call = "python3 '/opt/caseSetup/meshUtilities/decompCoeffs.py' system/decomposeParDict $NP"
     assert run.count(call) == 2 and run.index(call) < run.index('decomposePar -force')
     assert call in motion and 'numberOfSubdomains -set' not in run + motion
+
+
+def test_decomp_override(tmp_path, monkeypatch, repo_root):
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    compute = full['GLOBAL_COMPUTE_SETUP']
+    assert writeInternal.getDecomp(full) == ('scotch', None)
+    compute['DECOMP_METHOD'] = ['hierarchical']
+    assert writeInternal.getDecomp(full) == ('hierarchical', None)
+    compute['DECOMP'] = ['8', '6', '4']
+    assert writeInternal.getDecomp(full) == ('hierarchical', (8, 6, 4))
+    #dict as caseSetup: numberOfSubdomains = nx*ny*nz, n in the coeffs
+    monkeypatch.chdir(tmp_path)
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    text = (tmp_path / 'system/decomposeParDict').read_text()
+    assert 'numberOfSubdomains 192;' in text and 'method          hierarchical;' in text
+    assert re.search(r'coeffs\s*\{\s*n\s+\(8 6 4\);\s*\}', text)
+    #scripts pass the split on, the helper checks it against the task count
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    assert "decompCoeffs.py' system/decomposeParDict $NP 8 6 4;" in (tmp_path / 'runScript').read_text()
+    for bad in (['8', '6'], ['8', '6', 'x'], ['0', '6', '4'], ['8', '6', '2']):
+        compute['DECOMP'] = bad
+        with pytest.raises(SystemExit):
+            writeInternal.getDecomp(full)
+    #other methods ignore DECOMP
+    compute['DECOMP'], compute['DECOMP_METHOD'] = ['8', '6', '2'], ['scotch']
+    assert writeInternal.getDecomp(full) == ('scotch', None)
+
+
+def test_decomp_helper_given_split(tmp_path, monkeypatch, repo_root):
+    tool = _decompTool(repo_root)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'system').mkdir()
+    path = tmp_path / 'system' / 'decomposeParDict'
+    path.write_text('numberOfSubdomains 1;\nmethod          hierarchical;\ncoeffs\n{\n    n (1 1 1);\n}\n\n// ***** //\n')
+    #no blockMeshDict needed when the split is given
+    tool.main([str(path), '4', '2', '2', '1'])
+    text = path.read_text()
+    assert 'numberOfSubdomains 4;' in text and '(2 2 1);' in text and text.count('coeffs') == 1
+    with pytest.raises(SystemExit):
+        tool.main([str(path), '6', '2', '2', '1'])

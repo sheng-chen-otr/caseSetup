@@ -19,7 +19,8 @@ and limitations.
 #sets numberOfSubdomains and the hierarchical/simple split n (nx ny nz) in decomposeParDict for the
 #processor count of the run (no scotch needed). the split is chosen so the subdomains of the background
 #mesh box (system/blockMeshDict vertices) are as close to cubes as possible
-#usage (from the case directory): python3 decompCoeffs.py system/decomposeParDict <nProcs>
+#usage (from the case directory): python3 decompCoeffs.py system/decomposeParDict <nProcs> [nx ny nz]
+#with nx ny nz (DECOMP in GLOBAL_COMPUTE_SETUP) that split is used and must give nProcs subdomains
 
 import re
 import sys
@@ -67,11 +68,16 @@ def setSplit(dictPath, nProcs, n):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 2:
-        sys.exit('usage: decompCoeffs.py system/decomposeParDict <nProcs>')
+    if len(argv) not in (2, 5):
+        sys.exit('usage: decompCoeffs.py system/decomposeParDict <nProcs> [nx ny nz]')
     dictPath, nProcs = argv[0], int(argv[1])
-    lengths = blockMeshLengths('system/blockMeshDict')
-    n = chooseSplit(nProcs, lengths)
+    if len(argv) == 5:
+        n = tuple(int(v) for v in argv[2:])
+        if n[0]*n[1]*n[2] != nProcs:
+            sys.exit('ERROR! DECOMP (%d %d %d) gives %d subdomains but the run has %d tasks: change DECOMP '
+                     'or the task count' % (n + (n[0]*n[1]*n[2], nProcs)))
+    else:
+        n = chooseSplit(nProcs, blockMeshLengths('system/blockMeshDict'))
     setSplit(dictPath, nProcs, n)
     print('decomposition: %d subdomains, n (%d %d %d)' % ((nProcs,) + n))
 

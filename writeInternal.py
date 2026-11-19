@@ -493,8 +493,40 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict):
     copyTemplate(templateLoc, 'system/fvSolution', 'system/fvSolution',
                  {'N_OUTER_CORR': simControl['N_OUTER_CORR'][0], 'N_CORR': simControl['N_CORR'][0],
                   'N_NONORTH_CORR': simControl['N_NONORTH_CORR'][0], 'P_REF': pRef})
+    method, decomp = getDecomp(fullCaseSetupDict)
+    nProcs, coeffs = compute['NUM_PROCS'][0], ''
+    if decomp:
+        nProcs = str(decomp[0]*decomp[1]*decomp[2])
+        coeffs = 'coeffs\n{\n    n               (%d %d %d);\n}' % decomp
+        print('\t\tNumber of processors: %s' % (nProcs))
+        print('\t\tDecomposition: %d %d %d' % decomp)
+        if nProcs != compute['LOCAL_PROCS'][0]:
+            print('\t\tNOTE: local runs need LOCAL_PROCS = %s for this DECOMP' % (nProcs))
+    elif method in ('hierarchical', 'simple'):
+        print('\t\t%s decomposition: n set by the run scripts for the task count of each run' % (method))
     copyTemplate(templateLoc, 'system/decomposeParDict', 'system/decomposeParDict',
-                 {'NUM_PROCS': compute['NUM_PROCS'][0], 'DECOMP_METHOD': compute['DECOMP_METHOD'][0]})
+                 {'NUM_PROCS': nProcs, 'DECOMP_METHOD': method, 'DECOMP_COEFFS': coeffs})
+
+
+def getDecomp(fullCaseSetupDict):
+    #DECOMP_METHOD and the hierarchical/simple split: DECOMP = nx ny nz (as caseSetup), or auto = chosen by
+    #the run scripts for the task count of each run. returns (method, (nx, ny, nz) or None)
+    compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
+    method = compute['DECOMP_METHOD'][0]
+    decomp = [v for v in compute.get('DECOMP', ['auto']) if v != '']
+    if method not in ('hierarchical', 'simple') or decomp in ([], ['auto']):
+        return method, None
+    try:
+        n = tuple(int(v) for v in decomp)
+    except ValueError:
+        n = ()
+    if len(n) != 3 or min(n) < 1:
+        sys.exit('ERROR! GLOBAL_COMPUTE_SETUP DECOMP must be auto or three whole numbers nx ny nz, got %s' % (' '.join(decomp)))
+    total = n[0]*n[1]*n[2]
+    if total != int(compute['NUM_PROCS'][0]):
+        sys.exit('ERROR! DECOMP %d %d %d gives %d subdomains but NUM_PROCS is %s: set NUM_PROCS = %d (job tasks)'
+                 % (n + (total, compute['NUM_PROCS'][0], total)))
+    return method, n
 
 
 def functionObject(name, entries, fieldWriter=False):
@@ -920,10 +952,10 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
             os.remove(oldScript)
     #processor count of the run into decomposeParDict; hierarchical/simple also need the split n (nx ny nz),
     #chosen for the task count at run time (for clusters without scotch)
-    decompMethod = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']['DECOMP_METHOD'][0]
+    decompMethod, decomp = getDecomp(fullCaseSetupDict)
     if decompMethod in ('hierarchical', 'simple'):
-        setDecomp = ("python3 '<EXEC_DIR>/meshUtilities/decompCoeffs.py' system/decomposeParDict $NP; "
-                     "if [ $? != 0 ]; then exit 1; fi;")
+        setDecomp = ("python3 '<EXEC_DIR>/meshUtilities/decompCoeffs.py' system/decomposeParDict $NP%s; "
+                     "if [ $? != 0 ]; then exit 1; fi;" % (' %d %d %d' % decomp if decomp else ''))
     else:
         setDecomp = 'foamDictionary system/decomposeParDict -entry numberOfSubdomains -set $NP > /dev/null;'
     replaceDict = {'<SET_DECOMP>': setDecomp,

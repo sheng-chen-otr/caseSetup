@@ -16,5 +16,6 @@ FoamFile
 
 numberOfSubdomains <NUM_PROCS>;
 method          <DECOMP_METHOD>;
+<DECOMP_COEFFS>
 
 // ************************************************************************* //

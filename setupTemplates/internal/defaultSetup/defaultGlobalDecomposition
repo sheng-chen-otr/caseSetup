@@ -2,6 +2,7 @@
 NUM_PROCS = 192
 LOCAL_PROCS = 4
 DECOMP_METHOD = scotch
+DECOMP = auto
 ACCOUNT = def-brendan8
 MODULES = StdEnv/2023 gcc/12.3 openmpi/4.1.5 openfoam/v2412
 NODES = 1
