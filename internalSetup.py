@@ -55,6 +55,13 @@ def parseArgs(argv=None):
     return parser.parse_args(argv)
 
 
+def findFromSections(writeCaseSetupDict, geomNames):
+    #MOVE sections without their own file (FROM = <geometry>, e.g. a piston crown PID in the chamber)
+    #FROM must still point at a geometry in GEOM, otherwise this is just an orphan left behind by a removed part
+    return [s for s in writeCaseSetupDict if s.startswith('MOVE') and s not in geomNames
+            and writeCaseSetupDict[s].get('FROM', ['self'])[0] in geomNames]
+
+
 def checkGeomPrefixes(geomDict):
     for geom in geomDict:
         prefix = geom.split('-')[0]
@@ -105,9 +112,8 @@ def main(argv=None):
         writeCaseSetupDict, flag = setupCore.checkAddonDefaults(
             geomDict, writeCaseSetupDict, templateLoc, prefix, template, header, keepExtra=True)
         updateFlag = updateFlag or flag
-    #MOVE sections without their own file (FROM = <geometry>, e.g. a piston crown PID in the chamber)
     geomNames = [setupCore.stripExt(geom) for geom in geomDict]
-    fromSections = [s for s in writeCaseSetupDict if s.startswith('MOVE') and s not in geomNames]
+    fromSections = findFromSections(writeCaseSetupDict, geomNames)
     moveItems = setupCore.readAddonTemplate(templateLoc, 'defaultMove', 'MOVE_SETUP')
     for section in fromSections:
         if setupCore.fillAddonSection(writeCaseSetupDict, section, moveItems, keepExtra=True):

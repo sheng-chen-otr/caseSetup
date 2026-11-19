@@ -208,6 +208,13 @@ def test_internal_templates_load(repo_root):
     assert defaults['GLOBAL_MATERIAL']['TRANSPORT'] == ['const']
 
 
+def test_findFromSections_keeps_valid_from_drops_orphan():
+    #MOVE-piston: FROM = WALL-chamber, still in GEOM -> kept
+    #MOVE-old: leftover section from a removed part, FROM = self -> not kept (cleanUpCaseSetup deletes it)
+    w = {'MOVE-piston': {'FROM': ['WALL-chamber']}, 'MOVE-old': {'FROM': ['self']}, 'WALL-chamber': {}}
+    assert internalSetup.findFromSections(w, ['WALL-chamber']) == ['MOVE-piston']
+
+
 def test_geom_prefix_check():
     internalSetup.checkGeomPrefixes({'WALL-chamber.stl': {}})
     with pytest.raises(SystemExit):
