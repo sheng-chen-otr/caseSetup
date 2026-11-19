@@ -1,0 +1,422 @@
+\section{Internal Flow (internalSetup)}
+\codeword{internalSetup} is a second tool in this repository for closed internal flows, built for Stirling engines (displacer, power piston, heated and cooled walls). It works like \codeword{caseSetup}: an INI-style file in the case directory is merged with the template defaults, the geometry prefixes add their own sections, and the tool writes the OpenFOAM dictionaries, the boundary conditions and the Slurm scripts. Everything specific to external aero (inlet/outlet domain, ride height, cornering, force coefficients) is left out.
+
+The internal templates target ESI OpenFOAM v2412. All the features described here were checked on v2412.
+
+\subsection{Overview}
+\begin{itemize}
+    \item Entry point: \codeword{internalSetup.py}. Do not run \codeword{caseSetup.py} on an internal case.
+    \item Case file: \codeword{internalSetup} (not \codeword{caseSetup}) in the case directory.
+    \item Template set: \codeword{setupTemplates/internal}, selected by default (\codeword{-s internal}).
+    \item Solver: \codeword{rhoPimpleFoam} (compressible, default) or \codeword{pimpleFoam} (incompressible).
+    \item Mesh: \codeword{blockMesh} background box around the geometry + \codeword{snappyHexMesh}. There is no wind tunnel domain, the whole mesh is the gas inside the walls.
+    \item Mesh motion: \codeword{displacementInterpolation} along z, driven by a table of body positions against crank angle. The crank angle either follows a prescribed speed, or is solved from the gas forces on the bodies (crank drive, Section \ref{sec:crankDrive}).
+    \item No symmetry planes: internal cases are always full models.
+\end{itemize}
+
+\subsection{Directory Structure and First Run}
+The directory structure is the same as for \codeword{caseSetup}: geometry in \codeword{<job>/02_reference/MSH}, cases in \codeword{<job>/CASES/<case>}. The tool is run from inside the case directory.
+\begin{lstlisting}
+    cd <job>/CASES/001
+    python3 /path/to/caseSetup/internalSetup.py --new
+    # edit internalSetup, then
+    python3 /path/to/caseSetup/internalSetup.py
+\end{lstlisting}
+Command line options:
+\begin{itemize}
+    \item \codeword{--new} - writes a fresh \codeword{internalSetup} file (overwrites an existing one).
+    \item \codeword{--modules} - lists the available modules.
+    \item \codeword{-d}, \codeword{--controlDict} - rewrites \codeword{system/controlDict} only (e.g. after changing the time step or the run length).
+    \item \codeword{-s}, \codeword{--setup} - template set, default \codeword{internal}.
+\end{itemize}
+
+As with \codeword{caseSetup}, the first run with a new geometry or a new module fills in the missing keys, writes them to \codeword{internalSetup} and stops with \codeword{updated with default values ... rerun}. Check the new keys and run the tool again. New keys are appended at the end of their section. Sections of parts that are no longer in \codeword{GEOM} are removed from the file.
+
+\textbf{NOTE:} run the setup on the machine where the case will run (e.g. in \codeword{$SCRATCH} on the cluster). The generated scripts hold absolute paths to \codeword{zeroTemplates}, \codeword{meshUtilities} and \codeword{foamLibs} in the repository.
+
+A new \codeword{internalSetup} file looks like this:
+\begin{lstlisting}
+    [DEFAULTS]
+    DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultGlobalMaterial defaultGlobalDecomposition defaultMeshMotion
+    ADDON_MODULES =
+
+    [TITLES]
+    CASENAME = casename
+    CASEDESCRP = default description
+    JOBCODE = ST
+
+    [GEOMETRY]
+    GEOM = WALL-chamber.stl,1,1,3,1.2,low
+
+    [GLOBAL_REFINEMENT]
+    BASE_CELL = 0.004
+    LOC_IN_MESH = required
+    ...
+\end{lstlisting}
+Remove a module from \codeword{DEFAULT_MODULES} and rerun the tool to expose its settings. While a module is listed there, its template values are used and any section of that name in the file is ignored.
+
+\subsection{Geometry and PIDs}
+The \codeword{GEOM} line uses the same columns as \codeword{caseSetup}:
+\begin{lstlisting}
+    GEOMETRY_FILE_NAME,SCALE,MESH_LEVEL,INFLATION_LAYERS,INFLATION_LAYER_GROWTH_RATE,WALL_MODEL
+\end{lstlisting}
+Every geometry file needs a prefix that says what the whole body is:
+\begin{itemize}
+    \item \codeword{WALL} - static walls (chamber, cylinder liner, hot and cold end faces).
+    \item \codeword{MOVE} - a rigid moving body (displacer). A body whose faces are part of another file (e.g. a piston crown in the chamber file) has a \codeword{MOVE} section without a file of its own, see \codeword{FROM} below.
+\end{itemize}
+\codeword{REGN} (regenerator) and \codeword{SMP} (sample surfaces) are reserved prefixes and are not available yet.
+
+Inside each file the faces are separated into PIDs: STL \codeword{solid} names or OBJ groups. Every PID must have a name. \codeword{snappyHexMesh} keeps every PID as its own patch, named \codeword{<fileName>_<pid>} (e.g. \codeword{WALL-chamber_hot}). In the setup file the PIDs are selected by keyword: a keyword matches every PID that contains it, ignoring case. The tool reads the PIDs directly from the geometry files, checks the keywords before anything is written and prints a table of every patch with its group, U and T condition.
+
+\textbf{NOTE:} the mesh is the gas side of the walls, chosen by \codeword{LOC_IN_MESH} in \codeword{[GLOBAL_REFINEMENT]}. This point is required and must be inside the gas at the meshing (start) position of the bodies.
+
+\subsection{Wall Boundary Conditions}
+Each \codeword{WALL} and \codeword{MOVE} geometry gets a section with the same name as the file (without the extension):
+\begin{lstlisting}
+    [WALL-chamber]
+    U_DEFAULT = noSlip
+    T_DEFAULT = adiabatic
+    BC_GROUPS = hotEnd coldEnd liner
+    hotEnd = PIDS hot T fixed 600
+    coldEnd = PIDS cold T fixed 300
+    liner = PIDS liner T convective 15 300
+    ANCHOR_PIDS = hot cold
+    GAP_PIDS = side
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{U_DEFAULT} [\codeword{str}] - velocity condition for PIDs that are in no group (\codeword{noSlip}, \codeword{slip}).
+    \item \codeword{T_DEFAULT} [\codeword{str}] - temperature condition for PIDs that are in no group, options as in the group lines below.
+    \item \codeword{BC_GROUPS} [\codeword{str}] - names of the groups. Each name needs its own line:
+    \begin{lstlisting}
+    <name> = PIDS <keyword> [<keyword> ...] [U noSlip|slip] [T <mode> <values>]
+    \end{lstlisting}
+    Temperature modes:
+    \begin{itemize}
+        \item \codeword{adiabatic} - zero gradient.
+        \item \codeword{fixed <T>} - fixed temperature in K.
+        \item \codeword{convective <h> <Ta>} - heat transfer coefficient (W/m$^2$K) to an ambient temperature (K).
+        \item \codeword{flux <q>} - fixed heat flux in W/m$^2$.
+    \end{itemize}
+    A PID that matches two groups and a keyword that matches no PID are errors. PIDs in no group form the group \codeword{<file>_default}.
+    \item \codeword{ANCHOR_PIDS} [\codeword{str}] - flat faces that hold the mesh still for the motion solver, normally the hot and cold end faces (\codeword{WALL} only). Add any fixed step or port end that lies between an anchor and a moving body, otherwise its faces move with the mesh. The setup warns about such faces.
+    \item \codeword{GAP_PIDS} [\codeword{str}] - wall side of the displacer side gap. Used for the gap refinement, see Section \ref{sec:motion}.
+\end{itemize}
+Faces that move with a body always get \codeword{movingWallVelocity}, whatever U is set to. In an incompressible run (\codeword{pimpleFoam}) there is no temperature field and the T settings are ignored (the setup prints a note).
+
+\subsection{Run Control}
+\begin{lstlisting}
+    [GLOBAL_CONTROL]
+    STARTFROM = latestTime
+    FREQ = 10
+    N_CYCLES = 3
+    MAX_CO = 1
+    MAX_DT = 1e-4
+    INIT_DT = 1e-6
+    WRITE_PER_CYCLE = 20
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{FREQ} [\codeword{float,Hz}] - engine speed. With the crank drive it is the start speed.
+    \item \codeword{N_CYCLES} [\codeword{float}] - number of cycles to run, \codeword{endTime = N_CYCLES/FREQ}.
+    \item \codeword{WRITE_PER_CYCLE} [\codeword{int}] - number of written times per cycle.
+    \item \codeword{MAX_CO} [\codeword{float}] - Courant number limit for the adjustable time step. Set it to \codeword{0} or leave it blank (\codeword{MAX_CO =}) for a fixed time step equal to \codeword{MAX_DT} (\codeword{adjustTimeStep no}). With a fixed step the setup prints the number of steps per cycle, and warns if the write interval is not a whole number of steps (the writes then happen at the first step past each interval).
+    \item \codeword{MAX_DT} [\codeword{float,s}] - largest time step (adjustable), or the time step (fixed).
+    \item \codeword{INIT_DT} [\codeword{float,s}] - first time step of an adjustable run, not used with a fixed step.
+    \item \codeword{STARTFROM} [\codeword{str}] - \codeword{latestTime} so a resubmitted run continues.
+\end{itemize}
+After changing these values, \codeword{internalSetup.py -d} rewrites the controlDict only.
+
+\subsection{Solver and Gas}
+\begin{lstlisting}
+    [GLOBAL_SIM_CONTROL]
+    SOLVER = rhoPimpleFoam
+    TURB_MODEL = laminar
+    N_OUTER_CORR = 1
+    N_CORR = 2
+    N_NONORTH_CORR = 1
+    RELAX_P = 0.3
+    RELAX_U = 0.7
+    RELAX_E = 0.7
+
+    [GLOBAL_MATERIAL]
+    GAS = air
+    CHARGE_PRESSURE = 1e5
+    INIT_T = 300
+    TRANSPORT = const
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{SOLVER} - \codeword{rhoPimpleFoam}: perfect gas, absolute pressure in Pa, energy equation, wall heat transfer. \codeword{pimpleFoam}: incompressible, kinematic pressure (p/$\rho$) referenced to 0 at \codeword{LOC_IN_MESH}, no temperature. The incompressible option is only useful for looking at the flow through the displacer: the gas is not compressed, so the pressure level, the piston work and the heat transfer have no meaning.
+    \item \codeword{TURB_MODEL} - \codeword{laminar} (default), \codeword{kOmegaSST}, \codeword{kEpsilon} or \codeword{kOmega}. The wall model column of \codeword{GEOM} (\codeword{low}/\codeword{high}) selects low or high Reynolds wall treatment.
+    \item \codeword{N_OUTER_CORR} - PIMPLE outer correctors. \codeword{1} is PISO: stable only around a Courant number of 1 on the moving mesh, so keep \codeword{MAX_CO} near 1. For larger time steps (\codeword{MAX_CO} well above 1) use 3 or more outer correctors.
+    \item \codeword{RELAX_P}, \codeword{RELAX_U}, \codeword{RELAX_E} - under-relaxation of the pressure field and of the U (and k, omega) and e equations, written only when \codeword{N_OUTER_CORR} is above 1. The last outer iteration of each time step is not relaxed.
+    \item \codeword{GAS} - \codeword{air}, \codeword{nitrogen}, \codeword{helium}, \codeword{hydrogen} or \codeword{custom}. Each preset sets the molecular weight, Cp, viscosity and Prandtl number. Any of \codeword{MOL_WEIGHT}, \codeword{CP}, \codeword{MU}, \codeword{PR} that is not \codeword{default} overrides the preset, \codeword{custom} needs all four.
+    \item \codeword{CHARGE_PRESSURE} [\codeword{float,Pa}], \codeword{INIT_T} [\codeword{float,K}] - initial gas state. The gas mass follows from these and the meshed volume.
+    \item \codeword{TRANSPORT} - \codeword{const} viscosity or \codeword{sutherland} (coefficients from the preset, or \codeword{SUTHERLAND_AS} / \codeword{SUTHERLAND_TS}).
+    \item \codeword{NU} - kinematic viscosity for \codeword{pimpleFoam}, \codeword{default} = $\mu/\rho$ of the gas at the charge state.
+\end{itemize}
+
+\subsection{Mesh Motion}\label{sec:motion}
+A case with one or more \codeword{MOVE} sections gets a moving mesh. Static cases (only \codeword{WALL}) skip all of this.
+
+\subsubsection{How the Mesh Moves}
+The motion solver is \codeword{displacementInterpolation} along z. Flat face zones normal to z are made from the anchor faces (fixed) and from the moving faces of each body (moving with that body). The displacement of a mesh point depends only on its z coordinate: points between two zones of the same body move rigidly with it (the displacer, its holes and the side gap), and points between zones of different bodies, or between a body and an anchor, are stretched or squashed linearly (the end spaces and the piston bore). Points beyond the outermost zone interpolate towards zero at the mesh bound, which is fine when the end faces are the mesh bounds in z.
+
+This works for a displacer and a power piston in line along z (gamma or beta type engines), as long as every zone is its own flat z band and the bands never cross. Side-by-side cylinders overlapping in z with different motions (alpha type) are not supported.
+
+\subsubsection{Motion Table}
+Both bodies are driven by one CSV file with the shared crank angle, so the phase between the bodies is fixed by the file:
+\begin{lstlisting}
+    theta,displacer,piston
+    0,0.0,0.0
+    1,0.0000012,-0.0000017
+    ...
+    359,...
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{theta} in degrees, starting at 0 and ending at or below 360, any spacing. Lines starting with \codeword{#} are comments.
+    \item One column per body: axial position in metres, any datum (only differences are used).
+    \item The profile must be periodic: a value given at 360 must equal the value at 0.
+\end{itemize}
+
+\subsubsection{MOVE Sections}
+\begin{lstlisting}
+    [MOVE-displacer]
+    FROM = self
+    MOTION_FILE = ../../02_reference/engineMotion.csv
+    MOTION_COLUMN = displacer
+    REF_ANGLE = 0
+    TDC_CLEARANCE = 0.002
+    ZONE_PIDS = top bottom
+    GAP_PIDS = side
+    GAP_CELLS = 6
+
+    [MOVE-piston]
+    FROM = WALL-chamber
+    MOTION_FILE = ../../02_reference/engineMotion.csv
+    MOTION_COLUMN = piston
+    REF_ANGLE = 0
+    TDC_CLEARANCE = 0.002
+    ZONE_PIDS = crown
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{FROM} [\codeword{str}] - \codeword{self}: the body is its own \codeword{MOVE-<name>} file and the whole file moves. \codeword{<geometry>}: the body is made of PIDs in another file (e.g. the piston crown, a PID of \codeword{WALL-chamber}). Only its \codeword{ZONE_PIDS} faces move. A \codeword{FROM} section stays in the file as long as that geometry is in \codeword{GEOM}. The crown must be a separate, flat shell normal to z, slightly larger than the bore so that it seals.
+    \item \codeword{MOTION_FILE} [\codeword{path}] - motion CSV, required. Absolute, with \codeword{~} and \codeword{$VARIABLES} expanded, or relative to the case directory.
+    \item \codeword{MOTION_COLUMN} [\codeword{str}] - column of this body in the CSV.
+    \item \codeword{REF_ANGLE} [\codeword{float,deg}] - crank angle at which the geometry was exported. Before meshing, the tool moves the body from this angle to the start angle.
+    \item \codeword{TDC_CLEARANCE} [\codeword{float,m}] - smallest allowed gap to the facing zone over the cycle. If the profile closes the gap further (e.g. piston top dead centre flush with the cold face), the body is moved away by the shortfall, and the added dead volume is printed. A gap of zero cannot be meshed.
+    \item \codeword{ZONE_PIDS} [\codeword{str}] - flat faces that drive the motion: displacer \codeword{top bottom}, piston \codeword{crown}.
+    \item \codeword{GAP_PIDS} [\codeword{str}], \codeword{GAP_CELLS} [\codeword{int}] - body side of the side gap and the minimum number of cells across it (default 6, 4 for quick tests). The tool measures the gap from the STLs and refines a band around it with a \codeword{snappyHexMesh} distance refinement. Gap faces get no inflation layers. Needs \codeword{GAP_PIDS} on the \codeword{WALL} side as well.
+    \item \codeword{U_DEFAULT}, \codeword{T_DEFAULT}, \codeword{BC_GROUPS} - as for \codeword{WALL}.
+\end{itemize}
+
+\subsubsection{MESH\_MOTION Settings}
+\begin{lstlisting}
+    [MESH_MOTION]
+    METHOD = displacementInterpolation
+    AXIS = z
+    START_ANGLE = auto
+    STEP_DEG = 1
+    MAX_DEFORMATION = 15
+    ZONE_FLAT_TOL = 1e-4
+    DRIVE = prescribed
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{START_ANGLE} [\codeword{float,deg}] - crank angle of the mesh and of the start of the run. \codeword{auto} picks the angle that gives the smallest worst squash/stretch of the gaps over the cycle.
+    \item \codeword{STEP_DEG} [\codeword{float,deg}] - resampling of the profile ($\le$ 1).
+    \item \codeword{MAX_DEFORMATION} [\codeword{float}] - largest allowed ratio between a gap at the meshing angle and the same gap anywhere in the cycle (both ways). Larger: increase \codeword{TDC_CLEARANCE}.
+    \item \codeword{ZONE_FLAT_TOL} [\codeword{float,m}] - how flat a zone face must be.
+    \item \codeword{DRIVE} - \codeword{prescribed} (the crank turns at \codeword{FREQ}) or \codeword{crank} (Section \ref{sec:crankDrive}).
+\end{itemize}
+
+\subsubsection{Setup Checks and Report}
+Before writing the case, the setup checks the zones over every angle of the cycle (not only the start): each zone is flat, the z order stays the same with a gap above zero, the clearances hold, and the deformation stays below \codeword{MAX_DEFORMATION}. It prints the zones in z order, the start angle, the worst squash/stretch, and for each body the stroke, peak velocity and peak acceleration. A sharp step in the profile is reported, since it gives pressure spikes. Use the peak velocity to choose \codeword{MAX_DT}.
+
+\subsubsection{Mesh Motion Dry Run}
+Check the moving mesh before the flow run:
+\begin{lstlisting}
+    ./runScript --meshOnly
+    ./motionCheckScript
+\end{lstlisting}
+or on the cluster \codeword{./submitScript --check}. The motion check runs \codeword{moveDynamicMesh} over one cycle and \codeword{checkMesh} on the moved meshes every 45 degrees, prints the quality summary and removes the moved meshes again. It stops only if \codeword{moveDynamicMesh} fails. Mesh quality failures are printed for the user to judge.
+
+\subsection{Crank Drive}\label{sec:crankDrive}
+With \codeword{DRIVE = crank} the gas forces turn the crank instead of a prescribed speed. The bodies stay tied to the crank angle $\theta$ through the motion CSV; only $\theta(t)$ is solved. A custom motion solver, \codeword{crankDisplacementInterpolation} in \codeword{foamLibs/stirlingMotion}, does this. The run scripts compile it with \codeword{wmake libso} into \codeword{$FOAM_USER_LIBBIN} (this does nothing when it is up to date), so a compiler must be available where the job runs.
+
+Every time step:
+\begin{equation}
+F_{body} = \sum (p - p_{ref})\, \mathbf{S}_f \cdot \mathbf{e}_z, \qquad T_{body} = F_{body}\,\frac{dz}{d\theta}
+\end{equation}
+\begin{equation}
+I\,\frac{d\omega}{dt} = \sum T_{body} - T_{load} - T_{friction}
+\end{equation}
+The forces are pressure only, from the previous time step. Speed-proportional terms are treated implicitly.
+\begin{lstlisting}
+    [MESH_MOTION]
+    DRIVE = crank
+    INERTIA = 0.05
+    LOAD = generator
+    LOAD_TORQUE = 0
+    LOAD_DAMPING = 0
+    GEN_K = 1
+    GEN_R_LOAD = 10
+    GEN_R_INT = 0
+    FRICTION_TORQUE = 0
+    FRICTION_COEFF = 0
+    P_BUFFER = charge
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{INERTIA} [\codeword{float,kg m2}] - flywheel, crank and everything turning with it.
+    \item \codeword{LOAD} - what the crank drives:
+    \begin{itemize}
+        \item \codeword{speed} - fixed speed at \codeword{FREQ} (same motion as \codeword{prescribed}, the gas torque is logged).
+        \item \codeword{torque} - constant load torque \codeword{LOAD_TORQUE} (N m).
+        \item \codeword{damper} - torque \codeword{LOAD_DAMPING} $\cdot\,\omega$ (N m s).
+        \item \codeword{generator} - permanent magnet generator into a resistor: $I = k\omega/(R_{load} + R_{int})$, torque $kI$, electrical power $I^2 R_{load}$. \codeword{GEN_K} (V s/rad), \codeword{GEN_R_LOAD} and \codeword{GEN_R_INT} (ohm).
+    \end{itemize}
+    \item \codeword{FRICTION_TORQUE} [\codeword{N m}] (Coulomb) and \codeword{FRICTION_COEFF} [\codeword{N m s}] (viscous).
+    \item \codeword{P_BUFFER} - pressure behind the bodies, \codeword{charge} = \codeword{CHARGE_PRESSURE}, or a value in Pa. The bounce space is not modelled.
+\end{itemize}
+The setup prints the load torque and power at the start speed. The crank angle and speed are stored in \codeword{<time>/uniform/crankState} at each write, so a restart continues from them. The log \codeword{postProcessing/crank/<start>/crank.dat} has the columns: time, crank angle (accumulated, deg), $\omega$, gas torque, load torque, electrical power, and the force and torque per body.
+
+\textbf{NOTE:} \codeword{endTime} is still \codeword{N_CYCLES/FREQ}. When the speed changes, the run covers about \codeword{N_CYCLES} cycles, not exactly. With \codeword{pimpleFoam} the crank drive only makes sense with \codeword{LOAD = speed} (the setup warns).
+
+\subsection{Decomposition and Cluster Scripts}
+\begin{lstlisting}
+    [GLOBAL_COMPUTE_SETUP]
+    NUM_PROCS = 192
+    LOCAL_PROCS = 4
+    DECOMP_METHOD = scotch
+    DECOMP = auto
+    ACCOUNT = def-xxxx
+    MODULES = StdEnv/2023 gcc/12.3 openmpi/4.1.5 openfoam/v2412
+    NODES = 1
+    JOB_NAME = auto
+    RUN_TIME = 0-12:00
+    MOTION_TIME = 0-02:00
+    EXPORT = ensight
+    POST_MODULES = StdEnv/2023 python scipy-stack paraview/5.13.1 ffmpeg
+    POST_CPUS = 4
+    POST_MEM = 32G
+    POST_TIME = 0-03:00
+    PVBATCH = pvbatch
+    GSHEET = True
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{NUM_PROCS} - Slurm tasks (192 = one Nibi node). \codeword{LOCAL_PROCS} - cores for a local run.
+    \item \codeword{DECOMP_METHOD} - \codeword{scotch} (default), or \codeword{hierarchical} / \codeword{simple} for clusters without scotch.
+    \item \codeword{DECOMP} - split for \codeword{hierarchical}/\codeword{simple}. \codeword{auto}: the scripts choose \codeword{n (nx ny nz)} for the task count of each run, with subdomains of the background mesh box as close to cubes as possible. \codeword{nx ny nz}: that split is used, and \codeword{nx}$\cdot$\codeword{ny}$\cdot$\codeword{nz} must equal \codeword{NUM_PROCS} (and \codeword{LOCAL_PROCS} for a local run). Ignored for other methods.
+    \item \codeword{ACCOUNT}, \codeword{MODULES}, \codeword{NODES}, \codeword{JOB_NAME} (\codeword{auto} = case directory name), \codeword{RUN_TIME}, \codeword{MOTION_TIME} - Slurm header and environment.
+    \item \codeword{EXPORT} - \codeword{ensight} (\codeword{foamToEnsight} at the end of the run) or \codeword{none}. The images and videos need the EnSight export.
+    \item \codeword{POST_MODULES}, \codeword{POST_CPUS}, \codeword{POST_MEM}, \codeword{POST_TIME} - the post-processing job (one task). The modules must provide \codeword{python3} with numpy, \codeword{pvbatch} and \codeword{ffmpeg}.
+    \item \codeword{PVBATCH} - the pvbatch command (a full path for a local ParaView install).
+    \item \codeword{GSHEET} - \codeword{True}: \codeword{postScript} pushes the summary to the Ekstera sheet (needs \codeword{gspread} and the sheet settings, see Section \ref{sec:internalPost}).
+\end{itemize}
+The scripts set \codeword{numberOfSubdomains} (and the hierarchical split) every time they run, so the same case can be run on the cluster and locally.
+
+Generated scripts (each runs as a Slurm job with \codeword{sbatch}, or locally with \codeword{./script} using \codeword{mpirun}):
+\begin{itemize}
+    \item \codeword{runScript} - mesh + solve + export in one job: \codeword{blockMesh}, \codeword{surfaceFeatureExtract}, \codeword{decomposePar}, \codeword{snappyHexMesh}, \codeword{topoSet} (motion zones), face zone reorder, \codeword{checkMesh}, \codeword{createZeroDirectory}, the solver and \codeword{foamToEnsight}. The mesh is kept (\codeword{.meshDone}): running it again skips the meshing and continues the solve from the latest time. Remove \codeword{processor*} and \codeword{.meshDone} to remesh. \codeword{--meshOnly} stops after the mesh. Earlier solver logs are kept as \codeword{log.<solver>.N}.
+    \item \codeword{motionCheckScript} - the mesh motion dry run (moving cases only).
+    \item \codeword{postScript} - post-processing (Section \ref{sec:internalPost}): summary, gsheet row, images and videos. A failed step is reported and the next step still runs; the job then ends with exit code 1.
+    \item \codeword{submitScript} - submits \codeword{runScript} and then \codeword{postScript} (started when \codeword{runScript} has finished without error). \codeword{--noPost}: \codeword{runScript} only. \codeword{--post}: \codeword{postScript} only, e.g. after changing the image settings. \codeword{--check}: \codeword{runScript --meshOnly} followed by \codeword{motionCheckScript}.
+\end{itemize}
+
+\textbf{NOTE:} v2412 has a bug in \codeword{displacementInterpolation}: if the motion zones are not the first face zones in the mesh, every zone silently gets the wrong displacement. The scripts run \codeword{meshUtilities/reorderFaceZones.py} after \codeword{topoSet} to put them first. The crank drive solver matches zones by name and does not have this problem.
+
+\subsection{Function Objects}
+Written to \codeword{system/internalFunctionObjects}, every time step:
+\begin{itemize}
+    \item \codeword{gasAvg} - volume-averaged p (and T, $\rho$ for compressible).
+    \item \codeword{gasMass} - total gas mass (compressible). It must stay constant in a closed volume. A drift shows a mesh motion or solver tolerance problem.
+    \item \codeword{wallHeatFlux} - heat flux on every wall patch (compressible), positive = into the gas.
+    \item \codeword{force_<body>} - force on the moving faces of each body.
+    \item \codeword{p_<patch>} - area-averaged pressure on each moving zone face.
+\end{itemize}
+
+\subsection{Post-Processing}\label{sec:internalPost}
+\codeword{postScript} (generated by the setup, chained after \codeword{runScript} by \codeword{submitScript}, or run locally with \codeword{./postScript}) runs, in order:
+\begin{enumerate}
+    \item \codeword{postInternal.py} - the summary, \codeword{postInternal/summary.csv}.
+    \item \codeword{gsheetEkstera.py} - the summary row in the Ekstera database sheet (\codeword{GSHEET = True}).
+    \item \codeword{pvPostInternal.py} (pvbatch) - one image per written time and panel, \codeword{postProcessing/images/<panel>/}.
+    \item \codeword{imagesToMovies.py} (ffmpeg) - one video per panel, \codeword{postProcessing/movies/<case>_<panel>.mp4}.
+\end{enumerate}
+Logs: \codeword{log.postInternal}, \codeword{log.gsheetEkstera}, \codeword{log.pvPostInternal}, \codeword{log.imagesToMovies}.
+
+\subsubsection{Summary}
+\codeword{postUtilities/postInternal.py} writes one summary per case to \codeword{postInternal/summary.csv} (key, value):
+\begin{lstlisting}
+    python3 /path/to/caseSetup/postUtilities/postInternal.py [cases ...] [--avgCycles N] [--gsheet]
+\end{lstlisting}
+\begin{itemize}
+    \item Run information: job, name, description, run and completion dates, cell count, mesh, solve and post times (hours), the main setup values and the BC groups.
+    \item Status: end time, cycles done, finished.
+    \item Results, averaged over the last \codeword{N} complete cycles: work per body per cycle, \codeword{AVG_ENERGY} (J/cycle, positive = work out of the gas; a displacer alone gives a negative value, the work needed to drive it), \codeword{AVG_POWER}, mean/max/min gas pressure, mean T and $\rho$, pressure mean and amplitude on each moving face, force amplitude per body.
+    \item Compressible: gas mass drift, p--V work, gas volume range, heat per BC group (W, positive into the gas).
+    \item Crank drive: work from $\oint T\,d\theta$, cycles counted by crank angle, mean/min/max speed, speed change over the last cycle (convergence), mean gas torque, load power and electrical power.
+\end{itemize}
+Restarted runs are handled: the function object directories are merged in time order.
+
+\codeword{postUtilities/gsheetEkstera.py} pushes the summaries to the Ekstera database sheet, one row per case found by job and name (\codeword{--comment}, \codeword{--dryRun}). The sheet id and the service account key are read from \codeword{~/.config/ekstera/gsheet.ini} or the \codeword{EKSTERA_GSHEET_*} environment variables. Keep the key out of git.
+
+\subsubsection{Images}
+\codeword{postUtilities/pvPostInternal.py} is set up like \codeword{pvPost}: the file \codeword{pvPostInternalSetup} in the case directory selects the panels, and a json variable dict defines the variables. The setup copies the default file into the case the first time and keeps an existing copy. Keys missing from the case file take the default values.
+\begin{lstlisting}
+    [PV_POST_MAIN]
+    VARIABLE_DICT = default
+    RESOLUTION = 1920 1080
+    EVERY = 1
+    LAST_CYCLES = all
+    SLICE_IMG = True
+    SURFACE_IMG = True
+    CREATE_SCALAR_BAR = True
+
+    [SLICE]
+    NAMES = yMid xMid zMid
+    NORMALS = Y X Z
+    ORIGINS = center center center
+    FOLLOW = none none none
+    VARIABLES = Umag Uz p T
+
+    [SURFACE]
+    PATCHES = MOVE
+    VIEWS = Iso
+    VARIABLES = p T
+
+    [MOVIES]
+    ENABLE = True
+    FPS = 10
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{EVERY} - every N-th written time (counted back from the last one, so the last time is always used). \codeword{LAST_CYCLES} - \codeword{all}, or only the last N cycles. Both can be given on the command line as \codeword{--every} and \codeword{--lastCycles}.
+    \item \codeword{RESOLUTION} - image size in pixels, also the video size.
+    \item \codeword{[SLICE]} - one entry per slice in each of the lists \codeword{NAMES}, \codeword{NORMALS} (\codeword{X}, \codeword{Y}, \codeword{Z}), \codeword{ORIGINS} and \codeword{FOLLOW}. Origin \codeword{center} = middle of the mesh box, \codeword{loc} = \codeword{LOC_IN_MESH}, or \codeword{x,y,z}. \codeword{FOLLOW = <body>} moves the slice in z with that body (from the motion table, or with the crank drive from the crank log and the crank table), so a z slice through the displacer holes stays in the holes. Every slice is drawn for every variable in \codeword{VARIABLES}.
+    \item \codeword{[SURFACE]} - the patches whose name contains one of the \codeword{PATCHES} keywords (e.g. \codeword{MOVE}: the displacer), seen from each of the \codeword{VIEWS} (\codeword{Iso}, \codeword{Top}, \codeword{Bottom}, \codeword{Front}, \codeword{Back}, \codeword{Left}, \codeword{Right}).
+    \item \codeword{VARIABLE_DICT} - \codeword{default} (\codeword{postUtilities/default/defaultInternalVariables}) or the path to your own copy. Each variable has an \codeword{equation} (ParaView calculator, \codeword{PREF} is replaced by the charge pressure), a \codeword{label}, a \codeword{range} and a ParaView colour map. Slice variables: \codeword{Umag}, \codeword{Ux}, \codeword{Uy}, \codeword{Uz}, \codeword{p}, \codeword{pGauge} (p minus the charge pressure), \codeword{T}, \codeword{rho}. Surface variables: \codeword{p}, \codeword{pGauge}, \codeword{T}, \codeword{wallHeatFlux}. Variables whose fields are not in the case (e.g. \codeword{T} for \codeword{pimpleFoam}) are skipped.
+    \item \codeword{range} - \codeword{auto}: minimum to maximum over all selected times, the same on every slice. \codeword{symmetric}: $\pm$ the largest absolute value. \codeword{[min, max]}: fixed. The range is fixed over the run, so the colours mean the same in every frame of a video.
+\end{itemize}
+Each image has a title with the case, panel, variable, time and crank angle. Run it by hand from the case directory:
+\begin{lstlisting}
+    pvbatch --force-offscreen-rendering /path/to/caseSetup/postUtilities/pvPostInternal.py [--every N] [--lastCycles N]
+\end{lstlisting}
+
+\subsubsection{Videos}
+\codeword{postUtilities/imagesToMovies.py} makes one mp4 (H.264) per image folder, one image per frame at \codeword{[MOVIES] FPS} (default 10; \codeword{--fps} overrides it). \codeword{ENABLE = False} turns the videos off (\codeword{--force} makes them anyway). It needs \codeword{ffmpeg} on the path.
+\begin{lstlisting}
+    python3 /path/to/caseSetup/postUtilities/imagesToMovies.py [--fps N]
+\end{lstlisting}
+
+\subsection{Demo Cases}
+\codeword{internalDemoCase/CASES} has two cases (geometry in \codeword{internalDemoCase/02_reference/MSH}):
+\begin{itemize}
+    \item \codeword{staticDemo} - closed box, hot floor 600 K, cold ceiling 300 K, adiabatic sides, no motion.
+    \item \codeword{motionDemo} - displacer with a dwell profile, 2 mm side gap and one hole, plus a power piston crown (\codeword{FROM = WALL-engine}), motion from \codeword{engineMotion.csv}.
+\end{itemize}
+
+\subsection{Limitations}
+\begin{itemize}
+    \item Motion along z only, bodies in line (no alpha engines), \codeword{displacementInterpolation} only.
+    \item Regenerator (\codeword{REGN}), sample surfaces (\codeword{SMP}) and heater/cooler zones are not available yet.
+    \item No \codeword{--continue} option yet. With the crank drive, raising \codeword{N_CYCLES} and rewriting the controlDict (\codeword{-d}) is enough, since the crank tables cover one cycle and repeat. With prescribed motion the motion tables only cover \codeword{N_CYCLES}, so the full setup has to be rerun as well.
+    \item No p--V or cycle-convergence plots yet, only the summary and the flow images.
+\end{itemize}

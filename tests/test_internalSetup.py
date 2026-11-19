@@ -238,7 +238,7 @@ def _writeScripts(tmp_path, monkeypatch, repo_root, motionZones):
 
 def test_scripts_slurm_header_and_placeholders(tmp_path, monkeypatch, repo_root):
     case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a', 'motion_b'])
-    for name in ['runScript', 'motionCheckScript', 'submitScript']:
+    for name in ['runScript', 'motionCheckScript', 'postScript', 'submitScript']:
         text = (case / name).read_bytes().decode()
         assert '\r' not in text and text.startswith('#!/bin/bash\n')
         assert re.search(r'<[A-Z_]+>', text) is None
@@ -255,6 +255,46 @@ def test_scripts_slurm_header_and_placeholders(tmp_path, monkeypatch, repo_root)
     assert '#SBATCH --job-name=engineRun01_motion' in motion and 'SLURM_NTASKS != $NP' in motion
     submit = (case / 'submitScript').read_text()
     assert 'runScript --meshOnly' in submit and 'motionCheckScript' in submit
+
+
+def test_post_script_and_chaining(tmp_path, monkeypatch, repo_root):
+    case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a'])
+    post = (case / 'postScript').read_text()
+    assert '#SBATCH --job-name=engineRun01_post' in post and '#SBATCH --ntasks=1' in post
+    assert '#SBATCH --cpus-per-task=4' in post and '#SBATCH --mem=32G' in post and '#SBATCH --time=0-03:00' in post
+    assert 'module load StdEnv/2023 python scipy-stack paraview/5.13.1 ffmpeg' in post
+    #summary, gsheet, images, videos in order, from the repo
+    assert (post.index("/opt/caseSetup/postUtilities/postInternal.py'") < post.index("/opt/caseSetup/postUtilities/gsheetEkstera.py'")
+            < post.index("pvbatch --force-offscreen-rendering '/opt/caseSetup/postUtilities/pvPostInternal.py'")
+            < post.index("/opt/caseSetup/postUtilities/imagesToMovies.py'"))
+    submit = (case / 'submitScript').read_text()
+    #runScript then postScript after it, --post alone, --noPost without
+    assert 'jid=$(sbatch --parsable --dependency=afterok:$jid postScript)' in submit
+    assert '"--post"' in submit and '"--noPost"' in submit
+    assert submit.index('sbatch --parsable runScript)') < submit.index('afterok:$jid postScript')
+    #no gsheet push, no EnSight export: no gsheet / image / video steps
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    full['GLOBAL_COMPUTE_SETUP']['GSHEET'] = ['False']
+    full['GLOBAL_COMPUTE_SETUP']['EXPORT'] = ['none']
+    full['GLOBAL_COMPUTE_SETUP']['PVBATCH'] = ['/opt/pv/bin/pvbatch']
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
+    post = (case / 'postScript').read_text()
+    assert "postUtilities/postInternal.py'" in post and "postUtilities/gsheetEkstera.py'" not in post
+    assert '--force-offscreen-rendering' not in post and "postUtilities/imagesToMovies.py'" not in post
+    full['GLOBAL_COMPUTE_SETUP']['GSHEET'] = ['maybe']
+    with pytest.raises(SystemExit):
+        writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
+
+
+def test_post_setup_copied_once(tmp_path, repo_root):
+    import internalSetup
+    internalSetup.copyPostSetup(repo_root, str(tmp_path))
+    dest = tmp_path / 'pvPostInternalSetup'
+    assert '[SLICE]' in dest.read_text()
+    dest.write_text('[SLICE]\nNAMES = mine\n')
+    internalSetup.copyPostSetup(repo_root, str(tmp_path))
+    assert dest.read_text() == '[SLICE]\nNAMES = mine\n'
 
 
 def test_scripts_no_motion_and_no_export(tmp_path, monkeypatch, repo_root):
@@ -325,6 +365,29 @@ def test_compressible_dicts_unchanged(tmp_path, monkeypatch, repo_root):
     heat = fos[fos.index('wallHeatFlux\n{'):]
     heat = heat[:heat.index('}')]
     assert 'executeControl  timeStep;' in heat and 'writeControl    writeTime;' in heat
+
+
+def test_relaxation_only_with_outer_correctors(tmp_path, monkeypatch, repo_root):
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    monkeypatch.chdir(tmp_path)
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    text = (tmp_path / 'system/fvSolution').read_text()
+    assert 'nOuterCorrectors 1;' in text and 'relaxationFactors' not in text and '<RELAXATION>' not in text
+    full['GLOBAL_SIM_CONTROL']['N_OUTER_CORR'] = ['3']
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    text = (tmp_path / 'system/fvSolution').read_text()
+    assert 'nOuterCorrectors 3;' in text and 'relaxationFactors' in text
+    assert 'p               0.3;' in text and 'pFinal          1;' in text
+    assert '"(U|k|omega)"   0.7;' in text and 'e               0.7;' in text and '".*Final"       1;' in text
+    #incompressible: no energy equation
+    full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['pimpleFoam']
+    full['GLOBAL_SIM_CONTROL']['RELAX_U'] = ['0.5']
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    text = (tmp_path / 'system/fvSolution').read_text()
+    assert '"(U|k|omega)"   0.5;' in text and ' e  ' not in text
+    full['GLOBAL_SIM_CONTROL']['RELAX_P'] = ['1.5']
+    with pytest.raises(SystemExit):
+        writeInternal.writeNumericsInternal(templateLoc, full)
 
 
 def test_fixed_time_step_when_max_co_blank_or_zero(tmp_path, monkeypatch, repo_root):

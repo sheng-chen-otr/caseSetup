@@ -21,6 +21,7 @@ and limitations.
 
 import os
 import sys
+import shutil
 import argparse
 
 import setupCore
@@ -60,6 +61,16 @@ def findFromSections(writeCaseSetupDict, geomNames):
     #FROM must still point at a geometry in GEOM, otherwise this is just an orphan left behind by a removed part
     return [s for s in writeCaseSetupDict if s.startswith('MOVE') and s not in geomNames
             and writeCaseSetupDict[s].get('FROM', ['self'])[0] in geomNames]
+
+
+def copyPostSetup(execDir, caseDir):
+    #image settings for postScript (pvPostInternal.py), an existing case copy is kept
+    dest = os.path.join(caseDir, 'pvPostInternalSetup')
+    if os.path.isfile(dest):
+        print('\n\tpvPostInternalSetup exists in the case, kept')
+        return
+    shutil.copyfile(os.path.join(execDir, 'postUtilities', 'default', 'pvPostInternalSetup'), dest)
+    print('\n\tCopied pvPostInternalSetup (image panels and videos for postScript) into the case')
 
 
 def checkGeomPrefixes(geomDict):
@@ -143,12 +154,13 @@ def main(argv=None):
     motionZones = writeInternal.writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict) if motionInfo else None
     writeInternal.makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones)
 
-    fullCaseSetupDict = writeInternal.addSetupInfo(fullCaseSetupDict, wallGroups)
+    copyPostSetup(execDir, caseDir)
+    fullCaseSetupDict = writeInternal.addSetupInfo(fullCaseSetupDict, wallGroups, motionInfo)
     setupCore.writeToCaseSetup(fullCaseSetupDict, caseDir, 'fullCaseSetupDict')
     print('\nCase setup completed successfully! runScript does mesh + solve + export in one job')
     if motionInfo:
         print('Mesh motion dry run first: ./runScript --meshOnly then ./motionCheckScript (cluster: ./submitScript --check)')
-    print('Run: ./runScript locally, or ./submitScript on the cluster (from the case directory in $SCRATCH)')
+    print('Run: ./runScript then ./postScript locally, or ./submitScript on the cluster (from the case directory in $SCRATCH, chains postScript)')
 
 
 if __name__ == '__main__':

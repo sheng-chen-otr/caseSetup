@@ -1,0 +1,24 @@
+[PV_POST_MAIN]
+VARIABLE_DICT = default
+RESOLUTION = 1920 1080
+EVERY = 1
+LAST_CYCLES = all
+SLICE_IMG = True
+SURFACE_IMG = True
+CREATE_SCALAR_BAR = True
+
+[SLICE]
+NAMES = yMid xMid zMid
+NORMALS = Y X Z
+ORIGINS = center center center
+FOLLOW = none none none
+VARIABLES = Umag Uz p T
+
+[SURFACE]
+PATCHES = MOVE
+VIEWS = Iso
+VARIABLES = p T
+
+[MOVIES]
+ENABLE = True
+FPS = 10

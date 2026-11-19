@@ -2,7 +2,7 @@
     "run": {
         "shebang": "#!/bin/bash",
         "header": "#SBATCH --account=<ACCOUNT>\n#SBATCH --job-name=<JOB_NAME>\n#SBATCH --nodes=<NODES>\n#SBATCH --ntasks=<NUM_PROCS>\n#SBATCH --mem=0\n#SBATCH --time=<RUN_TIME>\n#SBATCH --output=01_%x_%j.out\n#SBATCH --exclusive",
-        "usage": "#mesh + solve + export in one job, as a Slurm job (sbatch runScript) or locally (./runScript, <LOCAL_PROCS> cores)\n#  --meshOnly  stop after the mesh (then ./motionCheckScript for the mesh motion dry run)\n#  the mesh is kept (.meshDone): running again skips the meshing and continues the solve from the latest time,\n#  rm -r processor* .meshDone to remesh",
+        "usage": "#mesh + solve + export in one job, as a Slurm job (sbatch runScript) or locally (./runScript, <LOCAL_PROCS> cores)\n#  --meshOnly  stop after the mesh (then ./motionCheckScript for the mesh motion dry run)\n#  the mesh is kept (.meshDone): running again skips the meshing and continues the solve from the latest time,\n#  rm -r processor* .meshDone to remesh\n#  afterwards ./postScript (summary, images, videos), submitScript chains it on the cluster",
         "environment": "cd \"${SLURM_SUBMIT_DIR:-$(dirname \"$0\")}\" || exit 1;\nif [ -n \"$SLURM_JOB_ID\" ]; then module --force purge; module load <MODULES>; NP=$SLURM_NTASKS; RUN=\"srun\"; else NP=<LOCAL_PROCS>; RUN=\"mpirun -np $NP\"; fi;\nMESHONLY=no; if [ \"$1\" = \"--meshOnly\" ]; then MESHONLY=yes; fi;",
         "meshStart": "if [ ! -f .meshDone ]; then\n<SET_DECOMP>",
         "blockMesh": "echo 'running blockMesh...'; blockMesh > log.blockMesh 2>&1; if [ $? != 0 ]; then echo 'blockMesh failed'; exit 1; fi;",
@@ -33,12 +33,26 @@
         "checkMesh": "echo 'running checkMesh on the moved meshes...'; $RUN checkMesh -parallel -noZero > log.checkMeshMotion 2>&1; if [ $? != 0 ]; then echo 'checkMesh failed, see log.checkMeshMotion'; fi; grep -E '^Time = |Failed|Mesh OK|Max skewness|Max aspect' log.checkMeshMotion;",
         "clean": "for d in processor*; do find $d -mindepth 1 -maxdepth 1 -type d -regex '.*/[0-9.e+-]+' ! -name 0 -exec rm -rf {} +; done; echo 'motion check done (moved meshes removed)';"
     },
+    "post": {
+        "shebang": "#!/bin/bash",
+        "header": "#SBATCH --account=<ACCOUNT>\n#SBATCH --job-name=<JOB_NAME>_post\n#SBATCH --nodes=1\n#SBATCH --ntasks=1\n#SBATCH --cpus-per-task=<POST_CPUS>\n#SBATCH --mem=<POST_MEM>\n#SBATCH --time=<POST_TIME>\n#SBATCH --output=03_%x_%j.out",
+        "usage": "#post-processing after runScript, as a Slurm job (sbatch postScript) or locally (./postScript):\n#  summary (postInternal.py -> postInternal/summary.csv), gsheet row, images (pvbatch pvPostInternal.py,\n#  settings in pvPostInternalSetup) and one video per image panel (imagesToMovies.py, ffmpeg)\n#  a failed step is reported and the next one still runs",
+        "environment": "cd \"${SLURM_SUBMIT_DIR:-$(dirname \"$0\")}\" || exit 1;\nif [ -n \"$SLURM_JOB_ID\" ]; then module --force purge; module load <POST_MODULES>; fi;\nSTATUS=0;",
+        "summary": "echo 'running postInternal (summary)...'; python3 '<EXEC_DIR>/postUtilities/postInternal.py' > log.postInternal 2>&1; if [ $? != 0 ]; then echo 'postInternal failed, see log.postInternal'; STATUS=1; fi;",
+        "gsheet": "echo 'pushing the summary to the gsheet...'; python3 '<EXEC_DIR>/postUtilities/gsheetEkstera.py' > log.gsheetEkstera 2>&1; if [ $? != 0 ]; then echo 'gsheet push failed, see log.gsheetEkstera'; STATUS=1; fi;",
+        "images": "if ls EnSight/*.case > /dev/null 2>&1; then echo 'running pvPostInternal (images)...'; <PVBATCH> --force-offscreen-rendering '<EXEC_DIR>/postUtilities/pvPostInternal.py' > log.pvPostInternal 2>&1; if [ $? != 0 ]; then echo 'pvPostInternal failed, see log.pvPostInternal'; STATUS=1; fi; else echo 'no EnSight export, no images'; fi;",
+        "movies": "if [ -d postProcessing/images ]; then echo 'making videos...'; python3 '<EXEC_DIR>/postUtilities/imagesToMovies.py' > log.imagesToMovies 2>&1; if [ $? != 0 ]; then echo 'imagesToMovies failed, see log.imagesToMovies'; STATUS=1; fi; fi;",
+        "done": "echo 'post done'; exit $STATUS;"
+    },
     "submit": {
         "shebang": "#!/bin/bash",
-        "usage": "#submits the case as Slurm jobs (from the case directory)\n#  ./submitScript          mesh + solve + export in one job (continues the solve if the mesh exists)\n#  ./submitScript --check  mesh only, then the mesh motion dry run: look at it, then ./submitScript",
+        "usage": "#submits the case as Slurm jobs (from the case directory)\n#  ./submitScript          mesh + solve + export, then postScript (continues the solve if the mesh exists)\n#  ./submitScript --noPost the same without postScript\n#  ./submitScript --post   postScript only (e.g. after changing pvPostInternalSetup)\n#  ./submitScript --check  mesh only, then the mesh motion dry run: look at it, then ./submitScript",
         "cd": "cd \"$(dirname \"$0\")\" || exit 1;",
         "check": "if [ \"$1\" = \"--check\" ]; then\njid=$(sbatch --parsable runScript --meshOnly) || exit 1; echo \"runScript --meshOnly  $jid\";",
         "motionCheck": "jid=$(sbatch --parsable --dependency=afterok:$jid motionCheckScript) || exit 1; echo \"motionCheckScript     $jid\";",
-        "run": "else\njid=$(sbatch --parsable runScript) || exit 1; echo \"runScript             $jid\";\nfi;"
+        "postOnly": "elif [ \"$1\" = \"--post\" ]; then\njid=$(sbatch --parsable postScript) || exit 1; echo \"postScript            $jid\";",
+        "run": "else\njid=$(sbatch --parsable runScript) || exit 1; echo \"runScript             $jid\";",
+        "post": "if [ \"$1\" != \"--noPost\" ]; then jid=$(sbatch --parsable --dependency=afterok:$jid postScript) || exit 1; echo \"postScript            $jid\"; fi;",
+        "end": "fi;"
     }
 }

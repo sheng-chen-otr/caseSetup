@@ -9,6 +9,8 @@ two bigger features beyond the basic straight-line case:
 - double wishbone + pushrod kinematic solver - works out the per-component transforms (translation, rotation, pivot) from a ride-height input and deforms the geometry so it follows the actual suspension motion, not just a vertical wheel shift.
 - cornering (SRF) - solves the whole domain in a single rotating frame so the car follows a steady curved path. the rotating-frame solver, BCs, per-wheel rolling speeds and post fields are all set up automatically, and it ties into the ride-height study for per-point radius/direction.
 
+v5.0 adds a second tool, `internalSetup.py`, for closed internal flows (Stirling engines): moving displacer and power piston, heated/cooled walls, crank drive with a generator load. see [Internal Flow (internalSetup)](#internal-flow-internalsetup) below.
+
 ### Fan pressure-jump condition
 
 The `FAN` geometry prefix adds an ESI OpenFOAM `fan` pressure-jump condition for a planar fan disk. This is useful for modelling a fan in front of a radiator without resolving the blades. Use a separate `POR` geometry for the radiator porous region if a radiator pressure drop is also required. The FAN disk must be a single, approximately planar circular ASCII OBJ/STL surface and is currently supported through the snappyHexMesh path.
@@ -182,6 +184,7 @@ The Cp axis is inverted following the conventional aerodynamic pressure-coeffici
 | Aspect | Support |
 |--------|---------|
 | **OpenFOAM Versions** | v2012 - v2606 (newer versions untested, should work though) |
+| **internalSetup** | ESI OpenFOAM v2412 (tested); the crank drive needs a compiler (wmake) where the job runs |
 | **Operating Systems** | Ubuntu 22.XX (preferred); Windows/macOS untested |
 | **Python** | 3.8+ |
 
@@ -279,6 +282,138 @@ NOTE: Make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` pat
 ![baseDemo](motorbikeDemoCase/CASES/baseDemo-slice.png)
 
 ![cornerDemo](motorbikeDemoCase/CASES/cornerDemo-slice.png)
+## Internal Flow (internalSetup)
+
+`internalSetup.py` sets up closed internal-flow cases (built for Stirling engines) the same way `caseSetup.py` does aero: an INI file in the case directory, merged with the template defaults, geometry prefixes that add their own sections, then the dicts, BCs and Slurm scripts. it is a separate tool with its own config file (`internalSetup`) and template set (`setupTemplates/internal`). full details are in the "Internal Flow (internalSetup)" section of `documentation/source/caseSetupTUG.pdf`.
+
+### Quick start
+
+same job layout as aero: geometry in `<job>/02_reference/MSH`, cases in `<job>/CASES/<case>`. run the setup on the machine where the case will run (the scripts hold absolute paths to this repo).
+
+```bash
+cd <job>/CASES/001
+python3 /path/to/caseSetup/internalSetup.py --new   # fresh internalSetup file
+# edit it, then
+python3 /path/to/caseSetup/internalSetup.py         # stops once if it adds default keys, check them and rerun
+./runScript && ./postScript                          # local: mesh + solve + export, then summary/images/videos
+./submitScript                                       # cluster: the same as two chained Slurm jobs
+```
+
+options: `--new`, `--modules`, `-d` (controlDict only), `-s` (template set, default `internal`).
+
+### Geometry
+
+the file prefix says what the body is, the PIDs (STL solid names / OBJ groups) are its faces. snappy keeps each PID as the patch `<file>_<pid>`, and the setup picks PIDs by case-insensitive keyword.
+
+- `WALL-<name>` - static walls: BC groups per PID keyword, anchor faces for the mesh motion, wall side of the displacer gap.
+- `MOVE-<name>` - rigid moving body (displacer). `FROM = <file>` makes a body out of PIDs in another file (e.g. the piston crown in the chamber file).
+- `REGN` and `SMP` are reserved, not available yet.
+
+```ini
+[GEOMETRY]
+GEOM = WALL-chamber.stl,1,1,3,1.2,low
+  MOVE-displacer.stl,1,2,3,1.2,low
+
+[GLOBAL_REFINEMENT]
+LOC_IN_MESH = 0.0 0.05 0.06
+
+[WALL-chamber]
+U_DEFAULT = noSlip
+T_DEFAULT = adiabatic
+BC_GROUPS = hotEnd coldEnd liner
+hotEnd = PIDS hot T fixed 600
+coldEnd = PIDS cold T fixed 300
+liner = PIDS liner T convective 15 300
+ANCHOR_PIDS = hot cold
+GAP_PIDS = side
+
+[MOVE-displacer]
+FROM = self
+MOTION_FILE = ../../02_reference/engineMotion.csv
+MOTION_COLUMN = displacer
+REF_ANGLE = 0
+TDC_CLEARANCE = 0.002
+ZONE_PIDS = top bottom
+GAP_PIDS = side
+GAP_CELLS = 6
+
+[MOVE-piston]
+FROM = WALL-chamber
+MOTION_FILE = ../../02_reference/engineMotion.csv
+MOTION_COLUMN = piston
+REF_ANGLE = 0
+TDC_CLEARANCE = 0.002
+ZONE_PIDS = crown
+```
+
+`LOC_IN_MESH` is required and must be inside the gas. T modes: `adiabatic`, `fixed <T>`, `convective <h> <Ta>`, `flux <q>`. moving faces always get `movingWallVelocity`.
+
+### Mesh motion
+
+- `displacementInterpolation` along z between flat face zones: anchors (`ANCHOR_PIDS`) stay put, each body's `ZONE_PIDS` follow its motion table, points between two zones of one body move rigidly, end spaces stretch. bodies must be in line along z (gamma/beta engines, not alpha).
+- one CSV for the whole engine: `theta` (deg, 0 to 360) plus one position column (m) per body, so the phase between bodies is fixed by the file.
+- the setup moves each body from `REF_ANGLE` to the start angle (`START_ANGLE = auto` picks the least squash/stretch), keeps `TDC_CLEARANCE`, checks zone order, flatness and deformation over the whole cycle, and prints stroke, peak velocity and acceleration per body.
+- dry run before the flow run: `./runScript --meshOnly` then `./motionCheckScript` (cluster: `./submitScript --check`). it moves the mesh over one cycle and runs checkMesh every 45 deg.
+- v2412 zone-order bug: the scripts reorder the face zones after topoSet (`meshUtilities/reorderFaceZones.py`).
+
+### Crank drive
+
+`[MESH_MOTION] DRIVE = crank`: the gas pressure forces turn a flywheel instead of a prescribed speed. the custom motion solver is in `foamLibs/stirlingMotion` and is compiled by the run scripts (`wmake libso`). each step: `I dω/dt = Σ F_body·dz/dθ − load − friction`.
+
+```ini
+[MESH_MOTION]
+DRIVE = crank
+INERTIA = 0.05          # kg m2
+LOAD = generator        # speed | torque | damper | generator
+GEN_K = 1               # V s/rad
+GEN_R_LOAD = 10         # ohm
+GEN_R_INT = 0           # ohm
+LOAD_TORQUE = 0         # N m (LOAD torque)
+LOAD_DAMPING = 0        # N m s (LOAD damper)
+FRICTION_TORQUE = 0     # N m
+FRICTION_COEFF = 0      # N m s
+P_BUFFER = charge       # pressure behind the bodies
+```
+
+`FREQ` is the start speed. the crank state is saved at the write times (restarts continue from it), log in `postProcessing/crank/<start>/crank.dat`. endTime is still `N_CYCLES/FREQ`, so a run whose speed changes covers about `N_CYCLES` cycles.
+
+### Run control, solver, gas
+
+- `[GLOBAL_CONTROL]`: `FREQ`, `N_CYCLES` (endTime), `WRITE_PER_CYCLE`, `MAX_CO`, `MAX_DT`, `INIT_DT`. `MAX_CO = 0` or blank gives a fixed time step of `MAX_DT` (`adjustTimeStep no`); the setup warns if the write interval is not a whole number of steps.
+- `[GLOBAL_SIM_CONTROL]`: `SOLVER = rhoPimpleFoam` (default: absolute p, energy equation, wall heat flux) or `pimpleFoam` (incompressible, kinematic p, no T: only for the flow through the displacer). `TURB_MODEL = laminar` (default), `kOmegaSST`, `kEpsilon`, `kOmega`. `N_OUTER_CORR = 1` is PISO (keep `MAX_CO` near 1); for large time steps use 3+ outer correctors, which also writes under-relaxation (`RELAX_P` 0.3, `RELAX_U` 0.7, `RELAX_E` 0.7, none on the last outer iteration).
+- `[GLOBAL_MATERIAL]`: `GAS = air | nitrogen | helium | hydrogen | custom`, `CHARGE_PRESSURE`, `INIT_T`, `TRANSPORT = const | sutherland`; `MOL_WEIGHT`, `CP`, `MU`, `PR` override the preset.
+
+### Decomposition and cluster
+
+`[GLOBAL_COMPUTE_SETUP]` has `NUM_PROCS`, `LOCAL_PROCS`, `ACCOUNT`, `MODULES`, `RUN_TIME`, `MOTION_TIME`, `EXPORT` and the decomposition. `DECOMP_METHOD = scotch` by default; on clusters without scotch use `hierarchical` (or `simple`) with `DECOMP = auto` (split chosen for the task count of each run, subdomains close to cubes) or `DECOMP = nx ny nz` (the product must equal `NUM_PROCS`). the scripts set numberOfSubdomains on every run, so the same case runs on the cluster and locally.
+
+`runScript` keeps the mesh (`.meshDone`): running it again continues the solve from the latest time. remove `processor*` and `.meshDone` to remesh.
+
+`submitScript` submits `runScript` and then `postScript` (afterok). `--noPost` skips the post job, `--post` submits only `postScript`, `--check` does the mesh motion dry run. the post job has its own keys: `POST_MODULES` (needs python3 + numpy, pvbatch and ffmpeg), `POST_CPUS`, `POST_MEM`, `POST_TIME`, `PVBATCH`, `GSHEET`.
+
+### Post-processing
+
+`postScript` (Slurm job or `./postScript`) runs the summary, the gsheet push (`GSHEET = True`), the images and the videos; a failed step is logged and the rest still run. by hand:
+
+```bash
+python3 /path/to/caseSetup/postUtilities/postInternal.py [cases ...] [--avgCycles N] [--gsheet]
+python3 /path/to/caseSetup/postUtilities/gsheetEkstera.py [cases ...] [--comment "text"] [--dryRun]
+pvbatch --force-offscreen-rendering /path/to/caseSetup/postUtilities/pvPostInternal.py [--every N] [--lastCycles N]
+python3 /path/to/caseSetup/postUtilities/imagesToMovies.py [--fps N]
+```
+
+images are set up like pvPost: `pvPostInternalSetup` in the case (copied there by the setup, kept if it exists) lists the slices (`NAMES`, `NORMALS`, `ORIGINS` = center | loc | x,y,z, `FOLLOW` = a body so a z slice moves with the displacer), the surface patches and views, the variables and `[MOVIES] FPS`. variables (equation, label, range auto | symmetric | [min, max], colour map) are in `postUtilities/default/defaultInternalVariables`; ranges are fixed over the run. output: `postProcessing/images/<panel>/` (one png per written time) and `postProcessing/movies/<case>_<panel>.mp4`.
+
+`postInternal/summary.csv` per case: run info and times, cycles done, work per body and `AVG_ENERGY`/`AVG_POWER` over the last N cycles, gas p/T/rho, face pressures, and for compressible runs mass drift, p-V work and heat per BC group; for the crank drive also speed, load and generator power. `gsheetEkstera.py` pushes the summary to the database sheet (settings in `~/.config/ekstera/gsheet.ini` or `EKSTERA_GSHEET_*`; keep the service account key out of git).
+
+### Demo cases
+
+`internalDemoCase/CASES/staticDemo` (heated/cooled box, no motion) and `internalDemoCase/CASES/motionDemo` (displacer with a dwell profile and side gap, plus a piston crown). run `internalSetup.py` in either, then `./runScript`.
+
+### Not available yet
+
+regenerator (`REGN`), sample surfaces (`SMP`), heater/cooler zones, `--continue`, p-V and cycle-convergence plots, motion along axes other than z.
+
 ## Directory Structure
 
 ```
@@ -288,6 +423,11 @@ caseSetup-dev/
 ├── writeSystem.py                  # OpenFOAM system/ directory generators
 ├── writeConstant.py                # OpenFOAM constant/ directory generators
 ├── writeScripts.py                 # Solver and cluster script generators
+├── internalSetup.py                # Internal flow (Stirling) entry point
+├── setupCore.py                    # Shared config/geometry plumbing (both tools), __version__
+├── writeInternal.py                # Internal flow dict, BC, motion and script writers
+├── motionUtilities.py              # Motion tables, zone checks, clearance, gap refinement
+├── geometryIO.py                   # STL/OBJ PID reader and writers
 ├── testing.py                      # Development/testing utilities
 ├── compileFiles.sh                 # PyInstaller compilation script
 ├── README.md                       # This file
@@ -301,6 +441,7 @@ caseSetup-dev/
 │   │   ├── defaultPost/            # Post-processing setup
 │   │   ├── defaultRefinements/     # Mesh refinement definitions
 │   │   └── defaultSetup/           # Ride-height & general config
+│   ├── internal/                   # internalSetup templates (defaultSetup, defaultBCTemplates, defaultDicts, defaultCluster)
 │   └── otr/                        # Optimal Test Run setup variant
 │       ├── defaultANSA/
 │       ├── defaultBCTemplates/
@@ -316,13 +457,22 @@ caseSetup-dev/
 │   ├── models/                     # Turbulence model templates
 │   └── solvers/                    # Solver-specific templates (simpleFoam, pimpleFoam, etc.)
 │
+├── foamLibs/stirlingMotion/        # crankDisplacementInterpolation motion solver (crank drive)
+├── internalDemoCase/               # staticDemo and motionDemo internal cases
+│
 ├── meshUtilities/                  # Mesh generation & analysis tools
+│   ├── reorderFaceZones.py         # puts the motion zones first (v2412 zone-order bug)
+│   ├── decompCoeffs.py             # hierarchical/simple split for the run's task count
 │   ├── ansaMesh.py                 # ANSA mesh import/export utilities
 │   ├── fidelityMesh.py             # Fidelity mesh integration
 │   └── _obsolete/                  # Legacy mesh scripts
 │
 ├── postUtilities/                  # Post-processing & results analysis
 │   ├── pvPost.py                   # ParaView automation & field extraction
+│   ├── postInternal.py             # internal case summary (work, power, heat, crank speed)
+│   ├── gsheetEkstera.py            # pushes internal summaries to the Ekstera database sheet
+│   ├── pvPostInternal.py           # internal case images (pvbatch, pvPostInternalSetup)
+│   ├── imagesToMovies.py           # one mp4 per image panel (ffmpeg)
 │   ├── postRun.py                  # Post-run analysis orchestration
 │   ├── summary.py                  # Results summary generation
 │   ├── plotForces.py               # Force coefficient visualization
@@ -876,7 +1026,8 @@ built on OpenFOAM and community work. see the individual module headers for spec
 
 | Version | Date | Changes |
 |---------|------|---------|
-| **4.2.2** | 2026 | cornering (SRF): rotating-frame solver/BC/field setup, kinematic ride height solver, ride height mapping|
+| **5.0.0** | 2026 | internalSetup for internal flows / Stirling engines: moving mesh, crank drive + generator load, postInternal summary, hierarchical decomposition |
+| 4.2.2 | 2026 | cornering (SRF): rotating-frame solver/BC/field setup, kinematic ride height solver, ride height mapping|
 | 4.1.1 | 2025 | updates to postProcessing and ANSA mesh integration |
 | 4.0 | 2024 | complete re-write with multi-setup template framework |
 | 3.* | 2024 | more functionality |

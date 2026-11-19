@@ -501,6 +501,34 @@ def writeControlDictInternal(templateLoc, fullCaseSetupDict):
     copyTemplate(templateLoc, 'system/controlDict', 'system/controlDict', replaceDict)
 
 
+def getRelaxation(fullCaseSetupDict):
+    #under-relaxation for PIMPLE with outer correctors (N_OUTER_CORR > 1, large Co): RELAX_P on the pressure field,
+    #RELAX_U on U (and k, omega), RELAX_E on e; the last outer iteration (Final) is never relaxed, so each
+    #time step ends on the full pressure solution. PISO (N_OUTER_CORR 1): none
+    simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
+    nOuter = int(simControl['N_OUTER_CORR'][0])
+    if nOuter < 1:
+        sys.exit('ERROR! GLOBAL_SIM_CONTROL N_OUTER_CORR must be 1 or more!')
+    if nOuter == 1:
+        return ''
+    relax = {}
+    for key, default in (('RELAX_P', '0.3'), ('RELAX_U', '0.7'), ('RELAX_E', '0.7')):
+        try:
+            relax[key] = float(simControl.get(key, [default])[0])
+        except ValueError:
+            relax[key] = -1.0
+        if not 0 < relax[key] <= 1:
+            sys.exit('ERROR! GLOBAL_SIM_CONTROL %s must be > 0 and <= 1!' % (key))
+    equations = ['        "(U|k|omega)"   %g;' % (relax['RELAX_U'])]
+    if getFlow(fullCaseSetupDict) == 'compressible':
+        equations.append('        e               %g;' % (relax['RELAX_E']))
+    print('\t\t%d outer correctors, under-relaxation p %g, U %g%s (none on the last outer iteration)'
+          % (nOuter, relax['RELAX_P'], relax['RELAX_U'],
+             ', e %g' % (relax['RELAX_E']) if getFlow(fullCaseSetupDict) == 'compressible' else ''))
+    return ('relaxationFactors\n{\n    fields\n    {\n        p               %g;\n        pFinal          1;\n    }\n'
+            '    equations\n    {\n%s\n        ".*Final"       1;\n    }\n}\n' % (relax['RELAX_P'], '\n'.join(equations)))
+
+
 def writeNumericsInternal(templateLoc, fullCaseSetupDict):
     print('\n\tWriting fvSchemes, fvSolution, decomposeParDict...')
     simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
@@ -522,9 +550,15 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict):
         pRef = ''
     copyTemplate(templateLoc, 'system/fvSchemes', 'system/fvSchemes',
                  {'DIV_SCHEMES': '\n'.join('    ' + s for s in divSchemes)})
+    relaxation = getRelaxation(fullCaseSetupDict)
+    #custom template sets made before the relaxation option have no <RELAXATION> slot
+    with open('%s/defaultDicts/system/fvSolution' % (templateLoc)) as f:
+        if relaxation and '<RELAXATION>' not in f.read():
+            print('\t\tWARNING: %s/defaultDicts/system/fvSolution has no <RELAXATION> line: no under-relaxation is '
+                  'written, add <RELAXATION> after the PIMPLE block' % (templateLoc))
     copyTemplate(templateLoc, 'system/fvSolution', 'system/fvSolution',
                  {'N_OUTER_CORR': simControl['N_OUTER_CORR'][0], 'N_CORR': simControl['N_CORR'][0],
-                  'N_NONORTH_CORR': simControl['N_NONORTH_CORR'][0], 'P_REF': pRef})
+                  'N_NONORTH_CORR': simControl['N_NONORTH_CORR'][0], 'P_REF': pRef, 'RELAXATION': relaxation})
     method, decomp = getDecomp(fullCaseSetupDict)
     nProcs, coeffs = compute['NUM_PROCS'][0], ''
     if decomp:
@@ -975,7 +1009,15 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
         sys.exit('ERROR! GLOBAL_COMPUTE_SETUP EXPORT must be ensight or none!')
     if export == 'none':
         skipSteps.append('export')
-    scripts = [('run', 'runScript'), ('submit', 'submitScript')]
+    #post job: summary, gsheet row (GSHEET), images and videos (need the EnSight export)
+    gsheet = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('GSHEET', ['True'])[0].lower()
+    if gsheet not in ('true', 'false'):
+        sys.exit('ERROR! GLOBAL_COMPUTE_SETUP GSHEET must be True or False!')
+    if gsheet == 'false':
+        skipSteps.append('gsheet')
+    if export == 'none':
+        skipSteps += ['images', 'movies']
+    scripts = [('run', 'runScript'), ('post', 'postScript'), ('submit', 'submitScript')]
     if motionZones:
         scripts.append(('motionCheck', 'motionCheckScript'))
     #scripts of earlier versions (separate meshing and solve jobs)
@@ -1012,10 +1054,12 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
 
 #----- full dict extras for postRun
 
-def addSetupInfo(fullCaseSetupDict, wallGroups):
-    #marker read by postRun (internal vs aero) and the resolved BC groups for post
+def addSetupInfo(fullCaseSetupDict, wallGroups, motionInfo=None):
+    #marker read by postRun (internal vs aero), the resolved BC groups and the start (meshing) crank angle for post
     fullCaseSetupDict['SETUP_INFO'] = {'TOOL': ['internal'], 'VERSION': [__version__],
                                         'FLOW': [getFlow(fullCaseSetupDict)]}
+    if motionInfo:
+        fullCaseSetupDict['SETUP_INFO']['START_ANGLE'] = ['%.6g' % (motionInfo['startAngle'])]
     groupDict = {}
     for geomName in wallGroups:
         for group in wallGroups[geomName]:

@@ -26,7 +26,7 @@ and limitations.
 #  ~/.config/ekstera/gsheet.ini     [gsheet] sheetID = ..., worksheet = ... (optional, default first sheet),
 #                                   credentials = ... (optional)
 #  EKSTERA_GSHEET_ID, EKSTERA_GSHEET_WORKSHEET, EKSTERA_GSHEET_CREDENTIALS
-#  credentials default: ~/.config/ekstera/credentials.json (service account key, keep it out of git)
+#  credentials default: ~/.config/ekstera/credentials.json (do not upload this to git!)
 
 import argparse
 import configparser

@@ -1,0 +1,13 @@
+{"sliceVariables":{"Umag":{"equation":"mag(U)","label":"U magnitude [m/s]","range":"auto","color":"Viridis (matplotlib)"},
+                   "Ux":{"equation":"U_X","label":"Ux [m/s]","range":"symmetric","color":"Cool to Warm"},
+                   "Uy":{"equation":"U_Y","label":"Uy [m/s]","range":"symmetric","color":"Cool to Warm"},
+                   "Uz":{"equation":"U_Z","label":"Uz [m/s]","range":"symmetric","color":"Cool to Warm"},
+                   "p":{"equation":"p","label":"p","range":"auto","color":"Cool to Warm"},
+                   "pGauge":{"equation":"p-PREF","label":"p - p charge","range":"symmetric","color":"Cool to Warm"},
+                   "T":{"equation":"T","label":"T [K]","range":"auto","color":"Inferno (matplotlib)"},
+                   "rho":{"equation":"rho","label":"rho [kg/m3]","range":"auto","color":"Viridis (matplotlib)"}},
+ "surfaceVariables":{"p":{"equation":"p","label":"p","range":"auto","color":"Cool to Warm"},
+                     "pGauge":{"equation":"p-PREF","label":"p - p charge","range":"symmetric","color":"Cool to Warm"},
+                     "T":{"equation":"T","label":"T [K]","range":"auto","color":"Inferno (matplotlib)"},
+                     "wallHeatFlux":{"equation":"wallHeatFlux","label":"q [W/m2], + into the gas","range":"symmetric","color":"Cool to Warm"}}
+}
