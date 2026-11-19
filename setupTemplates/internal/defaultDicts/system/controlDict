@@ -29,7 +29,7 @@ writeCompression off;
 timeFormat      general;
 timePrecision   10;
 runTimeModifiable true;
-adjustTimeStep  yes;
+adjustTimeStep  <ADJUST_DT>;
 maxCo           <MAX_CO>;
 maxDeltaT       <MAX_DT>;
 

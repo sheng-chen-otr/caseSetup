@@ -327,6 +327,27 @@ def test_compressible_dicts_unchanged(tmp_path, monkeypatch, repo_root):
     assert 'executeControl  timeStep;' in heat and 'writeControl    writeTime;' in heat
 
 
+def test_fixed_time_step_when_max_co_blank_or_zero(tmp_path, monkeypatch, repo_root):
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    monkeypatch.chdir(tmp_path)
+    full['GLOBAL_CONTROL']['MAX_DT'] = ['2e-5']
+    writeInternal.writeControlDictInternal(templateLoc, full)
+    text = (tmp_path / 'system/controlDict').read_text()
+    assert 'adjustTimeStep  yes;' in text and 'maxCo           1;' in text
+    for maxCo in (['0'], [''], ['0.0']):
+        full['GLOBAL_CONTROL']['MAX_CO'] = maxCo
+        writeInternal.writeControlDictInternal(templateLoc, full)
+        text = (tmp_path / 'system/controlDict').read_text()
+        assert 'adjustTimeStep  no;' in text and 'deltaT          2e-5;' in text
+    full['GLOBAL_CONTROL']['MAX_CO'] = ['x']
+    with pytest.raises(SystemExit):
+        writeInternal.writeControlDictInternal(templateLoc, full)
+    full['GLOBAL_CONTROL']['MAX_CO'] = ['']
+    full['GLOBAL_CONTROL']['MAX_DT'] = ['']
+    with pytest.raises(SystemExit):
+        writeInternal.writeControlDictInternal(templateLoc, full)
+
+
 #----- motion file path
 
 def test_motion_file_path(tmp_path, monkeypatch):

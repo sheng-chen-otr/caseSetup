@@ -456,16 +456,48 @@ def getRunTimes(fullCaseSetupDict):
     return nCycles/freq, 1.0/(freq*writePerCycle)
 
 
+def getTimeStep(fullCaseSetupDict):
+    #MAX_CO 0 or blank: fixed time step MAX_DT (no Courant limit), otherwise adjustable up to MAX_CO / MAX_DT
+    control = fullCaseSetupDict['GLOBAL_CONTROL']
+    maxCo = ''.join(control.get('MAX_CO', [''])).strip()
+    maxDt = ''.join(control.get('MAX_DT', [''])).strip()
+    try:
+        if float(maxDt) <= 0:
+            raise ValueError
+    except ValueError:
+        sys.exit('ERROR! GLOBAL_CONTROL MAX_DT must be a positive number (got "%s")!' % (maxDt))
+    try:
+        fixed = maxCo == '' or float(maxCo) == 0
+    except ValueError:
+        sys.exit('ERROR! GLOBAL_CONTROL MAX_CO must be a number, 0 or blank (got "%s")!' % (maxCo))
+    if fixed:
+        return maxDt, '1e6', maxDt, 'no'
+    if float(maxCo) < 0:
+        sys.exit('ERROR! GLOBAL_CONTROL MAX_CO must not be negative!')
+    return control['INIT_DT'][0], maxCo, maxDt, 'yes'
+
+
 def writeControlDictInternal(templateLoc, fullCaseSetupDict):
     print('\n\tWriting controlDict...')
     control = fullCaseSetupDict['GLOBAL_CONTROL']
     endTime, writeInterval = getRunTimes(fullCaseSetupDict)
     print('\t\t%s cycles at %s Hz: endTime %.6g s, write every %.6g s'
           % (control['N_CYCLES'][0], control['FREQ'][0], endTime, writeInterval))
+    initDt, maxCo, maxDt, adjustDt = getTimeStep(fullCaseSetupDict)
+    if adjustDt == 'yes':
+        print('		adjustable time step: maxCo %s, maxDeltaT %s' % (maxCo, maxDt))
+    else:
+        print('		fixed time step %s (MAX_CO 0 or blank), %.6g steps per cycle'
+              % (maxDt, 1.0/(float(control['FREQ'][0])*float(maxDt))))
+        #without time step adjustment the writes only land on the interval if it is a whole number of steps
+        steps = writeInterval/float(maxDt)
+        if abs(steps - round(steps)) > 1e-6*steps:
+            print('		WARNING! write interval %.6g s is not a whole number of time steps (%.4g): write times '
+                  'will be the first step past each interval' % (writeInterval, steps))
     replaceDict = {'SOLVER': getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER'),
                    'STARTFROM': control['STARTFROM'][0], 'ENDTIME': '%.9g' % endTime,
-                   'INIT_DT': control['INIT_DT'][0], 'WRITE_INTERVAL': '%.9g' % writeInterval,
-                   'MAX_CO': control['MAX_CO'][0], 'MAX_DT': control['MAX_DT'][0]}
+                   'INIT_DT': initDt, 'WRITE_INTERVAL': '%.9g' % writeInterval,
+                   'MAX_CO': maxCo, 'MAX_DT': maxDt, 'ADJUST_DT': adjustDt}
     copyTemplate(templateLoc, 'system/controlDict', 'system/controlDict', replaceDict)
 
 
@@ -910,7 +942,7 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
         text = f.read()
     replaceDict = {'<SOLVER>': 'moveDynamicMesh', '<STARTFROM>': 'startTime', '<ENDTIME>': '%.9g' % (1.0/freq),
                    '<INIT_DT>': '%.9g' % (1.0/(72.0*freq)), '<WRITE_INTERVAL>': '%.9g' % (1.0/(8.0*freq)),
-                   '<MAX_CO>': '1e6', '<MAX_DT>': '1', 'adjustTimeStep  yes': 'adjustTimeStep  no',
+                   '<MAX_CO>': '1e6', '<MAX_DT>': '1', '<ADJUST_DT>': 'no',
                    '#include "internalFunctionObjects"': ''}
     for key, val in replaceDict.items():
         text = text.replace(key, val)
