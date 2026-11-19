@@ -16,12 +16,10 @@ implied. See the License for the specific language governing permissions
 and limitations.
 """
 
-#images of an internal (internalSetup) case from the foamToEnsight output, one image per written time
-#and panel (slice x variable, surface view x variable), set up like pvPost: pvPostInternalSetup in the
-#case directory (else postUtilities/default/pvPostInternalSetup) and a json variable dict
-#colour ranges are fixed over the run (auto = min/max over all selected times, symmetric = +-max)
-#slices can follow a moving body along z (FOLLOW = <body>), from the motion table or the crank log
-#images: postProcessing/images/<panel>/<case>_<panel>_<NNNNN>.png, imagesToMovies.py makes the videos
+#makes images of an internal case from the foamToEnsight output, one image per written time per panel
+#panels are slices x variables and surface views x variables, set up like pvPost with pvPostInternalSetup
+#colour ranges are kept fixed over the run, slices can follow a moving body with FOLLOW
+#images go to postProcessing/images/<panel>, imagesToMovies.py makes the videos
 #usage (in the case directory): pvbatch --force-offscreen-rendering pvPostInternal.py [--every N] [--lastCycles N]
 
 import os
@@ -60,7 +58,7 @@ def readConfig(path):
 
 
 def getPVSetup(caseDir):
-    #pvPostInternalSetup from the case (missing keys from the default file) or the default file
+    #getting pvPostInternalSetup from the case, missing keys from the default file
     defaultPath = os.path.join(templateLoc, 'default', 'pvPostInternalSetup')
     setup = readConfig(defaultPath)
     casePath = os.path.join(caseDir, 'pvPostInternalSetup')
@@ -78,7 +76,7 @@ def getPVSetup(caseDir):
 
 
 def getVariableDict(setup, pRef):
-    #json variable dict, PREF replaced by the charge pressure (pressure behind the bodies)
+    #reading the variable dict, PREF is replaced by the charge pressure
     path = setup['PV_POST_MAIN']['VARIABLE_DICT']
     if path.lower() == 'default':
         path = os.path.join(templateLoc, 'default', 'defaultInternalVariables')
@@ -88,7 +86,7 @@ def getVariableDict(setup, pRef):
 
 
 def getSlices(sliceSetup):
-    #parallel lists NAMES / NORMALS / ORIGINS / FOLLOW, origin = center | loc | x,y,z
+    #reading the slice lists (NAMES NORMALS ORIGINS FOLLOW)
     names = sliceSetup['NAMES'].split()
     normals = [n.upper() for n in sliceSetup['NORMALS'].split()]
     origins = sliceSetup['ORIGINS'].split()
@@ -112,7 +110,7 @@ def getSlices(sliceSetup):
 
 
 def sliceOrigin(origin, bounds, locInMesh):
-    #center of the mesh box, LOC_IN_MESH or the given point
+    #slice origin from the mesh box center, LOC_IN_MESH or the given point
     if isinstance(origin, list):
         return list(origin)
     if origin.lower() == 'loc':
@@ -121,17 +119,17 @@ def sliceOrigin(origin, bounds, locInMesh):
 
 
 def selectTimes(times, freq, every=1, lastCycles='all'):
-    #written times (no 0), only the last N cycles, every N-th
+    #picking the written times to use
     times = [t for t in times if t > 0]
     if str(lastCycles).lower() != 'all' and times:
         tStart = times[-1] - float(lastCycles)/freq - 1e-9
         times = [t for t in times if t >= tStart]
-    #every N-th counted back from the last time, so the last written time is always used
+    #counting back from the last time so the last time is always used
     return times[::-1][::max(int(every), 1)][::-1]
 
 
 def neededFields(equation, fields):
-    #fields of the case used in an equation (U for U_X etc.)
+    #fields of the case used in the equation
     names = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', equation))
     names |= set(name.split('_')[0] for name in names)
     return [field for field in fields if field in names]
@@ -140,7 +138,7 @@ def neededFields(equation, fields):
 #----- motion
 
 class Motion:
-    #z displacement of each body and the crank angle against time
+    #z displacement of each body and the crank angle vs time
     def __init__(self, caseDir, config):
         self.bodies = [s[len('MOVE-'):] for s in config.sections() if s.startswith('MOVE-')]
         self.freq = float(config['GLOBAL_CONTROL']['FREQ'])
@@ -166,7 +164,7 @@ class Motion:
                     self.tables[body] = postInternal.readTable(path)
 
     def angle(self, t):
-        #crank angle (deg, 0-360) at time t, None if unknown
+        #crank angle at time t (deg), None if unknown
         if self.crank is not None:
             return float(np.mod(np.interp(t, self.crank[0], self.crank[1]), 360.0))
         if self.startAngle is not None:
@@ -174,7 +172,7 @@ class Motion:
         return None
 
     def dz(self, body, t):
-        #z displacement of a body from its meshed position
+        #z displacement of a body from where it was meshed
         if body not in self.tables:
             sys.exit('ERROR! FOLLOW %s: no motion table for this body (bodies: %s)' % (body, self.bodies))
         x, z = self.tables[body]
@@ -185,7 +183,7 @@ class Motion:
 
 
 def readCrankTable(path):
-    #constant/tables/<body>Crank: N ( (theta dz) ... )
+    #reading constant/tables/<body>Crank (theta dz)
     with open(path) as f:
         text = f.read()
     rows = np.array(re.findall(r'\(\s*([-0-9.eE+]+)\s+([-0-9.eE+]+)\s*\)', text), dtype=float)
@@ -195,8 +193,8 @@ def readCrankTable(path):
 #----- cameras
 
 def sliceCamera(normal, origin, bounds, size, barSpace=0.15):
-    #parallel projection looking along the slice normal, the cut through the mesh box fills the image
-    #(barSpace: extra height at the bottom for the colour bar)
+    #camera looking along the slice normal, fitted to the cut through the mesh box
+    #barSpace leaves room for the colour bar at the bottom
     centre = [0.5*(bounds[0] + bounds[1]), 0.5*(bounds[2] + bounds[3]), 0.5*(bounds[4] + bounds[5])]
     lengths = [bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4]]
     if normal == 'Z':
@@ -207,7 +205,7 @@ def sliceCamera(normal, origin, bounds, size, barSpace=0.15):
         width, height, up, axis = lengths[1], lengths[2], [0, 0, 1], 0
     focal = list(centre)
     focal[axis] = origin[axis]
-    #shift the picture up so the colour bar sits below the geometry
+    #shifting the picture up so the colour bar sits below the geometry
     upAxis = up.index(1)
     focal[upAxis] -= barSpace*height
     position = list(focal)
@@ -217,7 +215,7 @@ def sliceCamera(normal, origin, bounds, size, barSpace=0.15):
 
 
 def surfaceCamera(view, bounds, size):
-    #fixed views of the whole mesh box: Iso, Top, Bottom, Front (-y), Back (+y), Left (-x), Right (+x)
+    #fixed views of the whole mesh box
     directions = {'Iso': [1, -1, 1], 'Top': [0, 0, 1], 'Bottom': [0, 0, -1], 'Front': [0, -1, 0],
                   'Back': [0, 1, 0], 'Left': [-1, 0, 0], 'Right': [1, 0, 0]}
     if view not in directions:
@@ -266,7 +264,7 @@ def main(argv=None):
     import paraview.simple as pvs
     pvs._DisableFirstRenderCameraReset()
 
-    #data
+    #loading the data
     cases = glob.glob(os.path.join(caseDir, 'EnSight', '*.case'))
     if not cases:
         sys.exit('ERROR! no EnSight/*.case: has foamToEnsight run (EXPORT = ensight)?')
@@ -289,7 +287,7 @@ def main(argv=None):
     bounds = volume.GetDataInformation().GetBounds()
     print('\t\tmesh box: %s' % (' '.join('%.4g' % b for b in bounds)))
 
-    #panels: (name, source, variable, camera, follow slice)
+    #building the panels
     panels = []
     if mainSetup['SLICE_IMG'].lower() == 'true':
         slices = getSlices(setup['SLICE'])
@@ -300,7 +298,7 @@ def main(argv=None):
             cut.SliceType = 'Plane'
             cut.SliceType.Origin = origin
             cut.SliceType.Normal = normalVectors[s['normal']]
-            #checks the body has a motion table before any image is written
+            #checking the body has a motion table before writing any images
             if s['follow']:
                 motion.dz(s['follow'], times[0])
             camera = sliceCamera(s['normal'], origin, bounds, size)
@@ -339,8 +337,7 @@ def main(argv=None):
     if not panels:
         sys.exit('ERROR! nothing to plot: check SLICE_IMG / SURFACE_IMG and the variables')
 
-    #one calculator per panel, colour ranges fixed over the selected times: slices from the whole gas
-    #volume (same range on every slice), surfaces from the surface patches
+    #colour ranges fixed over the selected times, slices use the whole volume so every slice has the same range
     print('\n\tColour ranges over the run...')
     rangeTime = time.time()
     rangeCalcs = {}
@@ -429,7 +426,7 @@ def main(argv=None):
         panel['view'], panel['lut'], panel['title'] = view, lut, title
         os.makedirs(os.path.join('postProcessing', 'images', panel['name']), exist_ok=True)
 
-    #images, every panel at each time (the data is read once per time)
+    #writing the images, all panels per time so the data is only read once per time
     print('\n\tWriting %d images (%d panels x %d times)...' % (len(panels)*len(times), len(panels), len(times)))
     for i, t in enumerate(times):
         angle = motion.angle(t)
@@ -450,8 +447,7 @@ def main(argv=None):
 
 
 def getBlocks(source):
-    #block names of the EnSight data (internalMesh and the patches) as the selectors use them: from the
-    #data hierarchy (ParaView 5.10+, names without '-'), else the old flat block names
+    #block names as the selectors use them (data hierarchy in ParaView 5.10+, old block names otherwise)
     info = source.GetDataInformation().DataInformation
     names = []
     try:

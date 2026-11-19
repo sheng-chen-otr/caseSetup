@@ -243,7 +243,7 @@ def test_scripts_slurm_header_and_placeholders(tmp_path, monkeypatch, repo_root)
         assert '\r' not in text and text.startswith('#!/bin/bash\n')
         assert re.search(r'<[A-Z_]+>', text) is None
     run = (case / 'runScript').read_text()
-    assert '#SBATCH --account=def-brendan8' in run and '#SBATCH --ntasks=192' in run
+    assert '#SBATCH --account=def-account' in run and '#SBATCH --ntasks=192' in run
     assert '#SBATCH --job-name=engineRun01\n' in run and '#SBATCH --time=0-12:00' in run
     assert 'module load StdEnv/2023 gcc/12.3 openmpi/4.1.5 openfoam/v2412' in run
     assert 'NP=4' in run and '$RUN snappyHexMesh' in run
@@ -264,7 +264,7 @@ def test_post_script_and_chaining(tmp_path, monkeypatch, repo_root):
     assert '#SBATCH --cpus-per-task=4' in post and '#SBATCH --mem=32G' in post and '#SBATCH --time=0-03:00' in post
     assert 'module load StdEnv/2023 python scipy-stack paraview/5.13.1 ffmpeg' in post
     #summary, gsheet, images, videos in order, from the repo
-    assert (post.index("/opt/caseSetup/postUtilities/postInternal.py'") < post.index("/opt/caseSetup/postUtilities/gsheetEkstera.py'")
+    assert (post.index("/opt/caseSetup/postUtilities/postInternal.py'") < post.index("/opt/caseSetup/postUtilities/gsheetInternal.py'")
             < post.index("pvbatch --force-offscreen-rendering '/opt/caseSetup/postUtilities/pvPostInternal.py'")
             < post.index("/opt/caseSetup/postUtilities/imagesToMovies.py'"))
     submit = (case / 'submitScript').read_text()
@@ -280,7 +280,7 @@ def test_post_script_and_chaining(tmp_path, monkeypatch, repo_root):
     full['GLOBAL_COMPUTE_SETUP']['PVBATCH'] = ['/opt/pv/bin/pvbatch']
     writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
     post = (case / 'postScript').read_text()
-    assert "postUtilities/postInternal.py'" in post and "postUtilities/gsheetEkstera.py'" not in post
+    assert "postUtilities/postInternal.py'" in post and "postUtilities/gsheetInternal.py'" not in post
     assert '--force-offscreen-rendering' not in post and "postUtilities/imagesToMovies.py'" not in post
     full['GLOBAL_COMPUTE_SETUP']['GSHEET'] = ['maybe']
     with pytest.raises(SystemExit):

@@ -397,14 +397,14 @@ P_BUFFER = charge       # pressure behind the bodies
 
 ```bash
 python3 /path/to/caseSetup/postUtilities/postInternal.py [cases ...] [--avgCycles N] [--gsheet]
-python3 /path/to/caseSetup/postUtilities/gsheetEkstera.py [cases ...] [--comment "text"] [--dryRun]
+python3 /path/to/caseSetup/postUtilities/gsheetInternal.py [cases ...] [--comment "text"] [--dryRun]
 pvbatch --force-offscreen-rendering /path/to/caseSetup/postUtilities/pvPostInternal.py [--every N] [--lastCycles N]
 python3 /path/to/caseSetup/postUtilities/imagesToMovies.py [--fps N]
 ```
 
 images are set up like pvPost: `pvPostInternalSetup` in the case (copied there by the setup, kept if it exists) lists the slices (`NAMES`, `NORMALS`, `ORIGINS` = center | loc | x,y,z, `FOLLOW` = a body so a z slice moves with the displacer), the surface patches and views, the variables and `[MOVIES] FPS`. variables (equation, label, range auto | symmetric | [min, max], colour map) are in `postUtilities/default/defaultInternalVariables`; ranges are fixed over the run. output: `postProcessing/images/<panel>/` (one png per written time) and `postProcessing/movies/<case>_<panel>.mp4`.
 
-`postInternal/summary.csv` per case: run info and times, cycles done, work per body and `AVG_ENERGY`/`AVG_POWER` over the last N cycles, gas p/T/rho, face pressures, and for compressible runs mass drift, p-V work and heat per BC group; for the crank drive also speed, load and generator power. `gsheetEkstera.py` pushes the summary to the database sheet (settings in `~/.config/ekstera/gsheet.ini` or `EKSTERA_GSHEET_*`; keep the service account key out of git).
+`postInternal/summary.csv` per case: run info and times, cycles done, work per body and `AVG_ENERGY`/`AVG_POWER` over the last N cycles, gas p/T/rho, face pressures, and for compressible runs mass drift, p-V work and heat per BC group; for the crank drive also speed, load and generator power. `gsheetInternal.py` pushes the summary to the database sheet (settings in `~/.config/caseSetup/gsheet.ini` or `INTERNAL_GSHEET_*`; keep the service account key out of git).
 
 ### Demo cases
 
@@ -470,7 +470,7 @@ caseSetup-dev/
 ├── postUtilities/                  # Post-processing & results analysis
 │   ├── pvPost.py                   # ParaView automation & field extraction
 │   ├── postInternal.py             # internal case summary (work, power, heat, crank speed)
-│   ├── gsheetEkstera.py            # pushes internal summaries to the Ekstera database sheet
+│   ├── gsheetInternal.py            # pushes internal summaries to the database sheet
 │   ├── pvPostInternal.py           # internal case images (pvbatch, pvPostInternalSetup)
 │   ├── imagesToMovies.py           # one mp4 per image panel (ffmpeg)
 │   ├── postRun.py                  # Post-run analysis orchestration

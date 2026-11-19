@@ -46,7 +46,7 @@ def parseArgs(argv=None):
     parser = argparse.ArgumentParser(prog='internalSetup-v%s' % __version__,
                                      description='Sets up an internal flow (Stirling engine) case from the internalSetup file')
     parser.add_argument('-s', '--setup', default='internal',
-                        help='Identifies which setup templates to use. Available setups are: internal')
+                        help='Identifies which setup templates to use. Available setups are: internal, internal-otr')
     parser.add_argument('-d', '--controlDict', action='store_true',
                         help='Writes only controlDict for the solver.')
     parser.add_argument('--new', action='store_true',
@@ -57,14 +57,14 @@ def parseArgs(argv=None):
 
 
 def findFromSections(writeCaseSetupDict, geomNames):
-    #MOVE sections without their own file (FROM = <geometry>, e.g. a piston crown PID in the chamber)
-    #FROM must still point at a geometry in GEOM, otherwise this is just an orphan left behind by a removed part
+    #MOVE sections without their own file (FROM = <geometry>, like a piston crown in the chamber)
+    #FROM has to point at a geometry still in GEOM, otherwise it's left over from a removed part
     return [s for s in writeCaseSetupDict if s.startswith('MOVE') and s not in geomNames
             and writeCaseSetupDict[s].get('FROM', ['self'])[0] in geomNames]
 
 
 def copyPostSetup(execDir, caseDir):
-    #image settings for postScript (pvPostInternal.py), an existing case copy is kept
+    #copying pvPostInternalSetup into the case, an existing copy is kept
     dest = os.path.join(caseDir, 'pvPostInternalSetup')
     if os.path.isfile(dest):
         print('\n\tpvPostInternalSetup exists in the case, kept')

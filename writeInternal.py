@@ -457,7 +457,7 @@ def getRunTimes(fullCaseSetupDict):
 
 
 def getTimeStep(fullCaseSetupDict):
-    #MAX_CO 0 or blank: fixed time step MAX_DT (no Courant limit), otherwise adjustable up to MAX_CO / MAX_DT
+    #MAX_CO 0 or blank uses a fixed time step of MAX_DT, otherwise adjustable
     control = fullCaseSetupDict['GLOBAL_CONTROL']
     maxCo = ''.join(control.get('MAX_CO', [''])).strip()
     maxDt = ''.join(control.get('MAX_DT', [''])).strip()
@@ -502,9 +502,8 @@ def writeControlDictInternal(templateLoc, fullCaseSetupDict):
 
 
 def getRelaxation(fullCaseSetupDict):
-    #under-relaxation for PIMPLE with outer correctors (N_OUTER_CORR > 1, large Co): RELAX_P on the pressure field,
-    #RELAX_U on U (and k, omega), RELAX_E on e; the last outer iteration (Final) is never relaxed, so each
-    #time step ends on the full pressure solution. PISO (N_OUTER_CORR 1): none
+    #under-relaxation, only with outer correctors (N_OUTER_CORR > 1)
+    #the last outer iteration (Final) is not relaxed
     simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
     nOuter = int(simControl['N_OUTER_CORR'][0])
     if nOuter < 1:
@@ -534,8 +533,7 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict):
     simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
     compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
     #divergence schemes per flow type, closed incompressible volume needs a pressure reference
-    #linearUpwind (upwind implicit + explicit correction) keeps the matrices diagonally dominant at large Co, as
-    #in the hand-built 006/007/009 (limitedLinearV is implicit linear/upwind: 010 diverged at Co 2.4 with it)
+    #linearUpwind keeps it stable at large Co (010 diverged at Co 2.4 with limitedLinearV)
     divTurb = ['div(phi,k)      Gauss linearUpwind grad(k);', 'div(phi,omega)  Gauss linearUpwind grad(omega);']
     if getFlow(fullCaseSetupDict) == 'incompressible':
         divSchemes = ['div(phi,U)      Gauss linearUpwind grad(U);'] + divTurb + ['div((nuEff*dev2(T(grad(U))))) Gauss linear;']
@@ -551,7 +549,7 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict):
     copyTemplate(templateLoc, 'system/fvSchemes', 'system/fvSchemes',
                  {'DIV_SCHEMES': '\n'.join('    ' + s for s in divSchemes)})
     relaxation = getRelaxation(fullCaseSetupDict)
-    #custom template sets made before the relaxation option have no <RELAXATION> slot
+    #older custom template sets have no <RELAXATION> slot
     with open('%s/defaultDicts/system/fvSolution' % (templateLoc)) as f:
         if relaxation and '<RELAXATION>' not in f.read():
             print('\t\tWARNING: %s/defaultDicts/system/fvSolution has no <RELAXATION> line: no under-relaxation is '
@@ -575,8 +573,7 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict):
 
 
 def getDecomp(fullCaseSetupDict):
-    #DECOMP_METHOD and the hierarchical/simple split: DECOMP = nx ny nz (as caseSetup), or auto = chosen by
-    #the run scripts for the task count of each run. returns (method, (nx, ny, nz) or None)
+    #getting the decomposition method and the hierarchical/simple split (DECOMP = nx ny nz or auto)
     compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
     method = compute['DECOMP_METHOD'][0]
     decomp = [v for v in compute.get('DECOMP', ['auto']) if v != '']
@@ -597,8 +594,7 @@ def getDecomp(fullCaseSetupDict):
 
 def functionObject(name, entries, fieldWriter=False):
     #one function object block, written every time step
-    #fieldWriter: the object writes a field in write() (wallHeatFlux) and its .dat in execute(), so
-    #execute every step and write the field only at the write times (else a time dir every step)
+    #fieldWriter: execute every step but only write the field at write times (else a time dir every step)
     lines = ['%s' % (name), '{'] + ['    %-15s %s' % (key, val) for key, val in entries]
     if fieldWriter:
         lines += ['    executeControl  timeStep;', '    executeInterval 1;', '    writeControl    writeTime;', '}']
@@ -679,8 +675,7 @@ def getMotionFilePath(setup, section, caseDir):
 
 
 def getCrank(fullCaseSetupDict):
-    #MESH_MOTION DRIVE crank: the gas forces turn a flywheel (crank angle and speed are solved, FREQ is
-    #the start speed), DRIVE prescribed: tables vs time at FREQ. returns None for prescribed
+    #crank drive settings, None for prescribed motion
     meshMotion = fullCaseSetupDict['MESH_MOTION']
     drive = meshMotion.get('DRIVE', ['prescribed'])[0]
     if drive == 'prescribed':
@@ -699,7 +694,7 @@ def getCrank(fullCaseSetupDict):
         sys.exit('ERROR! MESH_MOTION generator needs GEN_K > 0 and GEN_R_LOAD + GEN_R_INT > 0')
     crank['OMEGA0'] = 2.0*math.pi*float(getVal(fullCaseSetupDict, 'GLOBAL_CONTROL', 'FREQ'))
 
-    #pressure behind the bodies (bounce space, not modelled): units of p
+    #pressure behind the bodies (bounce space is not modelled)
     if getFlow(fullCaseSetupDict) == 'compressible':
         pBuffer = meshMotion['P_BUFFER'][0]
         crank['P_REF'] = float(getVal(fullCaseSetupDict, 'GLOBAL_MATERIAL', 'CHARGE_PRESSURE')) if pBuffer == 'charge' else float(pBuffer)
@@ -921,13 +916,13 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
     print('\n\tWriting mesh motion dicts...')
     zones = motionInfo['zones']
     crank = getCrank(fullCaseSetupDict)
-    #tables of the other drive from an earlier setup of this case
+    #removing tables of the other drive from an earlier setup
     for body in motionInfo['bodies']:
         old = os.path.join('constant', 'tables', '%s%s' % (body.name, 'Table' if crank else 'Crank'))
         if os.path.isfile(old):
             os.remove(old)
     if crank:
-        #tables vs crank angle, the solver finds the crank angle from the gas forces
+        #tables vs crank angle, the solver works out the crank angle from the gas forces
         motionUtilities.writeCrankTables(motionInfo['bodies'], motionInfo['startAngle'], motionInfo['step'],
                                          'constant/tables')
         bodyLines = []
@@ -970,7 +965,7 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
         f.write('FoamFile { version 2.0; format ascii; class dictionary; object topoSetDict; }\n\n')
         f.write('//motion zones from the zone patches (written by internalSetup)\nactions\n(\n%s\n);\n' % ('\n'.join(actions)))
     copyTemplate(templateLoc, 'system/pointDisplacement', 'system/pointDisplacement', {})
-    #one cycle of pure mesh motion for the dry run: no function objects, fixed 5 deg steps
+    #one cycle of mesh motion only for the dry run, fixed 5 deg steps
     freq = motionInfo['freq']
     with open('%s/defaultDicts/system/controlDict' % (templateLoc)) as f:
         text = f.read()
@@ -993,15 +988,14 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
 #----- scripts
 
 def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None):
-    #runScript (mesh + solve + export in one job) and motionCheckScript (mesh motion dry run) from the
-    #clusterDict sections, each runs as a Slurm job (sbatch) or locally (./script), submitScript submits them
+    #writing runScript, postScript, motionCheckScript and submitScript from clusterDict
     print('\n\tWriting scripts...')
     with open('%s/defaultCluster/slurm/clusterDict' % (templateLoc)) as f:
         clusterDict = json.load(f)
     solver = getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER')
     motionSteps = ['topoSet', 'reorderFaceZones', 'pointDisplacement', 'motionCheck']
     skipSteps = list(motionSteps) if not motionZones else []
-    #the crank drive motion solver is compiled in the job (wmake skips it when up to date)
+    #the crank drive library is compiled in the job (wmake skips it when up to date)
     if not motionZones or getCrank(fullCaseSetupDict) is None:
         skipSteps.append('compileLib')
     export = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('EXPORT', ['ensight'])[0].lower()
@@ -1009,7 +1003,7 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
         sys.exit('ERROR! GLOBAL_COMPUTE_SETUP EXPORT must be ensight or none!')
     if export == 'none':
         skipSteps.append('export')
-    #post job: summary, gsheet row (GSHEET), images and videos (need the EnSight export)
+    #post job: summary, gsheet, images and videos (images need the EnSight export)
     gsheet = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('GSHEET', ['True'])[0].lower()
     if gsheet not in ('true', 'false'):
         sys.exit('ERROR! GLOBAL_COMPUTE_SETUP GSHEET must be True or False!')
@@ -1024,8 +1018,7 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     for oldScript in ['meshingScript', 'solveScript'] + ([] if motionZones else ['motionCheckScript']):
         if os.path.isfile(oldScript):
             os.remove(oldScript)
-    #processor count of the run into decomposeParDict; hierarchical/simple also need the split n (nx ny nz),
-    #chosen for the task count at run time (for clusters without scotch)
+    #setting the processor count in decomposeParDict, hierarchical/simple also get the split
     decompMethod, decomp = getDecomp(fullCaseSetupDict)
     if decompMethod in ('hierarchical', 'simple'):
         setDecomp = ("python3 '<EXEC_DIR>/meshUtilities/decompCoeffs.py' system/decomposeParDict $NP%s; "
@@ -1035,7 +1028,7 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     replaceDict = {'<SET_DECOMP>': setDecomp,
                    '<ZERO_TEMPLATES>': os.path.join(execDir, 'zeroTemplates'), '<EXEC_DIR>': execDir,
                    '<SOLVER>': solver, '<MOTION_ZONES>': ' '.join(motionZones or [])}
-    #slurm header and environment from GLOBAL_COMPUTE_SETUP, job name defaults to the case directory name
+    #slurm header from GLOBAL_COMPUTE_SETUP, job name defaults to the case directory name
     compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
     for key in compute:
         replaceDict['<%s>' % key] = ' '.join(compute[key])
@@ -1055,7 +1048,7 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
 #----- full dict extras for postRun
 
 def addSetupInfo(fullCaseSetupDict, wallGroups, motionInfo=None):
-    #marker read by postRun (internal vs aero), the resolved BC groups and the start (meshing) crank angle for post
+    #marker for postRun, resolved BC groups and the start crank angle for post
     fullCaseSetupDict['SETUP_INFO'] = {'TOOL': ['internal'], 'VERSION': [__version__],
                                         'FLOW': [getFlow(fullCaseSetupDict)]}
     if motionInfo:

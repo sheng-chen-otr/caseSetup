@@ -16,11 +16,10 @@ implied. See the License for the specific language governing permissions
 and limitations.
 """
 
-#sets numberOfSubdomains and the hierarchical/simple split n (nx ny nz) in decomposeParDict for the
-#processor count of the run (no scotch needed). the split is chosen so the subdomains of the background
-#mesh box (system/blockMeshDict vertices) are as close to cubes as possible
-#usage (from the case directory): python3 decompCoeffs.py system/decomposeParDict <nProcs> [nx ny nz]
-#with nx ny nz (DECOMP in GLOBAL_COMPUTE_SETUP) that split is used and must give nProcs subdomains
+#sets numberOfSubdomains and the hierarchical/simple split n (nx ny nz) in decomposeParDict
+#the split is picked so the subdomains of the blockMesh box are as close to cubes as possible
+#usage (in the case directory): python3 decompCoeffs.py system/decomposeParDict <nProcs> [nx ny nz]
+#with nx ny nz given (DECOMP) that split is used and has to match nProcs
 
 import re
 import sys
@@ -38,7 +37,7 @@ def blockMeshLengths(path):
 
 
 def chooseSplit(nProcs, lengths):
-    #n (nx ny nz) with nx*ny*nz = nProcs, subdomain aspect ratio max(L/n)/min(L/n) smallest
+    #finding n (nx ny nz) with the most cube-like subdomains
     best = None
     for nx in range(1, nProcs + 1):
         if nProcs % nx:

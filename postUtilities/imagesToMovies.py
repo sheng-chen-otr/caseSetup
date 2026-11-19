@@ -16,9 +16,8 @@ implied. See the License for the specific language governing permissions
 and limitations.
 """
 
-#one mp4 per image directory (postProcessing/images/<panel> -> postProcessing/movies/<case>_<panel>.mp4)
-#with ffmpeg, frames in file name order (pvPostInternal numbers them _00000, _00001 ...)
-#fps from --fps, else [MOVIES] FPS in pvPostInternalSetup (case, else default), else 10
+#makes one mp4 per image directory (postProcessing/images/<panel>) with ffmpeg
+#fps from --fps, else [MOVIES] FPS in pvPostInternalSetup, else 10
 #usage (in the case directory): python3 imagesToMovies.py [--fps N] [--imageDir dir] [--movieDir dir]
 
 import os
@@ -42,7 +41,7 @@ def parseArgs(argv=None):
 
 
 def getMovieSetup(caseDir):
-    #[MOVIES] ENABLE and FPS from the case pvPostInternalSetup, else the default file
+    #getting the [MOVIES] settings from the case pvPostInternalSetup, else the default file
     setup = {'ENABLE': 'True', 'FPS': '10'}
     for path in (os.path.join(templateLoc, 'default', 'pvPostInternalSetup'), os.path.join(caseDir, 'pvPostInternalSetup')):
         if not os.path.isfile(path):
@@ -56,7 +55,7 @@ def getMovieSetup(caseDir):
 
 
 def findFrames(imageDir):
-    #{panel: [frame paths in order]}, png or jpeg
+    #finding the frames of each panel, in file name order
     panels = {}
     for panelDir in sorted(glob.glob(os.path.join(imageDir, '*'))):
         if not os.path.isdir(panelDir):
@@ -69,14 +68,14 @@ def findFrames(imageDir):
 
 
 def ffmpegCommand(listFile, fps, moviePath):
-    #concat list -> h264 mp4, one image per frame at fps (setpts), even width/height (yuv420p needs them)
+    #ffmpeg command, one image per frame at fps, even size for yuv420p
     return ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', listFile,
             '-vf', 'setpts=N/(%g*TB),scale=trunc(iw/2)*2:trunc(ih/2)*2' % (fps), '-r', '%g' % (fps),
             '-c:v', 'libx264', '-pix_fmt', 'yuv420p', moviePath]
 
 
 def makeMovie(frames, fps, moviePath):
-    #frame list for the ffmpeg concat demuxer
+    #writing the frame list for ffmpeg
     listFile = moviePath + '.frames.txt'
     with open(listFile, 'w') as f:
         for frame in frames:

@@ -16,7 +16,7 @@ implied. See the License for the specific language governing permissions
 and limitations.
 """
 
-#tests for the internal post (summary) and the Ekstera gsheet push logic (no OpenFOAM, no Google API)
+#tests for the internal post (summary) and the database gsheet push logic (no OpenFOAM, no Google API)
 import math
 import os
 import sys
@@ -26,7 +26,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'postUtilities'))
 import postInternal
-import gsheetEkstera
+import gsheetInternal
 
 FREQ = 10.0
 AMP = 0.01          #piston amplitude (m)
@@ -231,7 +231,7 @@ def test_not_internal_case(tmp_path):
 #----- gsheet update logic
 
 def test_plan_empty_sheet_writes_fixed_header():
-    headers, row, updates, added = gsheetEkstera.planUpdate([], [], {'JOB': 'J', 'NAME': 'a', 'AVG_POWER': 5.0, 'X_NEW': 1})
+    headers, row, updates, added = gsheetInternal.planUpdate([], [], {'JOB': 'J', 'NAME': 'a', 'AVG_POWER': 5.0, 'X_NEW': 1})
     assert headers[:12] == postInternal.FIXED_KEYS and headers[-1] == 'X_NEW'
     assert row is None and updates[headers.index('AVG_POWER')] == 5.0
 
@@ -241,11 +241,11 @@ def test_plan_existing_row_new_column_and_blanks():
     rows = [['J', 'a', 'old', 'my note', '1', '2'], ['J', 'b', '', '', '', '']]
     summary = {'JOB': 'J', 'NAME': 'b', 'DESCRIPTION': '', 'SOLVE_TIME': 3.5, 'AVG_POWER': float('nan'),
                'P_crown_AMP': 1200.0, 'COMMENTS': 'ignored'}
-    new, row, updates, added = gsheetEkstera.planUpdate(headers, rows, summary)
+    new, row, updates, added = gsheetInternal.planUpdate(headers, rows, summary)
     assert row == 3 and added == ['P_crown_AMP']
     #trailing-space header still matches, empty and nan values are not written, COMMENTS untouched
     assert updates == {1: 'b', 0: 'J', 4: 3.5, 6: 1200.0}
-    new, row, updates, added = gsheetEkstera.planUpdate(headers, rows, summary, comment='rerun')
+    new, row, updates, added = gsheetInternal.planUpdate(headers, rows, summary, comment='rerun')
     assert updates[3] == 'rerun'
 
 
@@ -284,8 +284,8 @@ class FakeWorksheet:
 
 def test_push_appends_then_updates():
     ws = FakeWorksheet([['JOB', 'NAME', 'AVG_POWER'], ['J', 'a', 1.0]])
-    gsheetEkstera.pushSummary(ws, {'JOB': 'J', 'NAME': 'b', 'AVG_POWER': 2.0, 'CYCLES_DONE': 3})
+    gsheetInternal.pushSummary(ws, {'JOB': 'J', 'NAME': 'b', 'AVG_POWER': 2.0, 'CYCLES_DONE': 3})
     assert ws.values[0] == ['JOB', 'NAME', 'AVG_POWER', 'CYCLES_DONE']
     assert ws.values[2] == ['J', 'b', 2.0, 3]
-    gsheetEkstera.pushSummary(ws, {'JOB': 'J', 'NAME': 'a', 'AVG_POWER': 9.0})
+    gsheetInternal.pushSummary(ws, {'JOB': 'J', 'NAME': 'a', 'AVG_POWER': 9.0})
     assert ws.values[1][:3] == ['J', 'a', 9.0] and len(ws.values) == 3

@@ -16,17 +16,17 @@ implied. See the License for the specific language governing permissions
 and limitations.
 """
 
-#pushes internal (Ekstera / Stirling) run summaries to one database gsheet: one row per run, found by
+#pushes internal (Stirling) run summaries to one database gsheet: one row per run, found by
 #JOB + NAME (added at the bottom if missing). header names in row 1; a summary key without a column gets a
 #new column at the end. empty values never overwrite what is in the sheet, COMMENTS is only written with
 #--comment. reads postInternal/summary.csv (run postInternal.py first)
-#usage: python3 gsheetEkstera.py [case ...] [--comment "text"] [--dryRun]
+#usage: python3 gsheetInternal.py [case ...] [--comment "text"] [--dryRun]
 #
 #settings (environment variables override the file):
-#  ~/.config/ekstera/gsheet.ini     [gsheet] sheetID = ..., worksheet = ... (optional, default first sheet),
+#  ~/.config/caseSetup/gsheet.ini     [gsheet] sheetID = ..., worksheet = ... (optional, default first sheet),
 #                                   credentials = ... (optional)
-#  EKSTERA_GSHEET_ID, EKSTERA_GSHEET_WORKSHEET, EKSTERA_GSHEET_CREDENTIALS
-#  credentials default: ~/.config/ekstera/credentials.json (do not upload this to git!)
+#  INTERNAL_GSHEET_ID, INTERNAL_GSHEET_WORKSHEET, INTERNAL_GSHEET_CREDENTIALS
+#  credentials default: ~/.config/caseSetup/credentials.json (do not upload this to git!)
 
 import argparse
 import configparser
@@ -36,8 +36,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import postInternal
 
-CONFIG_FILE = os.path.join('~', '.config', 'ekstera', 'gsheet.ini')
-DEFAULT_CREDENTIALS = os.path.join('~', '.config', 'ekstera', 'credentials.json')
+CONFIG_FILE = os.path.join('~', '.config', 'caseSetup', 'gsheet.ini')
+DEFAULT_CREDENTIALS = os.path.join('~', '.config', 'caseSetup', 'credentials.json')
 HEADER_ROW = 1
 KEY_COLUMNS = ['JOB', 'NAME']
 
@@ -50,12 +50,12 @@ def getSettings(sheetId=None, worksheet=None):
         config.read(configPath)
     fromFile = config['gsheet'] if config.has_section('gsheet') else {}
     settings = {
-        'sheetID': sheetId or os.getenv('EKSTERA_GSHEET_ID') or fromFile.get('sheetID', ''),
-        'worksheet': worksheet or os.getenv('EKSTERA_GSHEET_WORKSHEET') or fromFile.get('worksheet', ''),
+        'sheetID': sheetId or os.getenv('INTERNAL_GSHEET_ID') or fromFile.get('sheetID', ''),
+        'worksheet': worksheet or os.getenv('INTERNAL_GSHEET_WORKSHEET') or fromFile.get('worksheet', ''),
         'credentials': os.path.expanduser(os.path.expandvars(
-            os.getenv('EKSTERA_GSHEET_CREDENTIALS') or fromFile.get('credentials', DEFAULT_CREDENTIALS)))}
+            os.getenv('INTERNAL_GSHEET_CREDENTIALS') or fromFile.get('credentials', DEFAULT_CREDENTIALS)))}
     if not settings['sheetID']:
-        sys.exit('ERROR! No Ekstera sheet id: set EKSTERA_GSHEET_ID or sheetID in %s' % (CONFIG_FILE))
+        sys.exit('ERROR! No sheet id: set INTERNAL_GSHEET_ID or sheetID in %s' % (CONFIG_FILE))
     return settings
 
 
@@ -63,7 +63,7 @@ def openWorksheet(settings):
     import gspread
     from google.oauth2.service_account import Credentials
     if not os.path.isfile(settings['credentials']):
-        sys.exit('ERROR! Credentials file %s not found: set EKSTERA_GSHEET_CREDENTIALS' % (settings['credentials']))
+        sys.exit('ERROR! Credentials file %s not found: set INTERNAL_GSHEET_CREDENTIALS' % (settings['credentials']))
     creds = Credentials.from_service_account_file(settings['credentials'],
                                                   scopes=['https://www.googleapis.com/auth/spreadsheets'])
     spreadsheet = gspread.authorize(creds).open_by_key(settings['sheetID'])
@@ -167,10 +167,10 @@ def pushSummary(worksheet, summary, comment=None, dryRun=False):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Push internal run summaries to the Ekstera database gsheet')
+    parser = argparse.ArgumentParser(description='Push internal run summaries to the database gsheet')
     parser.add_argument('cases', nargs='*', default=['.'], help='case directories (default: current directory)')
     parser.add_argument('--comment', default=None, help='text for the COMMENTS column (otherwise left as it is)')
-    parser.add_argument('--sheetId', default=None, help='sheet id (overrides EKSTERA_GSHEET_ID / gsheet.ini)')
+    parser.add_argument('--sheetId', default=None, help='sheet id (overrides INTERNAL_GSHEET_ID / gsheet.ini)')
     parser.add_argument('--worksheet', default=None, help='worksheet name (default: first sheet)')
     parser.add_argument('--dryRun', action='store_true', help='show what would be written, change nothing')
     args = parser.parse_args(argv)

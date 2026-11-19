@@ -17,7 +17,7 @@ and limitations.
 """
 
 #post-processing of an internal (internalSetup) case: one summary per run in postInternal/summary.csv
-#(key,value rows), the database row pushed to the Ekstera gsheet by gsheetEkstera.py
+#(key,value rows), the database row pushed to the database gsheet by gsheetInternal.py
 #usage (in the case directory): python3 postInternal.py [--avgCycles N] [--gsheet]
 #
 #fixed keys: JOB NAME DESCRIPTION RUN_DATE COMPLETION_DATE CELL_COUNT MESH_TIME SOLVE_TIME POST_TIME
@@ -247,7 +247,7 @@ def window(times, t0, t1):
 
 
 def clipped(x, y, x0, x1):
-    #samples of y(x) between x0 and x1 with the end points interpolated (x increasing)
+    #samples of y(x) between x0 and x1, end points interpolated
     inside = (x > x0) & (x < x1)
     return np.r_[x0, x[inside], x1], np.r_[np.interp(x0, x, y), y[inside], np.interp(x1, x, y)]
 
@@ -259,8 +259,8 @@ def integrate(t, y):
 
 
 def readCrank(caseDir, post):
-    #crank drive log (Time theta omega torqueGas torqueLoad powerElec F_<body> T_<body>), theta in deg
-    #accumulated from theta0 (start angle in dynamicMeshDict). returns (columns, array, theta0) or Nones
+    #reading the crank drive log, theta (deg) accumulated from theta0 (the start angle)
+    #returns (columns, array, theta0) or Nones
     names, crank = readDat(os.path.join(post, 'crank'), 'crank')
     if crank is None:
         return None, None, None
@@ -498,7 +498,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Summary of an internalSetup case (postInternal/summary.csv)')
     parser.add_argument('cases', nargs='*', default=['.'], help='case directories (default: current directory)')
     parser.add_argument('--avgCycles', type=int, default=1, help='average results over the last N complete cycles (default 1)')
-    parser.add_argument('--gsheet', action='store_true', help='push the summary to the Ekstera gsheet (gsheetEkstera.py)')
+    parser.add_argument('--gsheet', action='store_true', help='push the summary to the database gsheet (gsheetInternal.py)')
     args = parser.parse_args(argv)
     for case in args.cases:
         print('\n\tPost-processing %s...' % (os.path.abspath(case)))
@@ -510,8 +510,8 @@ def main(argv=None):
                 print('\t\t%-12s %s' % (key, summary[key]))
     if args.gsheet:
         sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-        import gsheetEkstera
-        gsheetEkstera.main(args.cases)
+        import gsheetInternal
+        gsheetInternal.main(args.cases)
 
 
 if __name__ == '__main__':

@@ -305,11 +305,9 @@ def writeTables(bodies, startAngle, freq, nCycles, step, tableDir):
 
 
 def writeCrankTables(bodies, startAngle, step, tableDir):
-    #constant/tables/<body>Crank for DRIVE crank: (crank angle deg, displacement m) over one cycle,
-    #0 to 360 deg (read with outOfBounds repeat), zero at the start angle
+    #writing constant/tables/<body>Crank for DRIVE crank, displacement vs crank angle over one cycle
     os.makedirs(tableDir, exist_ok=True)
-    #the period is the table range, so the grid must end at exactly 360; the start angle is a grid
-    #point so the interpolated displacement is exactly zero there
+    #the table has to end at exactly 360 (outOfBounds repeat), the start angle is a grid point so it's zero there
     angles = np.linspace(0.0, 360.0, int(math.ceil(360.0/step - 1e-9)) + 1)
     angles = np.unique(np.append(angles, np.mod(startAngle, 360.0)))
     names = []
