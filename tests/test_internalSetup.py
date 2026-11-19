@@ -321,6 +321,10 @@ def test_compressible_dicts_unchanged(tmp_path, monkeypatch, repo_root):
     assert 'pRef' not in (tmp_path / 'system/fvSolution').read_text()
     fos = (tmp_path / 'system/internalFunctionObjects').read_text()
     assert 'gasMass' in fos and 'fields          (p T rho);' in fos
+    #wallHeatFlux: .dat every step, the field only at the write times
+    heat = fos[fos.index('wallHeatFlux\n{'):]
+    heat = heat[:heat.index('}')]
+    assert 'executeControl  timeStep;' in heat and 'writeControl    writeTime;' in heat
 
 
 #----- motion file path
@@ -345,3 +349,46 @@ def test_motion_file_path(tmp_path, monkeypatch):
     for value in (['required'], [''], ['missing.csv']):
         with pytest.raises(SystemExit):
             get({'MOTION_FILE': value}, 'MOVE-d', str(case))
+
+
+#----- crank drive
+
+def test_crank_option(repo_root):
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    assert writeInternal.getCrank(full) is None
+    full['MESH_MOTION']['DRIVE'] = ['crank']
+    crank = writeInternal.getCrank(full)
+    assert crank['LOAD'] == 'generator' and crank['OMEGA0'] == pytest.approx(2*np.pi*10)
+    #compressible: the bounce space is at the charge pressure
+    assert crank['P_REF'] == float(full['GLOBAL_MATERIAL']['CHARGE_PRESSURE'][0]) and crank['RHO_INF'] == 1.0
+    text = writeInternal.crankEntries(crank, 86.0)
+    assert 'theta0          86;' in text and 'load            generator;' in text and 'generator { k 1;' in text
+    full['MESH_MOTION']['P_BUFFER'] = ['2e5']
+    assert writeInternal.getCrank(full)['P_REF'] == 2e5
+    #incompressible: kinematic p, forces with the gas density
+    full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['pimpleFoam']
+    crank = writeInternal.getCrank(full)
+    assert crank['P_REF'] == 0.0 and crank['RHO_INF'] == pytest.approx(1.161, rel=1e-3)
+    for key, value in (('DRIVE', 'free'), ('LOAD', 'brake'), ('INERTIA', '0'), ('GEN_K', '0')):
+        bad = {s: dict(v) for s, v in full.items()}
+        bad['MESH_MOTION'][key] = [value]
+        with pytest.raises(SystemExit):
+            writeInternal.getCrank(bad)
+    #fixed speed needs no inertia
+    full['MESH_MOTION']['LOAD'] = ['speed']
+    full['MESH_MOTION']['INERTIA'] = ['0']
+    assert writeInternal.getCrank(full)['LOAD'] == 'speed'
+
+
+def test_crank_scripts_compile_the_library(tmp_path, monkeypatch, repo_root):
+    case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a'])
+    assert 'wmake' not in (case / 'runScript').read_text()
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    full['MESH_MOTION']['DRIVE'] = ['crank']
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    run = (case / 'runScript').read_text()
+    assert "cd '/opt/caseSetup/foamLibs/stirlingMotion' && wmake libso" in run
+    assert run.index('wmake libso') < run.index('createZeroDirectory')
+    motion = (case / 'motionCheckScript').read_text()
+    assert motion.index('wmake libso') < motion.index('moveDynamicMesh -parallel')

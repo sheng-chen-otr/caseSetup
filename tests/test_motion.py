@@ -180,6 +180,22 @@ def test_tables_start_at_zero_and_share_times(tmp_path):
     assert float(last.strip()[1:].split()[0]) == pytest.approx(0.2)
 
 
+def test_crank_tables_one_cycle_zero_at_start(tmp_path):
+    zones, bodies = _engine(0.002)
+    #0.7 deg does not divide 360: the grid must still end at exactly 360 (the table period)
+    names = mu.writeCrankTables(bodies, 90.0, 0.7, str(tmp_path))
+    assert names == ['displacerCrank', 'pistonCrank']
+    for body, name in zip(bodies, names):
+        lines = open(tmp_path / name).read().splitlines()
+        rows = np.array([[float(v) for v in l.strip()[1:-1].split()] for l in lines[2:-1]])
+        assert int(lines[0]) == len(rows)
+        assert rows[0, 0] == 0.0 and rows[-1, 0] == 360.0 and np.all(np.diff(rows[:, 0]) > 0)
+        assert rows[0, 1] == pytest.approx(rows[-1, 1])
+        assert np.interp(90.0, rows[:, 0], rows[:, 1]) == pytest.approx(0.0, abs=1e-9)
+        #same displacement as the time tables: shift(theta) - shift(start)
+        assert rows[100, 1] == pytest.approx(float(body.shift(rows[100, 0]) - body.shift(90.0)))
+
+
 #----- geometry translation
 
 STL2 = """solid crown

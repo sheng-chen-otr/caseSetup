@@ -176,3 +176,7 @@ credentials.json
 
 # clause
 *.md
+
+# wmake build output of the OpenFOAM libraries
+foamLibs/*/Make/linux*
+foamLibs/*/lnInclude/

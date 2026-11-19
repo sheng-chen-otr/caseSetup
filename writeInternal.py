@@ -497,10 +497,15 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict):
                  {'NUM_PROCS': compute['NUM_PROCS'][0], 'DECOMP_METHOD': compute['DECOMP_METHOD'][0]})
 
 
-def functionObject(name, entries):
+def functionObject(name, entries, fieldWriter=False):
     #one function object block, written every time step
+    #fieldWriter: the object writes a field in write() (wallHeatFlux) and its .dat in execute(), so
+    #execute every step and write the field only at the write times (else a time dir every step)
     lines = ['%s' % (name), '{'] + ['    %-15s %s' % (key, val) for key, val in entries]
-    lines += ['    writeControl    timeStep;', '    writeInterval   1;', '}']
+    if fieldWriter:
+        lines += ['    executeControl  timeStep;', '    executeInterval 1;', '    writeControl    writeTime;', '}']
+    else:
+        lines += ['    writeControl    timeStep;', '    writeInterval   1;', '}']
     return '\n'.join(lines)
 
 
@@ -522,8 +527,8 @@ def writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo=None)
         fos.append(functionObject('gasMass', volume + [('operation', 'volIntegrate;'), ('fields', '(rho);'),
                                                        ('writeFields', 'false;')]))
         fos.append(functionObject('wallHeatFlux', [('type', 'wallHeatFlux;'), ('libs', '(fieldFunctionObjects);'),
-                                                   ('patches', '(%s);' % (' '.join(allPatches))),
-                                                   ('writeFields', 'false;')]))
+                                                   ('patches', '(%s);' % (' '.join(allPatches)))],
+                                   fieldWriter=True))
     if motionInfo:
         #kinematic p for incompressible runs: forces scaled by the gas density at the charge state
         if incompressible:
@@ -575,6 +580,61 @@ def getMotionFilePath(setup, section, caseDir):
     return path
 
 
+def getCrank(fullCaseSetupDict):
+    #MESH_MOTION DRIVE crank: the gas forces turn a flywheel (crank angle and speed are solved, FREQ is
+    #the start speed), DRIVE prescribed: tables vs time at FREQ. returns None for prescribed
+    meshMotion = fullCaseSetupDict['MESH_MOTION']
+    drive = meshMotion.get('DRIVE', ['prescribed'])[0]
+    if drive == 'prescribed':
+        return None
+    if drive != 'crank':
+        sys.exit('ERROR! MESH_MOTION DRIVE must be prescribed or crank!')
+    crank = {'LOAD': meshMotion['LOAD'][0]}
+    if crank['LOAD'] not in ('speed', 'torque', 'damper', 'generator'):
+        sys.exit('ERROR! MESH_MOTION LOAD must be speed, torque, damper or generator!')
+    for key in ['INERTIA', 'LOAD_TORQUE', 'LOAD_DAMPING', 'GEN_K', 'GEN_R_LOAD', 'GEN_R_INT',
+                'FRICTION_TORQUE', 'FRICTION_COEFF']:
+        crank[key] = float(meshMotion[key][0])
+    if crank['LOAD'] != 'speed' and crank['INERTIA'] <= 0:
+        sys.exit('ERROR! MESH_MOTION INERTIA must be > 0 (flywheel, crank and the parts turning with it, kg m2)')
+    if crank['LOAD'] == 'generator' and (crank['GEN_K'] <= 0 or crank['GEN_R_LOAD'] + crank['GEN_R_INT'] <= 0):
+        sys.exit('ERROR! MESH_MOTION generator needs GEN_K > 0 and GEN_R_LOAD + GEN_R_INT > 0')
+    crank['OMEGA0'] = 2.0*math.pi*float(getVal(fullCaseSetupDict, 'GLOBAL_CONTROL', 'FREQ'))
+
+    #pressure behind the bodies (bounce space, not modelled): units of p
+    if getFlow(fullCaseSetupDict) == 'compressible':
+        pBuffer = meshMotion['P_BUFFER'][0]
+        crank['P_REF'] = float(getVal(fullCaseSetupDict, 'GLOBAL_MATERIAL', 'CHARGE_PRESSURE')) if pBuffer == 'charge' else float(pBuffer)
+        crank['RHO_INF'] = 1.0
+    else:
+        crank['P_REF'] = 0.0
+        crank['RHO_INF'] = getGasDensity(fullCaseSetupDict)
+        if crank['LOAD'] != 'speed':
+            print('\t\tWARNING: DRIVE crank with an incompressible solver: the gas is not compressed, so the piston '
+                  'torque is not physical (use LOAD speed, or rhoPimpleFoam)')
+    return crank
+
+
+def crankEntries(crank, startAngle):
+    #crank sub-dictionary of dynamicMeshDict
+    lines = ['theta0          %.9g;   //crank angle at the start (meshing) angle, deg' % (startAngle),
+             'omega0          %.9g;   //start speed, rad/s (FREQ)' % (crank['OMEGA0']),
+             'inertia         %.9g;   //kg m2' % (crank['INERTIA']),
+             'load            %s;' % (crank['LOAD'])]
+    if crank['LOAD'] == 'torque':
+        lines.append('torque          %.9g;   //N m' % (crank['LOAD_TORQUE']))
+    elif crank['LOAD'] == 'damper':
+        lines.append('damping         %.9g;   //N m s' % (crank['LOAD_DAMPING']))
+    elif crank['LOAD'] == 'generator':
+        lines.append('generator { k %.9g; RLoad %.9g; RInternal %.9g; }   //V s/rad, ohm, ohm'
+                     % (crank['GEN_K'], crank['GEN_R_LOAD'], crank['GEN_R_INT']))
+    lines += ['frictionTorque  %.9g;   //N m, against the rotation' % (crank['FRICTION_TORQUE']),
+              'frictionCoeff   %.9g;   //N m s' % (crank['FRICTION_COEFF']),
+              'pRef            %.9g;   //pressure behind the bodies (units of p)' % (crank['P_REF']),
+              'rhoInf          %.9g;   //density for kinematic p' % (crank['RHO_INF'])]
+    return '\n'.join('        %s' % (line) for line in lines)
+
+
 def getMoveSections(fullCaseSetupDict):
     return [section for section in fullCaseSetupDict if section.startswith('MOVE')]
 
@@ -597,6 +657,7 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
     control = fullCaseSetupDict['GLOBAL_CONTROL']
     freq, nCycles = float(control['FREQ'][0]), float(control['N_CYCLES'][0])
     baseCell = float(getVal(fullCaseSetupDict, 'GLOBAL_REFINEMENT', 'BASE_CELL'))
+    getCrank(fullCaseSetupDict)
 
     #triangles per PID of every geometry, scaled to metres
     geomFiles = {stripExt(geom): geom for geom in geomDict}
@@ -761,12 +822,46 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
     #tables, dynamicMeshDict, topoSetDict (motion zones), pointDisplacement, controlDictMotion
     print('\n\tWriting mesh motion dicts...')
     zones = motionInfo['zones']
-    motionUtilities.writeTables(motionInfo['bodies'], motionInfo['startAngle'], motionInfo['freq'],
-                                motionInfo['nCycles'], motionInfo['step'], 'constant/tables')
-    tableLines = ['        (%s %s)' % (zone.name, 'zeroTable' if zone.body is None else '%sTable' % (zone.body.name))
-                  for zone in zones]
-    copyTemplate(templateLoc, 'constant/dynamicMeshDict', 'constant/dynamicMeshDict',
-                 {'INTERPOLATION_TABLES': '\n'.join(tableLines)})
+    crank = getCrank(fullCaseSetupDict)
+    #tables of the other drive from an earlier setup of this case
+    for body in motionInfo['bodies']:
+        old = os.path.join('constant', 'tables', '%s%s' % (body.name, 'Table' if crank else 'Crank'))
+        if os.path.isfile(old):
+            os.remove(old)
+    if crank:
+        #tables vs crank angle, the solver finds the crank angle from the gas forces
+        motionUtilities.writeCrankTables(motionInfo['bodies'], motionInfo['startAngle'], motionInfo['step'],
+                                         'constant/tables')
+        bodyLines = []
+        for body in motionInfo['bodies']:
+            patches = ' '.join('"%s_%s"' % (body.source, pid) for pid in body.movedPids)
+            bodyLines.append('        %s\n        {\n            patches (%s);\n            position { type tableFile; '
+                             'file "<constant>/tables/%sCrank"; outOfBounds repeat; }\n        }'
+                             % (body.name, patches, body.name))
+        zoneLines = ['        (%s %s)' % (zone.name, 'none' if zone.body is None else zone.body.name) for zone in zones]
+        copyTemplate(templateLoc, 'constant/dynamicMeshDictCrank', 'constant/dynamicMeshDict',
+                     {'BODIES': '\n'.join(bodyLines), 'ZONES': '\n'.join(zoneLines),
+                      'CRANK': crankEntries(crank, motionInfo['startAngle'])})
+        omega = crank['OMEGA0']
+        print('\t\tcrank drive: start %.4g Hz, inertia %.4g kg m2, load %s' % (motionInfo['freq'], crank['INERTIA'],
+                                                                           crank['LOAD']))
+        if crank['LOAD'] == 'generator':
+            rTot = crank['GEN_R_LOAD'] + crank['GEN_R_INT']
+            current = crank['GEN_K']*omega/rTot
+            print('\t\tgenerator at the start speed: torque %.4g N m, shaft power %.4g W, electrical power %.4g W'
+                  % (crank['GEN_K']*current, crank['GEN_K']*current*omega, current**2*crank['GEN_R_LOAD']))
+        elif crank['LOAD'] == 'damper':
+            print('\t\tdamper at the start speed: torque %.4g N m, power %.4g W'
+                  % (crank['LOAD_DAMPING']*omega, crank['LOAD_DAMPING']*omega**2))
+        elif crank['LOAD'] == 'torque':
+            print('\t\tload torque %.4g N m: power %.4g W at the start speed' % (crank['LOAD_TORQUE'], crank['LOAD_TORQUE']*omega))
+    else:
+        motionUtilities.writeTables(motionInfo['bodies'], motionInfo['startAngle'], motionInfo['freq'],
+                                    motionInfo['nCycles'], motionInfo['step'], 'constant/tables')
+        tableLines = ['        (%s %s)' % (zone.name, 'zeroTable' if zone.body is None else '%sTable' % (zone.body.name))
+                      for zone in zones]
+        copyTemplate(templateLoc, 'constant/dynamicMeshDict', 'constant/dynamicMeshDict',
+                     {'INTERPOLATION_TABLES': '\n'.join(tableLines)})
     actions = []
     for zone in zones:
         actions.append('    { name %sSet; type faceSet; action new; source patchToFace; patch "%s"; }'
@@ -789,8 +884,11 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
         text = text.replace(key, val)
     with open('system/controlDictMotion', 'w') as f:
         f.write(text)
-    print('\t\t%d motion zones, tables for %g cycles from %.1f deg' % (len(zones), motionInfo['nCycles'],
-                                                                      motionInfo['startAngle']))
+    if crank:
+        print('\t\t%d motion zones, crank angle tables (one cycle) from %.1f deg' % (len(zones), motionInfo['startAngle']))
+    else:
+        print('\t\t%d motion zones, tables for %g cycles from %.1f deg' % (len(zones), motionInfo['nCycles'],
+                                                                          motionInfo['startAngle']))
     return [zone.name for zone in zones]
 
 
@@ -805,6 +903,9 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     solver = getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER')
     motionSteps = ['topoSet', 'reorderFaceZones', 'pointDisplacement', 'motionCheck']
     skipSteps = list(motionSteps) if not motionZones else []
+    #the crank drive motion solver is compiled in the job (wmake skips it when up to date)
+    if not motionZones or getCrank(fullCaseSetupDict) is None:
+        skipSteps.append('compileLib')
     export = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('EXPORT', ['ensight'])[0].lower()
     if export not in ('ensight', 'none'):
         sys.exit('ERROR! GLOBAL_COMPUTE_SETUP EXPORT must be ensight or none!')

@@ -246,10 +246,41 @@ def window(times, t0, t1):
     return (times >= t0 - 1e-12) & (times <= t1 + 1e-12)
 
 
+def clipped(x, y, x0, x1):
+    #samples of y(x) between x0 and x1 with the end points interpolated (x increasing)
+    inside = (x > x0) & (x < x1)
+    return np.r_[x0, x[inside], x1], np.r_[np.interp(x0, x, y), y[inside], np.interp(x1, x, y)]
+
+
 def integrate(t, y):
     #trapezoidal rule (np.trapz is deprecated in newer numpy)
     t, y = np.asarray(t, float), np.asarray(y, float)
     return float(np.sum(0.5*(y[1:] + y[:-1])*np.diff(t))) if len(t) > 1 else 0.0
+
+
+def readCrank(caseDir, post):
+    #crank drive log (Time theta omega torqueGas torqueLoad powerElec F_<body> T_<body>), theta in deg
+    #accumulated from theta0 (start angle in dynamicMeshDict). returns (columns, array, theta0) or Nones
+    names, crank = readDat(os.path.join(post, 'crank'), 'crank')
+    if crank is None:
+        return None, None, None
+    theta0 = None
+    path = os.path.join(caseDir, 'constant', 'dynamicMeshDict')
+    if os.path.isfile(path):
+        with open(path) as f:
+            match = re.search(r'^\s*theta0\s+([-0-9.eE+]+)\s*;', f.read(), re.M)
+        if match:
+            theta0 = float(match.group(1))
+    if theta0 is None:
+        theta0 = float(crank[0, 1])
+    #the run starts at t = 0 at theta0 (the log starts after the first step)
+    if crank[0, 1] > theta0:
+        crank = np.vstack([np.r_[0.0, theta0, crank[0, 2:]], crank])
+    if np.any(np.diff(crank[:, 1]) <= 0):
+        print('\tWARNING: the crank stopped or turned backwards: cycles counted up to the first stop')
+        stop = int(np.argmax(np.diff(crank[:, 1]) <= 0))
+        crank = crank[:stop + 1]
+    return names, crank, theta0
 
 
 #----- summary
@@ -299,11 +330,18 @@ def buildSummary(caseDir, avgCycles=1):
             summary['COMPLETION_DATE'] = formatDate(datetime.datetime.fromtimestamp(os.path.getmtime(logs[-1])))
     exportTime = logDuration(os.path.join(caseDir, 'log.foamToEnsight')) if os.path.isfile(os.path.join(caseDir, 'log.foamToEnsight')) else None
 
-    #run status: complete cycles from t = 0 (the motion tables start at 0)
+    #run status: complete cycles from t = 0 (the motion tables start at 0), by crank angle for DRIVE crank
     post = os.path.join(caseDir, 'postProcessing')
     names, gasAvg = readDat(os.path.join(post, 'gasAvg'), 'volFieldValue')
     endTime = float(gasAvg[-1, 0]) if gasAvg is not None else 0.0
-    cyclesDone = int(np.floor(endTime*freq + 1e-6))
+    crankNames, crank, theta0 = readCrank(caseDir, post)
+    summary['DRIVE'] = getSetting(config, 'MESH_MOTION', 'DRIVE', 'prescribed') if bodies else ''
+    if crank is not None:
+        summary['LOAD'] = getSetting(config, 'MESH_MOTION', 'LOAD')
+        summary['INERTIA'] = getSetting(config, 'MESH_MOTION', 'INERTIA')
+        cyclesDone = int(np.floor((crank[-1, 1] - theta0)/360.0 + 1e-9))
+    else:
+        cyclesDone = int(np.floor(endTime*freq + 1e-6))
     summary['END_TIME'] = round(endTime, 6)
     summary['CYCLES_DONE'] = cyclesDone
     summary['FINISHED'] = 'yes' if summary['COMPLETION_DATE'] else 'no'
@@ -313,7 +351,11 @@ def buildSummary(caseDir, avgCycles=1):
         print('\tWARNING: no complete cycle yet (end time %.6g s at %g Hz), results left empty' % (endTime, freq))
         summary['POST_TIME'] = hours(time.time() - start + (exportTime or 0.0))
         return summary
-    t0, t1 = (cyclesDone - nAvg)/freq, cyclesDone/freq
+    if crank is not None:
+        thetaEdges = theta0 + 360.0*np.array([cyclesDone - nAvg, cyclesDone])
+        t0, t1 = (float(t) for t in np.interp(thetaEdges, crank[:, 1], crank[:, 0]))
+    else:
+        t0, t1 = (cyclesDone - nAvg)/freq, cyclesDone/freq
     print('\taveraging over cycles %d to %d (t = %.6g to %.6g s)' % (cyclesDone - nAvg + 1, cyclesDone, t0, t1))
 
     #gas averages over the window
@@ -326,24 +368,60 @@ def buildSummary(caseDir, avgCycles=1):
                 summary['P_MAX'] = float(gasAvg[sel, k].max())
                 summary['P_MIN'] = float(gasAvg[sel, k].min())
 
-    #work on the moving bodies: integral of F_z v dt per cycle
-    totalWork = 0.0
-    for body in bodies:
-        fNames, force = readDat(os.path.join(post, 'force_%s' % (body)), 'force')
-        table = os.path.join(caseDir, 'constant', 'tables', '%sTable' % (body))
-        if force is None or not os.path.isfile(table):
-            print('\tWARNING: no force output or motion table for %s, its work is left out' % (body))
-            continue
-        tTable, dz = readTable(table)
-        sel = window(force[:, 0], t0, t1)
-        t = force[sel, 0]
-        fz = force[sel, fNames.index('total_z')]
-        work = integrate(t, fz*tableVelocity(tTable, dz, t))/nAvg
-        summary['WORK_%s' % (body)] = work
-        summary['FORCE_Z_AMP_%s' % (body)] = float(0.5*(fz.max() - fz.min()))
-        totalWork += work
-    summary['AVG_ENERGY'] = totalWork
-    summary['AVG_POWER'] = totalWork*freq
+    #crank drive: work per body = integral of its crank torque over the crank angle, speed and load
+    if crank is not None:
+        col = dict((name, k) for k, name in enumerate(crankNames))
+
+        def overCycles(values):
+            #values over the averaging cycles, ends interpolated to the exact crank angles
+            return clipped(crank[:, 1], values, thetaEdges[0], thetaEdges[1])[1]
+
+        theta = np.radians(clipped(crank[:, 1], crank[:, 1], thetaEdges[0], thetaEdges[1])[0])
+        t = overCycles(crank[:, 0])
+        totalWork = 0.0
+        for body in bodies:
+            if 'T_%s' % (body) not in col:
+                print('\tWARNING: no crank torque for %s in the crank log, its work is left out' % (body))
+                continue
+            work = integrate(theta, overCycles(crank[:, col['T_%s' % (body)]]))/nAvg
+            summary['WORK_%s' % (body)] = work
+            fz = overCycles(crank[:, col['F_%s' % (body)]])
+            summary['FORCE_Z_AMP_%s' % (body)] = float(0.5*(fz.max() - fz.min()))
+            totalWork += work
+        omega = overCycles(crank[:, col['omega']])
+        freqMean = nAvg/(t1 - t0)
+        summary['AVG_ENERGY'] = totalWork
+        summary['AVG_POWER'] = totalWork*freqMean
+        summary['FREQ_MEAN'] = freqMean
+        summary['FREQ_MIN'] = float(omega.min()/(2.0*np.pi))
+        summary['FREQ_MAX'] = float(omega.max()/(2.0*np.pi))
+        summary['TORQUE_GAS_MEAN'] = integrate(theta, overCycles(crank[:, col['torqueGas']]))/(theta[-1] - theta[0])
+        summary['POWER_LOAD'] = integrate(t, overCycles(crank[:, col['torqueLoad']]*crank[:, col['omega']]))/(t1 - t0)
+        summary['POWER_ELEC'] = integrate(t, overCycles(crank[:, col['powerElec']]))/(t1 - t0)
+        #convergence: mean speed of the last cycle minus the one before
+        if cyclesDone >= 2:
+            tc = np.interp(theta0 + 360.0*np.array([cyclesDone - 2, cyclesDone - 1, cyclesDone]), crank[:, 1], crank[:, 0])
+            summary['FREQ_CHANGE'] = float(1.0/(tc[2] - tc[1]) - 1.0/(tc[1] - tc[0]))
+
+    #prescribed motion: work on the moving bodies = integral of F_z v dt per cycle
+    else:
+        totalWork = 0.0
+        for body in bodies:
+            fNames, force = readDat(os.path.join(post, 'force_%s' % (body)), 'force')
+            table = os.path.join(caseDir, 'constant', 'tables', '%sTable' % (body))
+            if force is None or not os.path.isfile(table):
+                print('\tWARNING: no force output or motion table for %s, its work is left out' % (body))
+                continue
+            tTable, dz = readTable(table)
+            sel = window(force[:, 0], t0, t1)
+            t = force[sel, 0]
+            fz = force[sel, fNames.index('total_z')]
+            work = integrate(t, fz*tableVelocity(tTable, dz, t))/nAvg
+            summary['WORK_%s' % (body)] = work
+            summary['FORCE_Z_AMP_%s' % (body)] = float(0.5*(fz.max() - fz.min()))
+            totalWork += work
+        summary['AVG_ENERGY'] = totalWork
+        summary['AVG_POWER'] = totalWork*freq
 
     #pressure on the moving faces (p_<patch> function objects)
     for foDir in sorted(glob.glob(os.path.join(post, 'p_*'))):

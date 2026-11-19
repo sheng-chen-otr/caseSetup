@@ -185,6 +185,43 @@ def test_summary_csv_round_trip(tmp_path):
     assert back['NAME'] == 'run01' and list(back)[:3] == ['JOB', 'NAME', 'DESCRIPTION']
 
 
+def test_summary_crank_drive(tmp_path):
+    #crank drive: speeding up from 10 Hz, piston torque B + A sin(theta), generator c*omega
+    case = tmp_path / 'JOB01' / 'CASES' / 'crank01'
+    (case / 'constant').mkdir(parents=True)
+    (case / 'fullCaseSetupDict').write_text(SETUP + '\n[MESH_MOTION]\nDRIVE = crank\nLOAD = generator\nINERTIA = 0.02\n')
+    (case / 'constant' / 'dynamicMeshDict').write_text('crank\n{\n        theta0          30;   //deg\n}\n')
+    theta0, w0, alpha, A, B, c = 30.0, 2*math.pi*FREQ, 2*math.pi*5.0, 3.0, 0.5, 0.01
+    t = np.linspace(0.0, 0.33, 20001)[1:]
+    theta = theta0 + np.degrees(w0*t + 0.5*alpha*t**2)
+    omega = w0 + alpha*t
+    torque = B + A*np.sin(np.radians(theta))
+    rows = np.column_stack([t, theta, omega, torque, c*omega, 0.9*c*omega**2, 10*torque, torque])
+    header = ['Time', 'theta', 'omega', 'torqueGas', 'torqueLoad', 'powerElec', 'F_piston', 'T_piston']
+    half = len(t)//2
+    post = case / 'postProcessing' / 'crank'
+    _dat(post / '0' / 'crank.dat', header, rows[:half + 3], '# crank')
+    _dat(post / ('%.12g' % t[half]) / 'crank.dat', header, rows[half:], '# crank')
+
+    s = postInternal.buildSummary(str(case), avgCycles=1)
+    #revolutions in 0.33 s: (w0 t + alpha t^2/2)/(2 pi) = 3.57
+    assert s['DRIVE'] == 'crank' and s['LOAD'] == 'generator' and s['CYCLES_DONE'] == 3
+    assert s['WORK_piston'] == pytest.approx(2*math.pi*B, rel=1e-4)
+    assert s['AVG_ENERGY'] == pytest.approx(2*math.pi*B, rel=1e-4)
+    assert s['FORCE_Z_AMP_piston'] == pytest.approx(10*A, rel=1e-3)
+    #third cycle: phase 4 pi .. 6 pi
+    tc = [(-w0 + math.sqrt(w0**2 + 2*alpha*a))/alpha for a in (4*math.pi, 6*math.pi)]
+    assert s['FREQ_MEAN'] == pytest.approx(1/(tc[1] - tc[0]), rel=1e-4)
+    assert s['AVG_POWER'] == pytest.approx(2*math.pi*B/(tc[1] - tc[0]), rel=1e-4)
+    assert s['FREQ_MIN'] == pytest.approx((w0 + alpha*tc[0])/(2*math.pi), rel=1e-3)
+    assert s['FREQ_MAX'] == pytest.approx((w0 + alpha*tc[1])/(2*math.pi), rel=1e-3)
+    assert s['FREQ_CHANGE'] > 0
+    assert s['TORQUE_GAS_MEAN'] == pytest.approx(B, rel=1e-3)
+    wMeanSq = (((w0 + alpha*tc[1])**3 - (w0 + alpha*tc[0])**3)/(3*alpha))/(tc[1] - tc[0])
+    assert s['POWER_ELEC'] == pytest.approx(0.9*c*wMeanSq, rel=1e-4)
+    assert s['POWER_LOAD'] == pytest.approx(c*wMeanSq, rel=1e-4)
+
+
 def test_not_internal_case(tmp_path):
     (tmp_path / 'fullCaseSetupDict').write_text('[TITLES]\nCASENAME = x\n')
     with pytest.raises(SystemExit):
