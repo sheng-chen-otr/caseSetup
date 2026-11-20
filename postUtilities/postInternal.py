@@ -42,7 +42,7 @@ import numpy as np
 FIXED_KEYS = ['JOB', 'NAME', 'DESCRIPTION', 'COMMENTS', 'RUN_DATE', 'COMPLETION_DATE', 'CELL_COUNT',
               'MESH_TIME', 'SOLVE_TIME', 'POST_TIME', 'AVG_POWER', 'AVG_ENERGY']
 MESH_LOGS = ['log.blockMesh', 'log.decomposePar', 'log.snappyHexMesh', 'log.topoSet', 'log.checkMesh']
-SUMMARY_DIR = 'postInternal'
+
 
 
 #----- case setup
@@ -465,7 +465,7 @@ def buildSummary(caseDir, avgCycles=1):
 
 
 def writeSummary(summary, caseDir):
-    outDir = os.path.join(caseDir, SUMMARY_DIR)
+    outDir = os.path.join(caseDir)
     os.makedirs(outDir, exist_ok=True)
     path = os.path.join(outDir, 'summary.csv')
     with open(path, 'w', newline='') as f:
@@ -477,7 +477,7 @@ def writeSummary(summary, caseDir):
 
 def readSummary(caseDir):
     #summary.csv back as {key: value}, numbers as float/int
-    path = os.path.join(caseDir, SUMMARY_DIR, 'summary.csv')
+    path = os.path.join(caseDir, 'summary.csv')
     if not os.path.isfile(path):
         sys.exit('ERROR! %s not found: run postInternal.py in the case first' % (path))
     summary = {}
