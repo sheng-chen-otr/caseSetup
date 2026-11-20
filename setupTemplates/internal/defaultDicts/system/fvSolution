@@ -17,20 +17,12 @@ FoamFile
 solvers
 {
     "rho.*"     { solver diagonal; }
-    p           { solver GAMG; smoother GaussSeidel; tolerance 1e-8; relTol 0.01; }
-    pFinal      { $p; relTol 0; }
-    "(U|e|k|omega).*" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-8; relTol 0; }
+    "(p|p_rgh)" { solver GAMG; smoother GaussSeidel; tolerance 1e-8; relTol <P_RELTOL>; }
+    "(p|p_rgh)Final" { solver GAMG; smoother GaussSeidel; tolerance 1e-8; relTol 0; }
+    "(U|e|k|omega|epsilon).*" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-8; relTol <U_RELTOL>; }
 }
-PIMPLE
-{
-    momentumPredictor yes;
-    nOuterCorrectors <N_OUTER_CORR>;
-    nCorrectors <N_CORR>;
-    nNonOrthogonalCorrectors <N_NONORTH_CORR>;
-    correctPhi no;
-<P_REF>
-}
+
+<ALGORITHM>
 
 <RELAXATION>
-
 // ************************************************************************* //

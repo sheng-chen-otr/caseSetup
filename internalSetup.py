@@ -29,8 +29,8 @@ from setupCore import __version__
 import writeInternal
 
 #available addon keywords (REGN, SMP come in a later phase)
-addonKeyWords = ['WALL', 'MOVE', 'REGN', 'SMP']
-supportedPrefixes = ['WALL', 'MOVE']
+addonKeyWords = ['WALL', 'MOVE', 'FAN', 'POR', 'REGN', 'SMP']
+supportedPrefixes = ['WALL', 'MOVE', 'FAN', 'POR']
 geomColumnNames = ['scale', 'refinement', 'layers', 'expansion', 'wallmodel']
 configName = 'internalSetup'
 
@@ -56,11 +56,58 @@ def parseArgs(argv=None):
     return parser.parse_args(argv)
 
 
-def findFromSections(writeCaseSetupDict, geomNames):
+def findFromSections(writeCaseSetupDict, geomNames, pidDict=None):
     #MOVE sections without their own file (FROM = <geometry>, like a piston crown in the chamber)
     #FROM has to point at a geometry still in GEOM, otherwise it's left over from a removed part
-    return [s for s in writeCaseSetupDict if s.startswith('MOVE') and s not in geomNames
-            and writeCaseSetupDict[s].get('FROM', ['self'])[0] in geomNames]
+    #with pidDict: ZONE_PIDS also has to match a PID of that geometry, otherwise the PID was removed
+    sections = []
+    for s in writeCaseSetupDict:
+        source = writeCaseSetupDict[s].get('FROM', ['self'])[0]
+        if not s.startswith('MOVE') or s in geomNames or source not in geomNames:
+            continue
+        keywords = [k for k in writeCaseSetupDict[s].get('ZONE_PIDS', ['']) if k != '']
+        if pidDict is not None and keywords and source in pidDict:
+            if not any(kw.lower() in pid.lower() for kw in keywords for pid in pidDict[source]):
+                print('\t\t[%s] ZONE_PIDS %s matches no PID of %s any more, section removed' % (s, ' '.join(keywords), source))
+                continue
+        sections.append(s)
+    return sections
+
+
+def findPidBodies(pidDict):
+    #MOVE-<name> PIDs in files that are not MOVE files: one body per PID, {section: (geometry, pid)}
+    bodies = {}
+    for geomName, pids in pidDict.items():
+        if geomName.startswith('MOVE'):
+            continue
+        for pid in pids:
+            if not pid.upper().startswith('MOVE-') or len(pid) <= len('MOVE-'):
+                continue
+            section = 'MOVE-%s' % (pid[len('MOVE-'):])
+            if section in bodies:
+                sys.exit('ERROR! PID %s is in %s and %s: MOVE- PIDs need unique names'
+                         % (pid, bodies[section][0], geomName))
+            bodies[section] = (geomName, pid)
+    return bodies
+
+
+def addPidBodies(writeCaseSetupDict, pidBodies, geomNames, moveItems):
+    #new [MOVE-<name>] section for each MOVE- PID: FROM, ZONE_PIDS and MOTION_COLUMN filled, the rest from defaultMove
+    #an existing section is kept as it is (only missing keys are added later)
+    updateFlag = False
+    for section, (geomName, pid) in pidBodies.items():
+        if section in geomNames:
+            print('\t\tWARNING: PID %s in %s has the same name as the geometry %s, no section added for it'
+                  % (pid, geomName, section))
+            continue
+        if section in writeCaseSetupDict:
+            continue
+        values = {'FROM': [geomName], 'ZONE_PIDS': [pid], 'MOTION_COLUMN': [section[len('MOVE-'):]]}
+        writeCaseSetupDict[section] = dict((key, values.get(key, [val])) for key, val in moveItems)
+        print('\n\tAdded [%s] for the PID %s in %s (FROM, ZONE_PIDS, MOTION_COLUMN set), please check it'
+              % (section, pid, geomName))
+        updateFlag = True
+    return updateFlag
 
 
 def copyPostSetup(execDir, caseDir):
@@ -119,13 +166,18 @@ def main(argv=None):
         sys.exit('ERROR! [GEOMETRY] section invalid!')
     geomDict = setupCore.geomToDict({}, geometryList, geomColumnNames)
     checkGeomPrefixes(geomDict)
-    for prefix, template, header in (('WALL', 'defaultWall', 'WALL_SETUP'), ('MOVE', 'defaultMove', 'MOVE_SETUP')):
+    for prefix, template, header in (('WALL', 'defaultWall', 'WALL_SETUP'), ('MOVE', 'defaultMove', 'MOVE_SETUP'),
+                                     ('FAN', 'defaultFan', 'FAN_SETUP'), ('POR', 'defaultPorous', 'POR_SETUP')):
         writeCaseSetupDict, flag = setupCore.checkAddonDefaults(
             geomDict, writeCaseSetupDict, templateLoc, prefix, template, header, keepExtra=True)
         updateFlag = updateFlag or flag
     geomNames = [setupCore.stripExt(geom) for geom in geomDict]
-    fromSections = findFromSections(writeCaseSetupDict, geomNames)
+    #MOVE- PIDs in WALL files become their own MOVE sections (FROM = that file)
+    pidDict = writeInternal.readGeomPIDs(geomDict, mshDir)
     moveItems = setupCore.readAddonTemplate(templateLoc, 'defaultMove', 'MOVE_SETUP')
+    if addPidBodies(writeCaseSetupDict, findPidBodies(pidDict), geomNames, moveItems):
+        updateFlag = True
+    fromSections = findFromSections(writeCaseSetupDict, geomNames, pidDict)
     for section in fromSections:
         if setupCore.fillAddonSection(writeCaseSetupDict, section, moveItems, keepExtra=True):
             updateFlag = True
@@ -134,8 +186,10 @@ def main(argv=None):
 
     #PIDs, mesh motion and BC groups, checked before anything is written to the case
     writeInternal.getFlow(fullCaseSetupDict)
-    pidDict = writeInternal.readGeomPIDs(geomDict, mshDir)
     motionInfo = writeInternal.buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir)
+    if motionInfo and writeInternal.isSteady(fullCaseSetupDict):
+        sys.exit('ERROR! %s is a steady solver: MOVE bodies need rhoPimpleFoam or pimpleFoam'
+                 % (fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SOLVER'][0]))
     movingPids = motionInfo['movingPids'] if motionInfo else {}
     wallGroups = writeInternal.getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids)
 
@@ -147,12 +201,15 @@ def main(argv=None):
                                       motionInfo['gapRefs'] if motionInfo else None)
     writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGroups)
     writeInternal.writeThermoInternal(templateLoc, fullCaseSetupDict)
+    fanNames = writeInternal.writeFanBaffles(geomDict, fullCaseSetupDict)
+    porous = writeInternal.getPorous(geomDict, fullCaseSetupDict)
+    writeInternal.writeFvOptionsInternal(porous, fullCaseSetupDict)
     writeInternal.writeTurbulenceInternal(templateLoc, fullCaseSetupDict)
     writeInternal.writeControlDictInternal(templateLoc, fullCaseSetupDict)
-    writeInternal.writeNumericsInternal(templateLoc, fullCaseSetupDict)
-    writeInternal.writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo)
+    writeInternal.writeNumericsInternal(templateLoc, fullCaseSetupDict, writeInternal.hasPressureBC(wallGroups))
+    writeInternal.writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo, porous)
     motionZones = writeInternal.writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict) if motionInfo else None
-    writeInternal.makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones)
+    writeInternal.makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones, fanNames)
 
     copyPostSetup(execDir, caseDir)
     fullCaseSetupDict = writeInternal.addSetupInfo(fullCaseSetupDict, wallGroups, motionInfo)

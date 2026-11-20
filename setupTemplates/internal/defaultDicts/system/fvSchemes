@@ -14,7 +14,7 @@ FoamFile
 }
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-ddtSchemes      { default Euler; }
+ddtSchemes      { default <DDT_SCHEME>; }
 gradSchemes     { default Gauss linear; }
 divSchemes
 {

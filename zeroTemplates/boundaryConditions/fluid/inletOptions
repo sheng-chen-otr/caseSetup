@@ -72,6 +72,47 @@ flowSpecification
             value       ${:VALUE.p};
         }
     }
+    //velocity normal to the patch (Un > 0 = into the domain)
+    normalVelocity
+    {
+        U
+        {
+            type        surfaceNormalFixedValue;
+            refValue    ${:VALUE.UnRef};
+            value       ${:VALUE.U};
+        }
+        p
+        {
+            type        zeroGradient;
+        }
+    }
+    volumeFlowRate
+    {
+        U
+        {
+            type        flowRateInletVelocity;
+            volumetricFlowRate ${:VALUE.volumetricFlowRate};
+            value       ${:VALUE.U};
+        }
+        p
+        {
+            type        zeroGradient;
+        }
+    }
+    fixedTotalPressure
+    {
+        U
+        {
+            type        pressureInletVelocity;
+            value       ${:VALUE.U};
+        }
+        p
+        {
+            type        totalPressure;
+            p0          ${:VALUE.p};
+            value       ${:VALUE.p};
+        }
+    }
 }
 
 // ************************************************************************* //

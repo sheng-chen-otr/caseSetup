@@ -200,6 +200,7 @@ Both bodies are driven by one CSV file with the shared crank angle, so the phase
 \end{lstlisting}
 \begin{itemize}
     \item \codeword{FROM} [\codeword{str}] - \codeword{self}: the body is its own \codeword{MOVE-<name>} file and the whole file moves. \codeword{<geometry>}: the body is made of PIDs in another file (e.g. the piston crown, a PID of \codeword{WALL-chamber}). Only its \codeword{ZONE_PIDS} faces move. A \codeword{FROM} section stays in the file as long as that geometry is in \codeword{GEOM}. The crown must be a separate, flat shell normal to z, slightly larger than the bore so that it seals.
+    \item A PID named \codeword{MOVE-<name>} in a WALL file (e.g. \codeword{MOVE-piston}) creates the section \codeword{[MOVE-<name>]} automatically: \codeword{FROM} = that file, \codeword{ZONE_PIDS} = the PID, \codeword{MOTION_COLUMN} = \codeword{<name>}, the other keys from the defaults, and the setup stops so it can be checked. Each such PID is its own body. When the PID is no longer in the file, the section is removed. A \codeword{ZONE_PIDS} keyword that is a whole PID name only takes that PID.
     \item \codeword{MOTION_FILE} [\codeword{path}] - motion CSV, required. Absolute, with \codeword{~} and \codeword{$VARIABLES} expanded, or relative to the case directory.
     \item \codeword{MOTION_COLUMN} [\codeword{str}] - column of this body in the CSV.
     \item \codeword{REF_ANGLE} [\codeword{float,deg}] - crank angle at which the geometry was exported. Before meshing, the tool moves the body from this angle to the start angle.
@@ -323,6 +324,73 @@ Generated scripts (each runs as a Slurm job with \codeword{sbatch}, or locally w
 
 \textbf{NOTE:} v2412 has a bug in \codeword{displacementInterpolation}: if the motion zones are not the first face zones in the mesh, every zone silently gets the wrong displacement. The scripts run \codeword{meshUtilities/reorderFaceZones.py} after \codeword{topoSet} to put them first. The crank drive solver matches zones by name and does not have this problem.
 
+\subsection{Through-Flow: Inlets, Outlets and Steady Solvers}\label{sec:throughFlow}
+For pipes, ducts and exhaust stacks the gas enters and leaves the domain. Inlets and outlets are BC groups on PIDs, in the same \codeword{WALL} section as the wall groups:
+\begin{lstlisting}
+    [WALL-stack]
+    U_DEFAULT = noSlip
+    T_DEFAULT = adiabatic
+    BC_GROUPS = stackIn stackOut stackWall
+    stackIn = PIDS inlet U massFlow 0.5 T fixed 600
+    stackOut = PIDS outlet P fixed 1e5
+    stackWall = PIDS wall T convective 10 300
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{U massFlow <kg/s>} - mass flow inlet (into the domain).
+    \item \codeword{U velocity <m/s>} - velocity normal to the patch, into the domain. \codeword{U velocity <ux> <uy> <uz>} - fixed velocity vector.
+    \item \codeword{P total <Pa>} - total pressure inlet, the flow follows from the pressure drop.
+    \item \codeword{P fixed <Pa>} - static pressure outlet, backflow allowed.
+    \item \codeword{T fixed <K>} - inlet temperature, or the temperature of backflow at an outlet. Default \codeword{INIT_T}.
+\end{itemize}
+Pressures are absolute in Pa. For incompressible runs the setup converts them to kinematic gauge pressure: (p $-$ \codeword{CHARGE_PRESSURE})/$\rho$. The inlet turbulence (k, $\omega$) comes from \codeword{TURB_INTENSITY} (default 0.05) and \codeword{TURB_LENGTH} (\codeword{auto} = 0.07 $\times$ the hydraulic diameter of a round inlet of the same area) at the mean inlet velocity. The setup prints each inlet's area and mean velocity.
+
+Solvers (\codeword{SOLVER} in \codeword{[GLOBAL_SIM_CONTROL]}):
+\begin{itemize}
+    \item \codeword{rhoSimpleFoam} - steady compressible.
+    \item \codeword{buoyantSimpleFoam} - steady compressible with gravity, \codeword{GRAVITY = 0 0 -9.81} (natural draft, hot stacks). Uses \codeword{heRhoThermo} and writes \codeword{constant/g}. The outlet pressure is set with \codeword{prghPressure}, so \codeword{P fixed} is the static pressure at the outlet.
+    \item \codeword{simpleFoam} - steady incompressible.
+    \item \codeword{rhoPimpleFoam}, \codeword{pimpleFoam} - transient, as for the Stirling cases.
+\end{itemize}
+Steady runs use \codeword{N_ITER} and \codeword{WRITE_ITER} in \codeword{[GLOBAL_CONTROL]} instead of the cycle keys, under-relax with \codeword{RELAX_P}, \codeword{RELAX_U}, \codeword{RELAX_E}, and stop early once the residuals drop below $10^{-4}$ (p) and $10^{-5}$ (U, e, k, $\omega$). Mesh motion needs a transient solver.
+
+\codeword{postInternal.py} reports, per inlet/outlet group and averaged over the last 50 iterations (steady) or the averaging cycles (transient): \codeword{MDOT_<group>} (kg/s, positive into the domain), \codeword{P_<group>} and \codeword{T_<group>} (area-averaged over the group's patches), \codeword{MDOT_IMBALANCE} (net / inflow) and \codeword{P_DROP} (inlets minus outlets). Steady runs get \codeword{flowConvergence.png}: residuals, flow, p and T against iteration.
+
+\subsection{Fans}
+A \codeword{FAN-<name>.stl} planar disk across the duct, slightly larger than the duct so it seals, becomes a fan pressure jump:
+\begin{lstlisting}
+    [FAN-disk]
+    FAN_PRESSURE_RISE = 100
+\end{lstlisting}
+The rise (Pa) acts in the direction of the disk's surface normal. \codeword{snappyHexMesh} makes an internal face zone. After the zero directory exists, \codeword{runScript} runs \codeword{createBaffles} (\codeword{system/createBafflesDict}), which turns it into the cyclic pair \codeword{<name>_master} / \codeword{<name>_slave} with the \codeword{fan} jump on p (p\_rgh for buoyant runs).
+
+\subsection{Porous Zones}\label{sec:porous}
+A closed \codeword{POR-<name>.stl} marks a porous region: the cells inside it become a cell zone with a Darcy--Forchheimer pressure drop, $\nabla p = -(\mu D + \frac{1}{2}\rho |U| F)\,U$ with the superficial velocity U. For a regenerator in a displacer hole, make the solid slightly wider than the hole so its sides are inside the displacer.
+\begin{lstlisting}
+    [POR-matrix]
+    RESISTANCE = wireMesh
+    D = 1e7 1e7 1e7
+    F = 1e3 1e3 1e3
+    E1 = 1 0 0
+    E2 = 0 1 0
+    POROSITY = 0.9
+    WIRE_DIA = 1e-4
+    REF_VELOCITY = 1
+    DP_DATA =
+    DP_LENGTH = 0.1
+    MOVES_WITH = none
+    HEAT = solved
+    HA = auto
+    SOLID_T = 300
+    SOLID_RHO = 7900
+    SOLID_CP = 500
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{RESISTANCE} - \codeword{coeffs}: \codeword{D} (1/m$^2$) and \codeword{F} (1/m) along the directions \codeword{E1}, \codeword{E2} and their cross product. \codeword{wireMesh}: woven screens (Gedeon--Wood), from \codeword{POROSITY} and \codeword{WIRE_DIA}; the Reynolds-number dependent part is taken at \codeword{REF_VELOCITY} (superficial, m/s). \codeword{fit}: least-squares fit of \codeword{DP_DATA} (pairs of superficial velocity in m/s and pressure drop in Pa) measured over \codeword{DP_LENGTH} (m). The setup prints the resulting D and F.
+    \item \codeword{HEAT} - \codeword{none}; \codeword{fixed}: the matrix stays at \codeword{SOLID_T} (heater, cooler, heat exchanger core); \codeword{solved}: the matrix temperature changes with its heat capacity (1$-\varepsilon$)$\rho_s c_s$ (\codeword{POROSITY}, \codeword{SOLID_RHO}, \codeword{SOLID_CP}), starting at \codeword{SOLID_T} (regenerator, transient solvers only). The gas receives $h a (T_s - T)$ per unit volume, with \codeword{HA} in W/m$^3$K or \codeword{auto} from the wire-mesh correlation. The term is linearised in the energy, so large values stay stable, and the matrix temperature is updated once per time step with the exact solution of $C_s\,dT_s/dt = h a (T - T_s)$. It is written as the field \codeword{Ts_<zone>} and restarts from it. Compressible runs only.
+    \item \codeword{MOVES_WITH} - name of a MOVE body: the porous solid is moved to the start angle with that body before meshing, and its cells then move with the mesh (regenerator in the displacer).
+\end{itemize}
+The heat source is a \codeword{scalarCodedSource} in \codeword{constant/fvOptions}, compiled when the solver starts, so a C++ compiler must be available where the job runs. \codeword{postInternal.py} reports \codeword{HEAT_<zone>} (W from the matrix into the gas), \codeword{TS_MEAN_<zone>}, \codeword{T_MEAN_<zone>} and \codeword{P_MEAN_<zone>}.
+
 \subsection{Function Objects}
 Written to \codeword{system/internalFunctionObjects}, every time step:
 \begin{itemize}
@@ -416,7 +484,7 @@ Each image has a title with the case, panel, variable, time and crank angle. Run
 \subsection{Limitations}
 \begin{itemize}
     \item Motion along z only, bodies in line (no alpha engines), \codeword{displacementInterpolation} only.
-    \item Regenerator (\codeword{REGN}), sample surfaces (\codeword{SMP}) and heater/cooler zones are not available yet.
+    \item Sample surfaces (\codeword{SMP}) are not available yet. Regenerators and heater/cooler cores are porous zones (Section \ref{sec:porous}); a linear initial matrix temperature along the holes is not available yet.
     \item No \codeword{--continue} option yet. With the crank drive, raising \codeword{N_CYCLES} and rewriting the controlDict (\codeword{-d}) is enough, since the crank tables cover one cycle and repeat. With prescribed motion the motion tables only cover \codeword{N_CYCLES}, so the full setup has to be rerun as well.
     \item No p--V or cycle-convergence plots yet, only the summary and the flow images.
 \end{itemize}

@@ -1,0 +1,17 @@
+[POR_SETUP]
+RESISTANCE = coeffs
+D = 1e7 1e7 1e7
+F = 1e3 1e3 1e3
+E1 = 1 0 0
+E2 = 0 1 0
+POROSITY = 0.9
+WIRE_DIA = 1e-4
+REF_VELOCITY = 1
+DP_DATA =
+DP_LENGTH = 0.1
+MOVES_WITH = none
+HEAT = none
+HA = auto
+SOLID_T = 300
+SOLID_RHO = 7900
+SOLID_CP = 500

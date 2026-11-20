@@ -306,7 +306,7 @@ options: `--new`, `--modules`, `-d` (controlDict only), `-s` (template set, defa
 the file prefix says what the body is, the PIDs (STL solid names / OBJ groups) are its faces. snappy keeps each PID as the patch `<file>_<pid>`, and the setup picks PIDs by case-insensitive keyword.
 
 - `WALL-<name>` - static walls: BC groups per PID keyword, anchor faces for the mesh motion, wall side of the displacer gap.
-- `MOVE-<name>` - rigid moving body (displacer). `FROM = <file>` makes a body out of PIDs in another file (e.g. the piston crown in the chamber file).
+- `MOVE-<name>` - rigid moving body (displacer). `FROM = <file>` makes a body out of PIDs in another file (e.g. the piston crown in the chamber file). a PID named `MOVE-<name>` in a WALL file creates the section `[MOVE-<name>]` for you (FROM = that file, ZONE_PIDS = the PID, MOTION_COLUMN = `<name>`, one body per PID), and the section is dropped again when the PID is gone.
 - `REGN` and `SMP` are reserved, not available yet.
 
 ```ini
@@ -409,6 +409,25 @@ images are set up like pvPost: `pvPostInternalSetup` in the case (copied there b
 ### Demo cases
 
 `internalDemoCase/CASES/staticDemo` (heated/cooled box, no motion) and `internalDemoCase/CASES/motionDemo` (displacer with a dwell profile and side gap, plus a piston crown). run `internalSetup.py` in either, then `./runScript`.
+
+### Through-flow: inlets, outlets, steady solvers
+
+for pipes, ducts and exhaust stacks. `SOLVER = rhoSimpleFoam` (steady compressible), `buoyantSimpleFoam` (steady, gravity `GRAVITY = 0 0 -9.81`, for hot stacks), `simpleFoam` (steady incompressible), or the transient `rhoPimpleFoam` / `pimpleFoam`. steady runs use `N_ITER` / `WRITE_ITER` in `[GLOBAL_CONTROL]` and stop early on residuals. inlets and outlets are BC groups on PIDs:
+
+```ini
+[WALL-stack]
+BC_GROUPS = stackIn stackOut stackWall
+stackIn = PIDS inlet U massFlow 0.5 T fixed 600     # kg/s into the domain, inlet T
+stackOut = PIDS outlet P fixed 1e5                   # static pressure (Pa), T fixed <T> = backflow T
+stackWall = PIDS wall T convective 10 300
+```
+
+`U massFlow <kg/s>`, `U velocity <m/s>` (normal, into the domain), `U velocity <ux> <uy> <uz>`, `P total <Pa>` (inlet), `P fixed <Pa>` (outlet). pressures are absolute; for incompressible runs they are converted to kinematic gauge p. inlet turbulence from `TURB_INTENSITY` (0.05) and `TURB_LENGTH` (auto = 0.07 x hydraulic diameter). heat flux / convective / fixed T walls as before. `postInternal.py` adds per group `MDOT_<group>` (+ into the domain), `P_<group>`, `T_<group>`, `MDOT_IMBALANCE` and `P_DROP`, and for steady runs `flowConvergence.png` (residuals, flow, p, T vs iteration).
+
+### Fans and porous zones
+
+- `FAN-<name>.stl`: planar disk across the duct, `[FAN-<name>] FAN_PRESSURE_RISE = <Pa>` in the direction of the disk normal. snappy makes an internal faceZone, `createBaffles` turns it into a cyclic `fan` jump after the zero directory is made.
+- `POR-<name>.stl`: closed solid, its inside becomes a cellZone with a Darcy-Forchheimer pressure drop: `RESISTANCE = coeffs` (`D`, `F` along `E1` `E2`), `wireMesh` (Gedeon-Wood screens from `POROSITY`, `WIRE_DIA`, `REF_VELOCITY`) or `fit` (`DP_DATA = v1 dp1 v2 dp2 ...` over `DP_LENGTH`). `HEAT = none | fixed | solved` exchanges h·a·(Ts − T) with the matrix (`HA` W/m3/K or `auto` from the wire-mesh correlation): `fixed` holds the matrix at `SOLID_T` (heater, cooler, heat exchanger core), `solved` evolves it from (1−ε)·`SOLID_RHO`·`SOLID_CP` (regenerator, transient only). `MOVES_WITH = <body>` for a regenerator inside the displacer. the heat source is compiled at run time (needs a compiler where the solver runs). post: `HEAT_POR-<name>` (W into the gas), `TS_MEAN_POR-<name>`.
 
 ### Not available yet
 

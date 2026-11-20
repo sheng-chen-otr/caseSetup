@@ -97,14 +97,31 @@ def getGasProperties(fullCaseSetupDict):
     return props
 
 
-def getFlow(fullCaseSetupDict):
-    #compressible (rhoPimpleFoam) or incompressible (pimpleFoam: kinematic p, no energy equation)
+#solver -> (flow, steady, buoyant)
+solverTypes = {'rhoPimpleFoam': ('compressible', False, False), 'pimpleFoam': ('incompressible', False, False),
+               'rhoSimpleFoam': ('compressible', True, False), 'buoyantSimpleFoam': ('compressible', True, True),
+               'simpleFoam': ('incompressible', True, False)}
+
+
+def getSolverType(fullCaseSetupDict):
     solver = getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER')
-    flows = {'rhoPimpleFoam': 'compressible', 'pimpleFoam': 'incompressible'}
-    if solver not in flows:
-        sys.exit('ERROR! GLOBAL_SIM_CONTROL SOLVER must be rhoPimpleFoam (compressible) or pimpleFoam (incompressible), got %s!'
-                 % (solver))
-    return flows[solver]
+    if solver not in solverTypes:
+        sys.exit('ERROR! GLOBAL_SIM_CONTROL SOLVER must be one of %s, got %s!' % (list(solverTypes.keys()), solver))
+    return solverTypes[solver]
+
+
+def getFlow(fullCaseSetupDict):
+    #compressible (rhoPimpleFoam, rhoSimpleFoam, buoyantSimpleFoam) or incompressible (pimpleFoam, simpleFoam:
+    #kinematic p, no energy equation)
+    return getSolverType(fullCaseSetupDict)[0]
+
+
+def isSteady(fullCaseSetupDict):
+    return getSolverType(fullCaseSetupDict)[1]
+
+
+def isBuoyant(fullCaseSetupDict):
+    return getSolverType(fullCaseSetupDict)[2]
 
 
 def getGasDensity(fullCaseSetupDict):
@@ -155,10 +172,50 @@ def parseThermal(tokens, where):
     return [mode] + args
 
 
+def parseNumbers(tokens, where, what):
+    try:
+        return [float(t) for t in tokens]
+    except ValueError:
+        sys.exit('ERROR! %s: %s needs numbers, got %s!' % (where, what, ' '.join(tokens)))
+
+
+def parseFlowSpec(uTokens, pTokens, where):
+    #inlet/outlet from the U and P tokens, None for a wall
+    #U massFlow <kg/s> | U velocity <m/s> (normal, into the domain) | U velocity <ux> <uy> <uz>
+    #P total <Pa> (inlet) | P fixed <Pa> (outlet, static pressure)
+    if uTokens and uTokens[0] in uModes:
+        if len(uTokens) != 1 or pTokens:
+            sys.exit('ERROR! %s: a wall (U %s) takes no other U values and no P!' % (where, uTokens[0]))
+        return None
+    if uTokens and pTokens:
+        sys.exit('ERROR! %s: give either U (mass flow / velocity inlet) or P (pressure inlet / outlet), not both!' % (where))
+    if uTokens:
+        mode, values = uTokens[0], parseNumbers(uTokens[1:], where, 'U %s' % (uTokens[0]))
+        if mode == 'massFlow' and len(values) == 1:
+            if values[0] <= 0:
+                sys.exit('ERROR! %s: U massFlow must be positive (into the domain)!' % (where))
+            return {'kind': 'inlet', 'type': 'massFlow', 'value': values[0]}
+        if mode == 'velocity' and len(values) == 1:
+            return {'kind': 'inlet', 'type': 'velocity', 'value': values[0]}
+        if mode == 'velocity' and len(values) == 3:
+            return {'kind': 'inlet', 'type': 'velocityVector', 'value': values}
+        sys.exit('ERROR! %s: U must be %s, massFlow <kg/s>, velocity <m/s> or velocity <ux> <uy> <uz>!'
+                 % (where, ' | '.join(uModes)))
+    if pTokens:
+        values = parseNumbers(pTokens[1:], where, 'P %s' % (pTokens[0]))
+        if len(values) == 1 and pTokens[0] == 'total':
+            return {'kind': 'inlet', 'type': 'totalPressure', 'value': values[0]}
+        if len(values) == 1 and pTokens[0] in ('fixed', 'static'):
+            return {'kind': 'outlet', 'type': 'staticPressure', 'value': values[0]}
+        sys.exit('ERROR! %s: P must be total <Pa> (inlet) or fixed <Pa> (outlet)!' % (where))
+    return None
+
+
 def parseGroupLine(tokens, where):
-    #<group> = PIDS kw1 kw2 .. [U noSlip|slip] [T mode args]
+    #<group> = PIDS kw1 kw2 .. [U noSlip|slip] [T mode args]         wall
+    #<group> = PIDS kw1 .. U massFlow|velocity .. | P total|fixed .. [T fixed <T>]   inlet / outlet
     tokens = [t for t in tokens if t != '']
-    parts = {'PIDS': [], 'U': [], 'T': []}
+    parts = {'PIDS': [], 'U': [], 'T': [], 'P': []}
     current = None
     for token in tokens:
         if token in parts:
@@ -169,13 +226,13 @@ def parseGroupLine(tokens, where):
             parts[current].append(token)
     if len(parts['PIDS']) == 0:
         sys.exit('ERROR! %s has no PIDS keywords!' % (where))
-    group = {'keywords': parts['PIDS'], 'U': None, 'T': None}
-    if parts['U']:
-        if len(parts['U']) != 1 or parts['U'][0] not in uModes:
-            sys.exit('ERROR! %s: U must be one of %s!' % (where, uModes))
+    group = {'keywords': parts['PIDS'], 'U': None, 'T': None, 'flow': parseFlowSpec(parts['U'], parts['P'], where)}
+    if parts['U'] and group['flow'] is None:
         group['U'] = parts['U'][0]
     if parts['T']:
         group['T'] = parseThermal(parts['T'], where)
+        if group['flow'] and group['T'][0] != 'fixed':
+            sys.exit('ERROR! %s: inlets and outlets take T fixed <T> (inflow / backflow temperature)!' % (where))
     return group
 
 
@@ -204,12 +261,23 @@ def resolveBCGroups(wallName, wallSetup, pids):
                 owner[pid] = groupName
                 if pid not in matched:
                     matched.append(pid)
-        groups.append({'name': groupName, 'pids': matched,
-                       'U': group['U'] or uDefault, 'T': group['T'] or tDefault})
+        if group['flow']:
+            #inlet/outlet: T is the inflow (backflow) temperature, None = INIT_T
+            groups.append({'name': groupName, 'pids': matched, 'U': None, 'T': group['T'], 'flow': group['flow']})
+        else:
+            groups.append({'name': groupName, 'pids': matched, 'flow': None,
+                           'U': group['U'] or uDefault, 'T': group['T'] or tDefault})
     rest = [pid for pid in pids if pid not in owner]
     if len(rest) > 0:
-        groups.append({'name': '%s_default' % (wallName), 'pids': rest, 'U': uDefault, 'T': tDefault})
+        groups.append({'name': '%s_default' % (wallName), 'pids': rest, 'U': uDefault, 'T': tDefault, 'flow': None})
     return groups
+
+
+def flowLabel(flow):
+    #short text of an inlet/outlet for the BC table
+    if flow['type'] == 'velocityVector':
+        return 'velocity (%s)' % (' '.join('%g' % v for v in flow['value']))
+    return '%s %g' % (flow['type'], flow['value'])
 
 
 def getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids=None):
@@ -227,10 +295,17 @@ def getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids=None):
         moving = movingPids.get(geomName, [])
         for group in groups:
             group['moving'] = [pid for pid in group['pids'] if pid in moving]
+            if group['flow'] and group['moving']:
+                sys.exit('ERROR! [%s] %s is an %s but %s move with a body!' % (geomName, group['name'],
+                                                                             group['flow']['kind'], group['moving']))
             for pid in group['pids']:
-                uLabel = 'movingWall' if pid in moving else group['U']
-                print('\t\t%-32s %-20s %-14s %s' % ('%s_%s' % (geomName, pid), group['name'], uLabel,
-                                                    ' '.join(str(t) for t in group['T'])))
+                if group['flow']:
+                    uLabel = '%s: %s' % (group['flow']['kind'], flowLabel(group['flow']))
+                    tLabel = 'T %g' % (group['T'][1]) if group['T'] else 'T INIT_T'
+                else:
+                    uLabel = 'movingWall' if pid in moving else group['U']
+                    tLabel = ' '.join(str(t) for t in group['T'])
+                print('\t\t%-32s %-20s %-14s %s' % ('%s_%s' % (geomName, pid), group['name'], uLabel, tLabel))
         wallGroups[geomName] = groups
     return wallGroups
 
@@ -299,6 +374,16 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, gapRefs=None):
                             % (geomName, geomDict[geom]['scale'], level if featureLevel == 'surface' else featureLevel))
         extractArray.append('%s { extractionMethod extractFromSurface; includedAngle %s; '
                             'subsetFeatures { nonManifoldEdges no; openEdges yes; } writeObj no; }' % (geomFile, featAngle))
+        #fan disk: internal faceZone, made into a cyclic fan baffle by createBaffles after the zero directory
+        if geomName.startswith('FAN'):
+            surfaceArray.append('        %s { level (%s %s); faceZone %s; faceType internal; }'
+                                % (geomName, level, level, geomName))
+            continue
+        #porous zone: the cells inside the closed POR surface become cellZone POR-<name> (no patch)
+        if geomName.startswith('POR'):
+            surfaceArray.append('        %s { level (%s %s); faceZone %s; cellZone %s; cellZoneInside inside; }'
+                                % (geomName, level, level, geomName, geomName))
+            continue
         #per-region levels by PID name (regex) from system/snappyRefinementDict
         surfaceArray.append('        %s { level (%s %s); patchInfo { type wall; } regions { #include "snappyRefinementDict" } }'
                             % (geomName, level, level))
@@ -347,6 +432,83 @@ def getTurbulence(fullCaseSetupDict):
     return aliases[model.lower()]
 
 
+def pidArea(geom, geomDict, pids):
+    #area (m2) of some PIDs of a geometry, from the case copy in constant/triSurface
+    scale = float(geomDict[geom]['scale'])
+    tris = geometryIO.readSurfaceTriangles(caseGeomPath(geom))
+    area = 0.0
+    for pid in pids:
+        t = np.asarray(tris[pid])*scale
+        area += 0.5*float(np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1).sum())
+    return area
+
+
+def inletTurbulence(fullCaseSetupDict, speed, area):
+    #k, omega, epsilon at an inlet from TURB_INTENSITY and TURB_LENGTH (auto = 0.07 x hydraulic diameter of a
+    #round inlet of the same area)
+    simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
+    intensity = float(simControl.get('TURB_INTENSITY', ['0.05'])[0])
+    length = simControl.get('TURB_LENGTH', ['auto'])[0]
+    length = 0.07*np.sqrt(4.0*area/np.pi) if length == 'auto' else float(length)
+    k = 1.5*(intensity*speed)**2
+    omega = np.sqrt(k)/(0.09**0.25*length)
+    epsilon = 0.09**0.75*k**1.5/length
+    return k, omega, epsilon, length
+
+
+def flowEntry(geom, geomDict, group, fullCaseSetupDict, turbModel):
+    #caseProperties entry of an inlet or outlet group
+    #pressures in Pa: absolute for compressible runs, minus CHARGE_PRESSURE and over the gas density
+    #(kinematic) for incompressible runs
+    geomName = stripExt(geom)
+    flow = group['flow']
+    flowType = getFlow(fullCaseSetupDict)
+    material = fullCaseSetupDict['GLOBAL_MATERIAL']
+    pCharge = float(material['CHARGE_PRESSURE'][0])
+    tFlow = group['T'][1] if group['T'] else float(material['INIT_T'][0])
+    rhoCharge = getGasDensity(fullCaseSetupDict)
+    if flowType == 'compressible':
+        rhoFlow = pCharge*getGasProperties(fullCaseSetupDict)['MOL_WEIGHT']/(8314.46*tFlow)
+    else:
+        rhoFlow = rhoCharge
+
+    def pressure(p):
+        return p if flowType == 'compressible' else (p - pCharge)/rhoCharge
+
+    patches = ' '.join('"%s_%s"' % (geomName, pid) for pid in group['pids'])
+    area = pidArea(geom, geomDict, group['pids'])
+    values = ['$:initialConditions;']
+    speed = None
+    if flow['type'] == 'massFlow':
+        speed = flow['value']/(rhoFlow*area)
+        if flowType == 'compressible':
+            option, values = 'flowRate', values + ['massFlowRate constant %.9g;' % (flow['value'])]
+        else:
+            option, values = 'volumeFlowRate', values + ['volumetricFlowRate constant %.9g;' % (flow['value']/rhoFlow)]
+    elif flow['type'] == 'velocity':
+        speed = abs(flow['value'])
+        option, values = 'normalVelocity', values + ['UnRef uniform %.9g;' % (-flow['value'])]
+    elif flow['type'] == 'velocityVector':
+        speed = float(np.linalg.norm(flow['value']))
+        option, values = 'fixedVelocity', values + ['U uniform (%s);' % (' '.join('%.9g' % v for v in flow['value']))]
+    else:
+        option = 'fixedTotalPressure' if flow['type'] == 'totalPressure' else 'staticPressure'
+        values = values + ['p uniform %.9g;' % (pressure(flow['value']))]
+    if flowType == 'compressible':
+        values.append('T uniform %.9g;' % (tFlow))
+    text = '%s, area %.4g m2' % (flowLabel(flow), area)
+    if speed is not None:
+        text += ', mean velocity %.4g m/s' % (speed)
+    if turbModel != 'laminar' and speed:
+        k, omega, epsilon, length = inletTurbulence(fullCaseSetupDict, speed, area)
+        values += ['k uniform %.6g;' % (k), 'omega uniform %.6g;' % (omega), 'epsilon uniform %.6g;' % (epsilon)]
+        text += ', k %.3g omega %.3g (length %.3g m)' % (k, omega, length)
+    print('\t\t%s %s: %s' % (flow['kind'], group['name'], text))
+    key = 'flowSpecification' if flow['kind'] == 'inlet' else 'returnFlow'
+    return ('    %s { category %s; type subSonic; patches (%s); options { %s %s; } values { %s } }'
+            % (group['name'], flow['kind'], patches, key, option, ' '.join(values)))
+
+
 def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGroups):
     print('\n\tWriting caseProperties...')
     material = fullCaseSetupDict['GLOBAL_MATERIAL']
@@ -356,11 +518,13 @@ def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGr
     incompressible = getFlow(fullCaseSetupDict) == 'incompressible'
     if incompressible:
         initArray = ['U uniform (0 0 0);', 'p uniform 0;']
-        thermal = sorted(g['name'] for name in wallGroups for g in wallGroups[name] if g['T'][0] != 'adiabatic')
+        thermal = sorted(g['name'] for name in wallGroups for g in wallGroups[name] if g['T'] and g['T'][0] != 'adiabatic')
         if thermal:
             print('\t\tNOTE: incompressible run, the T settings of %s are ignored' % (' '.join(thermal)))
     else:
         initArray = ['U uniform (0 0 0);', 'p uniform %.9g;' % (pInit), 'T uniform %.9g;' % (tInit)]
+        if isBuoyant(fullCaseSetupDict):
+            initArray.append('p_rgh uniform %.9g;' % (pInit))
     turbModel = getTurbulence(fullCaseSetupDict)
     wallFunctionNames = {'low': 'lowReynolds', 'high': 'highReynolds'}
     if turbModel != 'laminar':
@@ -376,6 +540,9 @@ def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGr
         if wallModel not in wallFunctionNames:
             sys.exit('ERROR! %s wall model column must be low or high!' % (geom))
         for group in wallGroups[geomName]:
+            if group['flow']:
+                bcArray.append(flowEntry(geom, geomDict, group, fullCaseSetupDict, turbModel))
+                continue
             moving = group.get('moving', [])
             static = [pid for pid in group['pids'] if pid not in moving]
             for pids, motion, suffix in ((static, 'stationary', ''), (moving, 'movingMesh', '_moving')):
@@ -432,6 +599,269 @@ def writeThermoInternal(templateLoc, fullCaseSetupDict):
     replaceDict = {'TRANSPORT': props['TRANSPORT'], 'MOL_WEIGHT': '%.6g' % props['MOL_WEIGHT'],
                    'CP': '%.6g' % props['CP'], 'TRANSPORT_COEFFS': coeffs}
     copyTemplate(templateLoc, 'constant/thermophysicalProperties', 'constant/thermophysicalProperties', replaceDict)
+    #buoyant solvers need a rho-based thermo and the gravity vector
+    gPath = os.path.join('constant', 'g')
+    if isBuoyant(fullCaseSetupDict):
+        with open('constant/thermophysicalProperties') as f:
+            text = f.read()
+        with open('constant/thermophysicalProperties', 'w') as f:
+            f.write(text.replace('hePsiThermo', 'heRhoThermo'))
+        gravity = [v for v in fullCaseSetupDict['GLOBAL_SIM_CONTROL'].get('GRAVITY', ['0', '0', '-9.81']) if v != '']
+        if len(gravity) != 3:
+            sys.exit('ERROR! GLOBAL_SIM_CONTROL GRAVITY must be three numbers gx gy gz!')
+        print('\t\tbuoyant: heRhoThermo, gravity (%s) m/s2' % (' '.join(gravity)))
+        with open(gPath, 'w') as f:
+            f.write('FoamFile { version 2.0; format ascii; class uniformDimensionedVectorField; object g; }\n\n'
+                    'dimensions      [0 1 -2 0 0 0 0];\nvalue           (%s);\n' % (' '.join(gravity)))
+    elif os.path.isfile(gPath):
+        os.remove(gPath)
+
+
+def writeFanBaffles(geomDict, fullCaseSetupDict):
+    #system/createBafflesDict: each FAN-<name> faceZone becomes a cyclic pair <name>_master / <name>_slave with the
+    #fan pressure jump FAN_PRESSURE_RISE (Pa; kinematic for incompressible runs) on p (p_rgh for buoyant runs)
+    #returns the fan names (none: no dict, the run script skips createBaffles)
+    fans = [stripExt(geom) for geom in geomDict if stripExt(geom).startswith('FAN')]
+    path = os.path.join('system', 'createBafflesDict')
+    if not fans:
+        if os.path.isfile(path):
+            os.remove(path)
+        return []
+    print('\n\tWriting createBafflesDict (fans)...')
+    incompressible = getFlow(fullCaseSetupDict) == 'incompressible'
+    pName = 'p_rgh' if isBuoyant(fullCaseSetupDict) else 'p'
+    pInit = 0.0 if incompressible else float(getVal(fullCaseSetupDict, 'GLOBAL_MATERIAL', 'CHARGE_PRESSURE'))
+    rho = getGasDensity(fullCaseSetupDict)
+    baffles = []
+    for fan in fans:
+        try:
+            rise = float(fullCaseSetupDict[fan]['FAN_PRESSURE_RISE'][0])
+        except (KeyError, ValueError):
+            sys.exit('ERROR! [%s] FAN_PRESSURE_RISE must be a number (Pa)!' % (fan))
+        jump = rise/rho if incompressible else rise
+        print('\t\t%s: pressure rise %g Pa%s' % (fan, rise, ' (%g m2/s2 kinematic)' % (jump) if incompressible else ''))
+        fields = ('%s { type fan; patchType cyclic; jump uniform 0; value uniform %.9g; jumpTable constant %.9g; }'
+                  % (pName, pInit, jump))
+        lines = ['    %s' % (fan), '    {', '        type faceZone;', '        zoneName %s;' % (fan), '        patches',
+                 '        {',
+                 '            master { name %s_master; type cyclic; neighbourPatch %s_slave; patchFields { %s } }'
+                 % (fan, fan, fields),
+                 '            slave { name %s_slave; type cyclic; neighbourPatch %s_master; patchFields { %s } }'
+                 % (fan, fan, fields),
+                 '        }', '    }']
+        baffles.append('\n'.join(lines))
+    with open(path, 'w') as f:
+        f.write('FoamFile { version 2.0; format ascii; class dictionary; object createBafflesDict; }\n\n')
+        f.write('//fan baffles from the FAN faceZones (written by internalSetup)\ninternalFacesOnly true;\n\n')
+        f.write('baffles\n{\n%s\n}\n' % ('\n'.join(baffles)))
+    return fans
+
+
+#----- porous media (POR-<name>: Darcy-Forchheimer pressure drop, heat exchange with the matrix)
+
+def wireMeshCoeffs(porosity, wireDia, refVelocity, gas):
+    #Gedeon-Wood woven screens: f = 129/Re + 2.91 Re^-0.103 on the hydraulic diameter dh = eps*dw/(1-eps) and the
+    #pore velocity u = U/eps, Nu = (1 + 0.99 (Re Pr)^0.66) eps^1.79, wetted area per volume a = 4 (1-eps)/dw
+    #returns Darcy d (1/m2), Forchheimer f (1/m) for the superficial velocity, and h*a (W/m3/K)
+    #the Re^-0.103 term and Nu are taken at refVelocity (superficial)
+    dh = porosity*wireDia/(1.0 - porosity)
+    re = gas['RHO']*(refVelocity/porosity)*dh/gas['MU']
+    d = 129.0/(2.0*porosity*dh**2)
+    f = 2.91*re**-0.103/(porosity**2*dh)
+    nu = (1.0 + 0.99*(re*gas['PR'])**0.66)*porosity**1.79
+    kGas = gas['MU']*gas['CP']/gas['PR']
+    ha = nu*kGas/dh*4.0*(1.0 - porosity)/wireDia
+    return d, f, ha, re
+
+
+def fitDarcyForchheimer(velocities, pressureDrops, length, gas):
+    #least squares of dp/L = mu*d*U + 0.5*rho*f*U^2 through the origin
+    U = np.asarray(velocities, dtype=float)
+    dpl = np.asarray(pressureDrops, dtype=float)/length
+    A = np.column_stack([gas['MU']*U, 0.5*gas['RHO']*U*np.abs(U)])
+    d, f = np.linalg.lstsq(A, dpl, rcond=None)[0]
+    return float(d), float(f), A.dot([d, f]) - dpl
+
+
+def getPorous(geomDict, fullCaseSetupDict):
+    #one entry per POR geometry: name, d, f (3 values along e1 e2 e3), e1, e2, heat mode, ha, Cs (J/m3/K), Ts
+    porous = []
+    zones = [stripExt(geom) for geom in geomDict if stripExt(geom).startswith('POR')]
+    if not zones:
+        return porous
+    print('\n\tSetting up porous zones...')
+    props = getGasProperties(fullCaseSetupDict)
+    gas = {'RHO': getGasDensity(fullCaseSetupDict), 'MU': props['MU'], 'CP': props['CP'], 'PR': props['PR']}
+    flowType = getFlow(fullCaseSetupDict)
+    for name in zones:
+        setup = fullCaseSetupDict[name]
+
+        def number(key, count=1):
+            values = [v for v in setup.get(key, ['']) if v != '']
+            try:
+                values = [float(v) for v in values]
+            except ValueError:
+                values = []
+            if len(values) != count:
+                sys.exit('ERROR! [%s] %s needs %d number(s)!' % (name, key, count))
+            return values if count > 1 else values[0]
+
+        zone = {'name': name, 'e1': number('E1', 3), 'e2': number('E2', 3)}
+        resistance = setup['RESISTANCE'][0]
+        if resistance == 'coeffs':
+            zone['d'], zone['f'] = number('D', 3), number('F', 3)
+            print('\t\t%s: d (%s) 1/m2, f (%s) 1/m' % (name, ' '.join('%g' % v for v in zone['d']),
+                                                    ' '.join('%g' % v for v in zone['f'])))
+        elif resistance == 'wireMesh':
+            porosity, wireDia, refVelocity = number('POROSITY'), number('WIRE_DIA'), number('REF_VELOCITY')
+            if not 0 < porosity < 1 or wireDia <= 0 or refVelocity <= 0:
+                sys.exit('ERROR! [%s] wireMesh needs 0 < POROSITY < 1, WIRE_DIA > 0 and REF_VELOCITY > 0!' % (name))
+            d, f, ha, re = wireMeshCoeffs(porosity, wireDia, refVelocity, gas)
+            zone['d'], zone['f'], zone['wireHA'] = [d]*3, [f]*3, ha
+            print('\t\t%s: wire mesh porosity %g, wire %g m, Re %.3g at %g m/s: d %.4g 1/m2, f %.4g 1/m, h*a %.4g W/m3/K'
+                  % (name, porosity, wireDia, re, refVelocity, d, f, ha))
+        elif resistance == 'fit':
+            data = number('DP_DATA', len([v for v in setup.get('DP_DATA', ['']) if v != '']))
+            data = data if isinstance(data, list) else [data]
+            if len(data) < 4 or len(data) % 2:
+                sys.exit('ERROR! [%s] DP_DATA needs at least two velocity / pressure drop pairs (m/s Pa)!' % (name))
+            length = number('DP_LENGTH')
+            d, f, misfit = fitDarcyForchheimer(data[0::2], data[1::2], length, gas)
+            if d < 0 or f < 0:
+                sys.exit('ERROR! [%s] DP_DATA fit gives a negative coefficient (d %g, f %g): check the data' % (name, d, f))
+            zone['d'], zone['f'] = [d]*3, [f]*3
+            print('\t\t%s: fit to %d points over %g m: d %.4g 1/m2, f %.4g 1/m, worst misfit %.3g Pa/m'
+                  % (name, len(data)//2, length, d, f, float(np.abs(misfit).max())))
+        else:
+            sys.exit('ERROR! [%s] RESISTANCE must be coeffs, wireMesh or fit!' % (name))
+
+        #heat exchange with the matrix (compressible only)
+        heat = setup.get('HEAT', ['none'])[0]
+        if heat not in ('none', 'fixed', 'solved'):
+            sys.exit('ERROR! [%s] HEAT must be none, fixed or solved!' % (name))
+        if heat != 'none' and flowType == 'incompressible':
+            print('\t\tNOTE: %s HEAT %s ignored, incompressible run (no energy equation)' % (name, heat))
+            heat = 'none'
+        if heat == 'solved' and isSteady(fullCaseSetupDict):
+            sys.exit('ERROR! [%s] HEAT solved needs a transient solver (rhoPimpleFoam): the matrix stores heat over time'
+                     % (name))
+        zone['heat'] = heat
+        if heat != 'none':
+            haSetting = setup.get('HA', ['auto'])[0]
+            if haSetting == 'auto':
+                if 'wireHA' not in zone:
+                    sys.exit('ERROR! [%s] HA auto needs RESISTANCE wireMesh, else give HA (W/m3/K)' % (name))
+                zone['ha'] = zone['wireHA']
+            else:
+                zone['ha'] = number('HA')
+            zone['Ts'] = number('SOLID_T')
+            zone['Cs'] = 0.0
+            if heat == 'solved':
+                zone['Cs'] = (1.0 - number('POROSITY'))*number('SOLID_RHO')*number('SOLID_CP')
+            print('\t\t%s: heat %s, h*a %.4g W/m3/K, matrix T %g K%s'
+                  % (name, heat, zone['ha'], zone['Ts'],
+                     ', (1-eps)*rhos*cs %.4g J/m3/K' % (zone['Cs']) if heat == 'solved' else ' (fixed)'))
+        porous.append(zone)
+    return porous
+
+
+def porousHeatSource(zone, cv):
+    #scalarCodedSource on e: gas-matrix heat exchange h*a*(Ts - T), linearised in e (implicit part h*a/cv)
+    #Ts_<zone> (written) and Qs_<zone> (W/m3 into the gas) are registered fields, Ts is updated once per time step
+    #with the exact solution of Cs*dTs/dt = h*a*(T - Ts) (Cs 0: fixed matrix temperature)
+    name = zone['name'].replace('-', '_')
+    code = '''        codeAddSupRho
+        #{
+            const fvMesh& m = mesh_;
+            const volScalarField& T = m.lookupObject<volScalarField>("T");
+            const scalar ha = %.9g;
+            const scalar Cv = %.9g;
+            const scalar Cs = %.9g;
+            const scalar Tinit = %.9g;
+            const word TsName("Ts_%s");
+            const word QsName("Qs_%s");
+            if (!m.foundObject<volScalarField>(TsName))
+            {
+                volScalarField* TsPtr = new volScalarField
+                (
+                    IOobject(TsName, m.time().timeName(), m, IOobject::READ_IF_PRESENT, IOobject::AUTO_WRITE),
+                    m,
+                    dimensionedScalar(dimTemperature, Tinit)
+                );
+                TsPtr->store();
+                volScalarField* QsPtr = new volScalarField
+                (
+                    IOobject(QsName, m.time().timeName(), m, IOobject::NO_READ, IOobject::NO_WRITE),
+                    m,
+                    dimensionedScalar(dimPower/dimVolume, Zero)
+                );
+                QsPtr->store();
+            }
+            volScalarField& Ts = const_cast<volScalarField&>(m.lookupObject<volScalarField>(TsName));
+            volScalarField& Qs = const_cast<volScalarField&>(m.lookupObject<volScalarField>(QsName));
+            static label lastIndex = -1;
+            const bool update = (Cs > 0 && m.time().timeIndex() != lastIndex);
+            lastIndex = m.time().timeIndex();
+            const scalar dt = m.time().deltaTValue();
+            const labelList& zoneCells = this->cells();
+            const scalarField& V = m.V();
+            const scalarField& e = eqn.psi();
+            scalarField& diag = eqn.diag();
+            scalarField& source = eqn.source();
+            const scalar k = ha/Cv;
+            forAll(zoneCells, i)
+            {
+                const label c = zoneCells[i];
+                if (update)
+                {
+                    Ts[c] = T[c] + (Ts[c] - T[c])*Foam::exp(-ha*dt/Cs);
+                }
+                Qs[c] = ha*(Ts[c] - T[c]);
+                diag[c] -= k*V[c];
+                source[c] -= (Qs[c] + k*e[c])*V[c];
+            }
+        #};''' % (zone['ha'], cv, zone['Cs'], zone['Ts'], zone['name'], zone['name'])
+    lines = ['%sHeat' % (name), '{', '    type            scalarCodedSource;', '    name            %sHeat;' % (name),
+             '    scalarCodedSourceCoeffs', '    {', '        selectionMode   cellZone;',
+             '        cellZone        %s;' % (zone['name']), '        fields          (e);', '',
+             '        codeInclude', '        #{', '            #include "fvCFD.H"', '        #};', '',
+             '        codeCorrect #{ #};', '        codeAddSup #{ #};', '        codeConstrain #{ #};', '', code,
+             '    }', '}']
+    return '\n'.join(lines)
+
+
+def writeFvOptionsInternal(porous, fullCaseSetupDict):
+    #constant/fvOptions: explicitPorositySource per POR zone, plus the heat source when HEAT is fixed or solved
+    path = os.path.join('constant', 'fvOptions')
+    if not porous:
+        if os.path.isfile(path):
+            os.remove(path)
+        return
+    print('\n\tWriting fvOptions (porous zones)...')
+    props = getGasProperties(fullCaseSetupDict)
+    cv = props['CP'] - 8314.46/props['MOL_WEIGHT']
+    entries = []
+    for zone in porous:
+        name = zone['name'].replace('-', '_')
+        entries.append('\n'.join([
+            '%sPorosity' % (name), '{', '    type            explicitPorositySource;',
+            '    explicitPorositySourceCoeffs', '    {', '        selectionMode   cellZone;',
+            '        cellZone        %s;' % (zone['name']), '        type            DarcyForchheimer;',
+            '        DarcyForchheimerCoeffs', '        {',
+            '            d   (%s);' % (' '.join('%.9g' % v for v in zone['d'])),
+            '            f   (%s);' % (' '.join('%.9g' % v for v in zone['f'])),
+            '            coordinateSystem',
+            '            {', '                origin  (0 0 0);',
+            '                rotation { type axes; e1 (%s); e2 (%s); }' % (' '.join('%g' % v for v in zone['e1']),
+                                                                          ' '.join('%g' % v for v in zone['e2'])),
+            '            }', '        }', '    }', '}']))
+        if zone['heat'] != 'none':
+            entries.append(porousHeatSource(zone, cv))
+    with open(path, 'w') as f:
+        f.write('FoamFile { version 2.0; format ascii; class dictionary; object fvOptions; }\n\n')
+        f.write('//porous zones (written by internalSetup)\n\n%s\n' % ('\n\n'.join(entries)))
+    if any(zone['heat'] != 'none' for zone in porous):
+        print('\t\tthe heat source is compiled at run time (needs a C++ compiler where the solver runs)')
 
 
 def writeTurbulenceInternal(templateLoc, fullCaseSetupDict):
@@ -477,22 +907,40 @@ def getTimeStep(fullCaseSetupDict):
     return control['INIT_DT'][0], maxCo, maxDt, 'yes'
 
 
+def getSteadyIterations(fullCaseSetupDict):
+    #steady solvers: N_ITER iterations, written every WRITE_ITER
+    control = fullCaseSetupDict['GLOBAL_CONTROL']
+    nIter = int(control.get('N_ITER', ['2000'])[0])
+    writeIter = int(control.get('WRITE_ITER', ['500'])[0])
+    if nIter <= 0 or writeIter <= 0:
+        sys.exit('ERROR! GLOBAL_CONTROL N_ITER and WRITE_ITER must be positive!')
+    return nIter, writeIter
+
+
 def writeControlDictInternal(templateLoc, fullCaseSetupDict):
     print('\n\tWriting controlDict...')
     control = fullCaseSetupDict['GLOBAL_CONTROL']
+    if isSteady(fullCaseSetupDict):
+        nIter, writeIter = getSteadyIterations(fullCaseSetupDict)
+        print('\t\tsteady: %d iterations, write every %d' % (nIter, writeIter))
+        replaceDict = {'SOLVER': getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER'),
+                       'STARTFROM': control['STARTFROM'][0], 'ENDTIME': nIter, 'INIT_DT': 1,
+                       'WRITE_INTERVAL': writeIter, 'MAX_CO': '1e6', 'MAX_DT': 1, 'ADJUST_DT': 'no'}
+        copyTemplate(templateLoc, 'system/controlDict', 'system/controlDict', replaceDict)
+        return
     endTime, writeInterval = getRunTimes(fullCaseSetupDict)
     print('\t\t%s cycles at %s Hz: endTime %.6g s, write every %.6g s'
           % (control['N_CYCLES'][0], control['FREQ'][0], endTime, writeInterval))
     initDt, maxCo, maxDt, adjustDt = getTimeStep(fullCaseSetupDict)
     if adjustDt == 'yes':
-        print('		adjustable time step: maxCo %s, maxDeltaT %s' % (maxCo, maxDt))
+        print('\t\tadjustable time step: maxCo %s, maxDeltaT %s' % (maxCo, maxDt))
     else:
-        print('		fixed time step %s (MAX_CO 0 or blank), %.6g steps per cycle'
+        print('\t\tfixed time step %s (MAX_CO 0 or blank), %.6g steps per cycle'
               % (maxDt, 1.0/(float(control['FREQ'][0])*float(maxDt))))
         #without time step adjustment the writes only land on the interval if it is a whole number of steps
         steps = writeInterval/float(maxDt)
         if abs(steps - round(steps)) > 1e-6*steps:
-            print('		WARNING! write interval %.6g s is not a whole number of time steps (%.4g): write times '
+            print('\t\tWARNING! write interval %.6g s is not a whole number of time steps (%.4g): write times '
                   'will be the first step past each interval' % (writeInterval, steps))
     replaceDict = {'SOLVER': getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER'),
                    'STARTFROM': control['STARTFROM'][0], 'ENDTIME': '%.9g' % endTime,
@@ -502,13 +950,14 @@ def writeControlDictInternal(templateLoc, fullCaseSetupDict):
 
 
 def getRelaxation(fullCaseSetupDict):
-    #under-relaxation, only with outer correctors (N_OUTER_CORR > 1)
+    #under-relaxation: always for the steady solvers, transient only with outer correctors (N_OUTER_CORR > 1)
     #the last outer iteration (Final) is not relaxed
     simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
     nOuter = int(simControl['N_OUTER_CORR'][0])
     if nOuter < 1:
         sys.exit('ERROR! GLOBAL_SIM_CONTROL N_OUTER_CORR must be 1 or more!')
-    if nOuter == 1:
+    steady = isSteady(fullCaseSetupDict)
+    if nOuter == 1 and not steady:
         return ''
     relax = {}
     for key, default in (('RELAX_P', '0.3'), ('RELAX_U', '0.7'), ('RELAX_E', '0.7')):
@@ -518,45 +967,86 @@ def getRelaxation(fullCaseSetupDict):
             relax[key] = -1.0
         if not 0 < relax[key] <= 1:
             sys.exit('ERROR! GLOBAL_SIM_CONTROL %s must be > 0 and <= 1!' % (key))
-    equations = ['        "(U|k|omega)"   %g;' % (relax['RELAX_U'])]
-    if getFlow(fullCaseSetupDict) == 'compressible':
+    compressible = getFlow(fullCaseSetupDict) == 'compressible'
+    pName = 'p_rgh' if isBuoyant(fullCaseSetupDict) else 'p'
+    equations = ['        "(U|k|omega|epsilon)" %g;' % (relax['RELAX_U'])]
+    if compressible:
         equations.append('        e               %g;' % (relax['RELAX_E']))
-    print('\t\t%d outer correctors, under-relaxation p %g, U %g%s (none on the last outer iteration)'
-          % (nOuter, relax['RELAX_P'], relax['RELAX_U'],
-             ', e %g' % (relax['RELAX_E']) if getFlow(fullCaseSetupDict) == 'compressible' else ''))
-    return ('relaxationFactors\n{\n    fields\n    {\n        p               %g;\n        pFinal          1;\n    }\n'
-            '    equations\n    {\n%s\n        ".*Final"       1;\n    }\n}\n' % (relax['RELAX_P'], '\n'.join(equations)))
+    fields = ['        %-15s %g;' % (pName, relax['RELAX_P']), '        %-15s 1;' % ('%sFinal' % (pName))]
+    if compressible:
+        fields.append('        rho             1;')
+    if steady:
+        print('\t\tsteady under-relaxation %s %g, U %g%s' % (pName, relax['RELAX_P'], relax['RELAX_U'],
+                                                            ', e %g' % (relax['RELAX_E']) if compressible else ''))
+    else:
+        print('\t\t%d outer correctors, under-relaxation p %g, U %g%s (none on the last outer iteration)'
+              % (nOuter, relax['RELAX_P'], relax['RELAX_U'], ', e %g' % (relax['RELAX_E']) if compressible else ''))
+    return ('relaxationFactors\n{\n    fields\n    {\n%s\n    }\n    equations\n    {\n%s\n        ".*Final"       1;\n    }\n}\n'
+            % ('\n'.join(fields), '\n'.join(equations)))
 
 
-def writeNumericsInternal(templateLoc, fullCaseSetupDict):
-    print('\n\tWriting fvSchemes, fvSolution, decomposeParDict...')
+def getAlgorithm(fullCaseSetupDict, pRef, pressureBC):
+    #SIMPLE (steady) or PIMPLE (transient) block of fvSolution
     simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
+    if isSteady(fullCaseSetupDict):
+        lines = ['SIMPLE', '{', '    nNonOrthogonalCorrectors %s;' % (simControl['N_NONORTH_CORR'][0])]
+        if getFlow(fullCaseSetupDict) == 'compressible' and pressureBC:
+            #limits p while the steady run settles (rhoSimpleFoam pressureControl)
+            lines += ['    pMinFactor      0.1;', '    pMaxFactor      2;']
+        if pRef:
+            lines.append(pRef)
+        lines += ['    residualControl', '    {', '        "(p|p_rgh)"     1e-4;', '        U               1e-5;',
+                  '        e               1e-5;', '        "(k|omega|epsilon)" 1e-5;', '    }', '}']
+        return '\n'.join(lines)
+    lines = ['PIMPLE', '{', '    momentumPredictor yes;', '    nOuterCorrectors %s;' % (simControl['N_OUTER_CORR'][0]),
+             '    nCorrectors %s;' % (simControl['N_CORR'][0]),
+             '    nNonOrthogonalCorrectors %s;' % (simControl['N_NONORTH_CORR'][0]), '    correctPhi no;']
+    if pRef:
+        lines.append(pRef)
+    return '\n'.join(lines + ['}'])
+
+
+def writeNumericsInternal(templateLoc, fullCaseSetupDict, pressureBC=False):
+    #pressureBC: an inlet or outlet fixes the pressure level, so no pressure reference is needed
+    print('\n\tWriting fvSchemes, fvSolution, decomposeParDict...')
     compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
+    steady = isSteady(fullCaseSetupDict)
     #divergence schemes per flow type, closed incompressible volume needs a pressure reference
     #linearUpwind keeps it stable at large Co (010 diverged at Co 2.4 with limitedLinearV)
-    divTurb = ['div(phi,k)      Gauss linearUpwind grad(k);', 'div(phi,omega)  Gauss linearUpwind grad(omega);']
+    #steady: bounded convection terms (continuity is only met at convergence)
+    bounded = 'bounded ' if steady else ''
+    divTurb = ['div(phi,k)      %sGauss linearUpwind grad(k);' % (bounded),
+               'div(phi,omega)  %sGauss linearUpwind grad(omega);' % (bounded),
+               'div(phi,epsilon) %sGauss linearUpwind grad(epsilon);' % (bounded)]
+    pRef = ''
     if getFlow(fullCaseSetupDict) == 'incompressible':
-        divSchemes = ['div(phi,U)      Gauss linearUpwind grad(U);'] + divTurb + ['div((nuEff*dev2(T(grad(U))))) Gauss linear;']
-        locInMesh = ' '.join(v for v in fullCaseSetupDict['GLOBAL_REFINEMENT']['LOC_IN_MESH'] if v != '')
-        pRef = '    pRefPoint ( %s );\n    pRefValue 0;' % (locInMesh)
+        divSchemes = ['div(phi,U)      %sGauss linearUpwind grad(U);' % (bounded)] + divTurb \
+                     + ['div((nuEff*dev2(T(grad(U))))) Gauss linear;']
+        if not pressureBC:
+            locInMesh = ' '.join(v for v in fullCaseSetupDict['GLOBAL_REFINEMENT']['LOC_IN_MESH'] if v != '')
+            pRef = '    pRefPoint ( %s );\n    pRefValue 0;' % (locInMesh)
     else:
-        divSchemes = ['div(phi,U)      Gauss linearUpwind grad(U);', 'div(phi,e)      Gauss linearUpwind grad(e);',
-                      'div(phi,K)      Gauss linear;',
+        divSchemes = ['div(phi,U)      %sGauss linearUpwind grad(U);' % (bounded),
+                      'div(phi,e)      %sGauss linearUpwind grad(e);' % (bounded),
+                      'div(phi,K)      %sGauss linear;' % (bounded),
+                      'div(phi,Ekp)    %sGauss linear;           // kinetic energy + p/rho in the steady e equation' % (bounded),
                       'div(phiv,p)     Gauss linear;           // pressure work in the e equation',
                       'div(meshPhi,p)  Gauss linear;           // pressure work from the moving mesh'] \
                      + divTurb + ['div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;']
-        pRef = ''
     copyTemplate(templateLoc, 'system/fvSchemes', 'system/fvSchemes',
-                 {'DIV_SCHEMES': '\n'.join('    ' + s for s in divSchemes)})
+                 {'DIV_SCHEMES': '\n'.join('    ' + s for s in divSchemes),
+                  'DDT_SCHEME': 'steadyState' if steady else 'Euler'})
     relaxation = getRelaxation(fullCaseSetupDict)
-    #older custom template sets have no <RELAXATION> slot
+    #older custom template sets have no <RELAXATION> / <ALGORITHM> slots
     with open('%s/defaultDicts/system/fvSolution' % (templateLoc)) as f:
-        if relaxation and '<RELAXATION>' not in f.read():
-            print('\t\tWARNING: %s/defaultDicts/system/fvSolution has no <RELAXATION> line: no under-relaxation is '
-                  'written, add <RELAXATION> after the PIMPLE block' % (templateLoc))
+        template = f.read()
+    for slot, needed in (('<RELAXATION>', bool(relaxation)), ('<ALGORITHM>', True)):
+        if needed and slot not in template:
+            print('\t\tWARNING: %s/defaultDicts/system/fvSolution has no %s line: update it from setupTemplates/internal'
+                  % (templateLoc, slot))
     copyTemplate(templateLoc, 'system/fvSolution', 'system/fvSolution',
-                 {'N_OUTER_CORR': simControl['N_OUTER_CORR'][0], 'N_CORR': simControl['N_CORR'][0],
-                  'N_NONORTH_CORR': simControl['N_NONORTH_CORR'][0], 'P_REF': pRef, 'RELAXATION': relaxation})
+                 {'ALGORITHM': getAlgorithm(fullCaseSetupDict, pRef, pressureBC), 'RELAXATION': relaxation,
+                  'P_RELTOL': '0.05' if steady else '0.01', 'U_RELTOL': '0.1' if steady else '0'})
     method, decomp = getDecomp(fullCaseSetupDict)
     nProcs, coeffs = compute['NUM_PROCS'][0], ''
     if decomp:
@@ -603,20 +1093,49 @@ def functionObject(name, entries, fieldWriter=False):
     return '\n'.join(lines)
 
 
-def writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo=None):
+def writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo=None, porous=None):
     #gas averages, mass (must stay constant in a closed volume) and wall heat flux for compressible runs,
     #pressure force per moving body and area-averaged p on each motion face (both flow types)
     #gas volume for post: V = volIntegrate(rho)/volAverage(rho), no extra function object needed
     print('\n\tWriting internalFunctionObjects...')
     incompressible = getFlow(fullCaseSetupDict) == 'incompressible'
-    allPatches = []
+    allPatches, flowPatches = [], []
     for geomName in wallGroups:
         for group in wallGroups[geomName]:
-            allPatches += ['"%s_%s"' % (geomName, pid) for pid in group['pids']]
+            patches = ['%s_%s' % (geomName, pid) for pid in group['pids']]
+            if group.get('flow'):
+                flowPatches += patches
+            else:
+                allPatches += ['"%s"' % (patch) for patch in patches]
     volume = [('type', 'volFieldValue;'), ('libs', '(fieldFunctionObjects);'), ('regionType', 'all;')]
     fos = [functionObject('gasAvg', volume + [('operation', 'volAverage;'),
                                               ('fields', '(p);' if incompressible else '(p T rho);'),
                                               ('writeFields', 'false;')])]
+    #inlets and outlets: flux (kg/s compressible, m3/s incompressible, + out of the domain) and area-averaged p, T
+    for patch in flowPatches:
+        surface = [('type', 'surfaceFieldValue;'), ('libs', '(fieldFunctionObjects);'), ('regionType', 'patch;'),
+                   ('name', '%s;' % (patch)), ('writeFields', 'false;')]
+        fos.append(functionObject('flow_%s' % (patch), surface + [('operation', 'sum;'), ('fields', '(phi);')]))
+        fos.append(functionObject('avg_%s' % (patch), surface + [('operation', 'areaAverage;'),
+                                                                 ('fields', '(p);' if incompressible else '(p T);')]))
+    #porous zones: zone averages (incl. the matrix temperature) and the heat from the matrix into the gas (W)
+    for zone in (porous or []):
+        cellZone = [('type', 'volFieldValue;'), ('libs', '(fieldFunctionObjects);'), ('regionType', 'cellZone;'),
+                    ('name', '%s;' % (zone['name'])), ('writeFields', 'false;')]
+        fields = ['p'] if incompressible else ['p', 'T']
+        if zone.get('heat', 'none') != 'none':
+            fields.append('Ts_%s' % (zone['name']))
+            fos.append(functionObject('porHeat_%s' % (zone['name']), cellZone + [('operation', 'volIntegrate;'),
+                                                                               ('fields', '(Qs_%s);' % (zone['name']))]))
+        fos.append(functionObject('por_%s' % (zone['name']), cellZone + [('operation', 'volAverage;'),
+                                                                       ('fields', '(%s);' % (' '.join(fields)))]))
+    #steady: initial residuals per iteration for the convergence plot
+    if isSteady(fullCaseSetupDict):
+        fields = ['U', 'p_rgh' if isBuoyant(fullCaseSetupDict) else 'p'] + ([] if incompressible else ['e'])
+        if getTurbulence(fullCaseSetupDict) != 'laminar':
+            fields += ['k', 'omega']
+        fos.append(functionObject('residuals', [('type', 'solverInfo;'), ('libs', '(utilityFunctionObjects);'),
+                                                ('fields', '(%s);' % (' '.join(fields)))]))
     if not incompressible:
         fos.append(functionObject('gasMass', volume + [('operation', 'volIntegrate;'), ('fields', '(rho);'),
                                                        ('writeFields', 'false;')]))
@@ -650,9 +1169,10 @@ def writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo=None)
 
 def matchPids(keywords, pids, where):
     #PIDs containing any of the keywords (case-insensitive), every keyword must match
+    #a keyword that is a whole PID name only takes that PID (MOVE-piston does not also take MOVE-piston-skirt)
     matched = []
     for kw in keywords:
-        hits = [pid for pid in pids if kw.lower() in pid.lower()]
+        hits = [pid for pid in pids if kw.lower() == pid.lower()] or [pid for pid in pids if kw.lower() in pid.lower()]
         if len(hits) == 0:
             sys.exit('ERROR! %s: keyword "%s" matches no PID. PIDs are: %s' % (where, kw, pids))
         matched += [pid for pid in hits if pid not in matched]
@@ -863,6 +1383,20 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
         scale = float(geomDict[geomFiles[body.source]]['scale'])
         for pid in body.movedPids:
             shifts.setdefault(body.source, {})[pid] = (0.0, 0.0, dz/scale)
+    #porous zones inside a moving body (regenerator in the displacer) are moved with it (MOVES_WITH = <body>)
+    bodyNames = dict((body.name, body) for body in bodies)
+    for geomName in geomFiles:
+        if not geomName.startswith('POR'):
+            continue
+        owner = fullCaseSetupDict[geomName].get('MOVES_WITH', ['none'])[0]
+        if owner == 'none':
+            continue
+        if owner not in bodyNames:
+            sys.exit('ERROR! [%s] MOVES_WITH %s is not a MOVE body (bodies: %s)' % (geomName, owner, list(bodyNames)))
+        dz = float(bodyNames[owner].shift(startAngle))
+        scale = float(geomDict[geomFiles[geomName]]['scale'])
+        shifts[geomName] = dict((pid, (0.0, 0.0, dz/scale)) for pid in pidDict[geomName])
+        print('\t\t%s moves with %s: shifted %+.4g m to the start angle' % (geomName, owner, dz))
 
     #gap refinement around the GAP_PIDS of each body
     wallGap = []
@@ -987,7 +1521,7 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
 
 #----- scripts
 
-def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None):
+def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None, fanNames=None):
     #writing runScript, postScript, motionCheckScript and submitScript from clusterDict
     print('\n\tWriting scripts...')
     with open('%s/defaultCluster/slurm/clusterDict' % (templateLoc)) as f:
@@ -998,6 +1532,8 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     #the crank drive library is compiled in the job (wmake skips it when up to date)
     if not motionZones or getCrank(fullCaseSetupDict) is None:
         skipSteps.append('compileLib')
+    if not fanNames:
+        skipSteps.append('createBaffles')
     export = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('EXPORT', ['ensight'])[0].lower()
     if export not in ('ensight', 'none'):
         sys.exit('ERROR! GLOBAL_COMPUTE_SETUP EXPORT must be ensight or none!')
@@ -1047,15 +1583,29 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
 
 #----- full dict extras for postRun
 
+def hasPressureBC(wallGroups):
+    #an inlet or outlet that fixes the pressure level (no pressure reference needed)
+    return any(group.get('flow') and group['flow']['type'] in ('totalPressure', 'staticPressure')
+               for groups in wallGroups.values() for group in groups)
+
+
 def addSetupInfo(fullCaseSetupDict, wallGroups, motionInfo=None):
     #marker for postRun, resolved BC groups and the start crank angle for post
     fullCaseSetupDict['SETUP_INFO'] = {'TOOL': ['internal'], 'VERSION': [__version__],
-                                        'FLOW': [getFlow(fullCaseSetupDict)]}
+                                        'FLOW': [getFlow(fullCaseSetupDict)],
+                                        'STEADY': ['yes' if isSteady(fullCaseSetupDict) else 'no'],
+                                        'RHO_REF': ['%.6g' % (getGasDensity(fullCaseSetupDict))]}
     if motionInfo:
         fullCaseSetupDict['SETUP_INFO']['START_ANGLE'] = ['%.6g' % (motionInfo['startAngle'])]
-    groupDict = {}
+    groupDict, kindDict = {}, {}
     for geomName in wallGroups:
         for group in wallGroups[geomName]:
             groupDict[group['name']] = ['%s_%s' % (geomName, pid) for pid in group['pids']]
+            #wall | inlet <type> <value> | outlet <type> <value>
+            if group.get('flow'):
+                kindDict[group['name']] = [group['flow']['kind']] + flowLabel(group['flow']).split()
+            else:
+                kindDict[group['name']] = ['wall']
     fullCaseSetupDict['BC_GROUPS_RESOLVED'] = groupDict
+    fullCaseSetupDict['BC_GROUP_KINDS'] = kindDict
     return fullCaseSetupDict

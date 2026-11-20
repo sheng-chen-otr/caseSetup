@@ -336,3 +336,94 @@ def test_push_appends_then_updates():
     assert ws.values[2] == ['J', 'b', 2.0, 3]
     gsheetInternal.pushSummary(ws, {'JOB': 'J', 'NAME': 'a', 'AVG_POWER': 9.0})
     assert ws.values[1][:3] == ['J', 'a', 9.0] and len(ws.values) == 3
+
+
+#----- steady through-flow
+
+STEADY_SETUP = """[TITLES]
+CASENAME = pipe01
+CASEDESCRP = steady pipe
+
+[GLOBAL_CONTROL]
+N_ITER = 300
+
+[GLOBAL_SIM_CONTROL]
+SOLVER = rhoSimpleFoam
+TURB_MODEL = kOmegaSST
+
+[GLOBAL_MATERIAL]
+GAS = air
+CHARGE_PRESSURE = 1e5
+INIT_T = 300
+
+[SETUP_INFO]
+TOOL = internal
+VERSION = 5.0.0-dev
+FLOW = compressible
+STEADY = yes
+RHO_REF = 1.161
+
+[BC_GROUPS_RESOLVED]
+pIn = WALL-pipe_inletA WALL-pipe_inletB
+pOut = WALL-pipe_outlet
+pWall = WALL-pipe_wall
+
+[BC_GROUP_KINDS]
+pIn = inlet massFlow 0.03
+pOut = outlet staticPressure 100000
+pWall = wall
+"""
+
+
+def makeSteadyCase(root):
+    case = root / 'JOB02' / 'CASES' / 'pipe01'
+    case.mkdir(parents=True)
+    (case / 'fullCaseSetupDict').write_text(STEADY_SETUP)
+    post = case / 'postProcessing'
+    it = np.arange(1, 301, dtype=float)
+    _dat(post / 'gasAvg' / '0' / 'volFieldValue.dat', ['Time', 'volAverage(p)', 'volAverage(T)', 'volAverage(rho)'],
+         np.column_stack([it, 0*it + 1.0001e5, 0*it + 450, 0*it + 0.8]))
+    #two inlet patches (0.02 and 0.01 kg/s in, phi < 0), areas 1 and 3, p 100010 and 100006, T 600 and 500
+    for patch, flux, area, p, T in [('inletA', -0.02, 1.0, 100010.0, 600.0), ('inletB', -0.01, 3.0, 100006.0, 500.0),
+                                    ('outlet', 0.03, 2.0, 100000.0, 400.0)]:
+        _dat(post / ('flow_WALL-pipe_%s' % (patch)) / '0' / 'surfaceFieldValue.dat', ['Time', 'sum(phi)'],
+             np.column_stack([it, 0*it + flux]), '# Region type : patch\n# Area        : %g' % (area))
+        _dat(post / ('avg_WALL-pipe_%s' % (patch)) / '0' / 'surfaceFieldValue.dat',
+             ['Time', 'areaAverage(p)', 'areaAverage(T)'], np.column_stack([it, 0*it + p, 0*it + T]),
+             '# Region type : patch\n# Area        : %g' % (area))
+    heat = post / 'wallHeatFlux' / '0' / 'wallHeatFlux.dat'
+    heat.parent.mkdir(parents=True)
+    heat.write_text('# Wall heat-flux\n# Time  patch  min  max  integral\n'
+                    + ''.join('%g\tWALL-pipe_wall\t1\t2\t-300\n' % (a) for a in it))
+    #solverInfo has text columns (solver names, converged flags)
+    res = post / 'residuals' / '0' / 'solverInfo.dat'
+    res.parent.mkdir(parents=True)
+    res.write_text('# Solver information\n# Time\tp_solver\tp_initial\tp_final\tp_iters\tp_converged\n'
+                   + ''.join('%g\tGAMG\t%g\t1e-9\t3\tfalse\n' % (a, 10.0**(-a/60.0)) for a in it))
+    return case
+
+
+def test_summary_steady_flow(tmp_path):
+    case = makeSteadyCase(tmp_path)
+    s = postInternal.buildSummary(str(case), avgIters=50)
+    assert s['END_ITER'] == 300 and s['AVG_ITERS'] == 50 and 'CYCLES_DONE' not in s
+    assert s['MDOT_pIn'] == pytest.approx(0.03) and s['MDOT_pOut'] == pytest.approx(-0.03)
+    assert s['MDOT_IMBALANCE'] == pytest.approx(0.0, abs=1e-12)
+    #area-weighted over the inlet patches: (1*100010 + 3*100006)/4, (1*600 + 3*500)/4
+    assert s['P_pIn'] == pytest.approx(100007.0) and s['T_pIn'] == pytest.approx(525.0)
+    assert s['P_DROP'] == pytest.approx(7.0) and s['T_pOut'] == pytest.approx(400.0)
+    assert s['HEAT_pWall'] == pytest.approx(-300.0) and s['T_MEAN'] == pytest.approx(450.0)
+    series = postInternal.flowSeries(str(case))
+    assert series['residuals']['p'][0] == pytest.approx(10.0**(-1/60.0))
+    assert [os.path.basename(p) for p in postInternal.writePlots(str(case))] == ['flowConvergence.png']
+
+
+def test_flow_units_incompressible():
+    import configparser
+    config = configparser.ConfigParser()
+    config.optionxform = str
+    config.read_string('[SETUP_INFO]\nRHO_REF = 1.2\n[GLOBAL_MATERIAL]\nCHARGE_PRESSURE = 1e5\n')
+    assert postInternal.flowUnits(config, False) == ('MDOT', 1.2, 1.2, 1e5)
+    assert postInternal.flowUnits(config, True) == ('MDOT', 1.0, 1.0, 0.0)
+    config.remove_option('SETUP_INFO', 'RHO_REF')
+    assert postInternal.flowUnits(config, False)[0] == 'VOLUME_FLOW'

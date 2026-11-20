@@ -72,6 +72,33 @@ flowSpecification
             value       ${:VALUE.p_rgh};
         }
     }
+    normalVelocity
+    {
+        p
+        {
+            type        calculated;
+            value       ${:VALUE.p};
+        }
+        p_rgh
+        {
+            type        fixedFluxPressure;
+            value       ${:VALUE.p_rgh};
+        }
+    }
+    fixedTotalPressure
+    {
+        p
+        {
+            type        calculated;
+            value       ${:VALUE.p};
+        }
+        p_rgh
+        {
+            type        prghTotalPressure;
+            p0          ${:VALUE.p};
+            value       ${:VALUE.p_rgh};
+        }
+    }
 }
 
 

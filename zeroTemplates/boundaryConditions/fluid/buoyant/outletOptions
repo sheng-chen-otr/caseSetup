@@ -62,6 +62,21 @@ returnFlow
             value       ${:VALUE.p_rgh};
         }
     }
+    //static pressure p at the outlet, p_rgh follows from it (prghPressure)
+    staticPressure
+    {
+        p
+        {
+            type        calculated;
+            value       ${:VALUE.p};
+        }
+        p_rgh
+        {
+            type        prghPressure;
+            p           ${:VALUE.p};
+            value       ${:VALUE.p_rgh};
+        }
+    }
 }
 
 // ************************************************************************* //

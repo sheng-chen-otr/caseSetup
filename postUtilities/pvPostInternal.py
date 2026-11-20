@@ -247,6 +247,7 @@ def main(argv=None):
     pRef = float(config['GLOBAL_MATERIAL']['CHARGE_PRESSURE']) if compressible else 0.0
     locInMesh = [float(v) for v in config['GLOBAL_REFINEMENT']['LOC_IN_MESH'].split()]
     motion = Motion(caseDir, config)
+    steady = config.has_section('SETUP_INFO') and config['SETUP_INFO'].get('STEADY', 'no') == 'yes'
 
     print('\tGetting pvPostInternalSetup...')
     setup = getPVSetup(caseDir)
@@ -430,7 +431,10 @@ def main(argv=None):
     print('\n\tWriting %d images (%d panels x %d times)...' % (len(panels)*len(times), len(panels), len(times)))
     for i, t in enumerate(times):
         angle = motion.angle(t)
-        stamp = 't = %.5f s' % (t) + ('   crank %.1f deg' % (angle) if angle is not None else '')
+        if steady:
+            stamp = 'iteration %d' % (int(round(t)))
+        else:
+            stamp = 't = %.5f s' % (t) + ('   crank %.1f deg' % (angle) if angle is not None else '')
         for panel in panels:
             if panel['follow']:
                 origin = list(panel['origin'])

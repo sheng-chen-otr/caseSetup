@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import postInternal
 
 CONFIG_FILE = os.path.join('~', '.config', 'caseSetup', 'gsheet.ini')
-DEFAULT_CREDENTIALS = os.path.join('~', '.config', 'caseSetup', 'credentials.json')
+DEFAULT_CREDENTIALS = os.path.join('~','.config', 'caseSetup', 'internal_cfd_credentials.json')
 HEADER_ROW = 1
 KEY_COLUMNS = ['JOB', 'NAME']
 
@@ -53,7 +53,7 @@ def getSettings(sheetId=None, worksheet=None):
         'sheetID': sheetId or os.getenv('INTERNAL_GSHEET_ID') or fromFile.get('sheetID', ''),
         'worksheet': worksheet or os.getenv('INTERNAL_GSHEET_WORKSHEET') or fromFile.get('worksheet', ''),
         'credentials': os.path.expanduser(os.path.expandvars(
-            os.getenv('INTERNAL_GSHEET_CREDENTIALS') or fromFile.get('credentials', DEFAULT_CREDENTIALS)))}
+            os.getenv('INTERNAL_GSHEET_CREDENTIALS') or fromFile.get('credentials', DEFAULT_CREDENTIALS )))}
     if not settings['sheetID']:
         sys.exit('ERROR! No sheet id: set INTERNAL_GSHEET_ID or sheetID in %s' % (CONFIG_FILE))
     return settings
@@ -167,11 +167,13 @@ def pushSummary(worksheet, summary, comment=None, dryRun=False):
 
 
 def main(argv=None):
+    global args
     parser = argparse.ArgumentParser(description='Push internal run summaries to the database gsheet')
     parser.add_argument('cases', nargs='*', default=['.'], help='case directories (default: current directory)')
     parser.add_argument('--comment', default=None, help='text for the COMMENTS column (otherwise left as it is)')
     parser.add_argument('--sheetId', default=None, help='sheet id (overrides INTERNAL_GSHEET_ID / gsheet.ini)')
     parser.add_argument('--worksheet', default=None, help='worksheet name (default: first sheet)')
+    parser.add_argument('--config', default=None, help='path to the config file (default: gsheet.ini)')
     parser.add_argument('--dryRun', action='store_true', help='show what would be written, change nothing')
     args = parser.parse_args(argv)
     settings = getSettings(args.sheetId, args.worksheet)

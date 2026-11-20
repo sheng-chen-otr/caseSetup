@@ -95,7 +95,7 @@ def test_readSurfacePIDs_obj_groups_and_objects(tmp_path):
 
 def test_parseGroupLine_full():
     group = writeInternal.parseGroupLine('PIDS hot ring U slip T fixed 600'.split(' '), 'g')
-    assert group == {'keywords': ['hot', 'ring'], 'U': 'slip', 'T': ['fixed', 600.0]}
+    assert group == {'keywords': ['hot', 'ring'], 'U': 'slip', 'T': ['fixed', 600.0], 'flow': None}
 
 
 @pytest.mark.parametrize('line', ['hot T fixed 600', 'PIDS', 'PIDS hot U moving',
@@ -215,6 +215,42 @@ def test_findFromSections_keeps_valid_from_drops_orphan():
     assert internalSetup.findFromSections(w, ['WALL-chamber']) == ['MOVE-piston']
 
 
+def test_move_pids_in_wall_files_become_sections(repo_root):
+    pidDict = {'WALL-chamber-full-system': ['MOVE-piston', 'WALL-piston-wall', 'WALL-chamber-hot', 'move-rod'],
+               'MOVE-displacer': ['MOVE-displacer-hot', 'side']}
+    #MOVE- PIDs of non-MOVE files only, one body per PID (prefix case-insensitive)
+    bodies = internalSetup.findPidBodies(pidDict)
+    assert bodies == {'MOVE-piston': ('WALL-chamber-full-system', 'MOVE-piston'),
+                      'MOVE-rod': ('WALL-chamber-full-system', 'move-rod')}
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    moveItems = setupCore.readAddonTemplate(templateLoc, 'defaultMove', 'MOVE_SETUP')
+    #an existing section is kept, a new one is filled in template order and flags the update
+    w = {'MOVE-rod': {'FROM': ['WALL-chamber-full-system'], 'ZONE_PIDS': ['move-rod'], 'MOTION_COLUMN': ['myRod']}}
+    assert internalSetup.addPidBodies(w, bodies, ['WALL-chamber-full-system', 'MOVE-displacer'], moveItems)
+    assert w['MOVE-rod']['MOTION_COLUMN'] == ['myRod']
+    piston = w['MOVE-piston']
+    assert list(piston) == [key for key, val in moveItems]
+    assert piston['FROM'] == ['WALL-chamber-full-system'] and piston['ZONE_PIDS'] == ['MOVE-piston']
+    assert piston['MOTION_COLUMN'] == ['piston'] and piston['TDC_CLEARANCE'] == ['0.002']
+    assert not internalSetup.addPidBodies(w, bodies, ['WALL-chamber-full-system'], moveItems)
+    #two files with the same MOVE- PID
+    with pytest.raises(SystemExit):
+        internalSetup.findPidBodies({'WALL-a': ['MOVE-piston'], 'WALL-b': ['MOVE-piston']})
+    #the PID is gone from the file: the section is dropped, a manual FROM section with a matching PID stays
+    w['MOVE-crown'] = {'FROM': ['WALL-chamber-full-system'], 'ZONE_PIDS': ['hot']}
+    kept = internalSetup.findFromSections(w, ['WALL-chamber-full-system'],
+                                          {'WALL-chamber-full-system': ['WALL-chamber-hot', 'move-rod']})
+    assert kept == ['MOVE-rod', 'MOVE-crown']
+
+
+def test_match_pids_whole_name_first():
+    pids = ['MOVE-piston', 'MOVE-piston-skirt', 'hot']
+    assert writeInternal.matchPids(['MOVE-piston'], pids, 'x') == ['MOVE-piston']
+    assert writeInternal.matchPids(['piston'], pids, 'x') == ['MOVE-piston', 'MOVE-piston-skirt']
+    with pytest.raises(SystemExit):
+        writeInternal.matchPids(['cold'], pids, 'x')
+
+
 def test_geom_prefix_check():
     internalSetup.checkGeomPrefixes({'WALL-chamber.stl': {}})
     with pytest.raises(SystemExit):
@@ -331,7 +367,7 @@ def test_flow_type_and_nu(repo_root):
     assert writeInternal.getNu(full) == pytest.approx(writeInternal.getGasProperties(full)['MU']/1.161, rel=1e-3)
     full['GLOBAL_MATERIAL']['NU'] = ['1.5e-5']
     assert writeInternal.getNu(full) == 1.5e-5
-    full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['simpleFoam']
+    full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['interFoam']
     with pytest.raises(SystemExit):
         writeInternal.getFlow(full)
 
@@ -378,13 +414,13 @@ def test_relaxation_only_with_outer_correctors(tmp_path, monkeypatch, repo_root)
     text = (tmp_path / 'system/fvSolution').read_text()
     assert 'nOuterCorrectors 3;' in text and 'relaxationFactors' in text
     assert 'p               0.3;' in text and 'pFinal          1;' in text
-    assert '"(U|k|omega)"   0.7;' in text and 'e               0.7;' in text and '".*Final"       1;' in text
+    assert '"(U|k|omega|epsilon)" 0.7;' in text and 'e               0.7;' in text and '".*Final"       1;' in text
     #incompressible: no energy equation
     full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['pimpleFoam']
     full['GLOBAL_SIM_CONTROL']['RELAX_U'] = ['0.5']
     writeInternal.writeNumericsInternal(templateLoc, full)
     text = (tmp_path / 'system/fvSolution').read_text()
-    assert '"(U|k|omega)"   0.5;' in text and ' e  ' not in text
+    assert '"(U|k|omega|epsilon)" 0.5;' in text and ' e  ' not in text
     full['GLOBAL_SIM_CONTROL']['RELAX_P'] = ['1.5']
     with pytest.raises(SystemExit):
         writeInternal.writeNumericsInternal(templateLoc, full)
@@ -568,3 +604,234 @@ def test_decomp_helper_given_split(tmp_path, monkeypatch, repo_root):
     assert 'numberOfSubdomains 4;' in text and '(2 2 1);' in text and text.count('coeffs') == 1
     with pytest.raises(SystemExit):
         tool.main([str(path), '6', '2', '2', '1'])
+
+
+#----- through-flow (inlets, outlets, steady solvers)
+
+def test_flow_group_lines():
+    group = writeInternal.parseGroupLine('PIDS inlet U massFlow 0.5 T fixed 600'.split(), 'g')
+    assert group['flow'] == {'kind': 'inlet', 'type': 'massFlow', 'value': 0.5} and group['T'] == ['fixed', 600.0]
+    assert writeInternal.parseGroupLine('PIDS in U velocity 5'.split(), 'g')['flow']['type'] == 'velocity'
+    vector = writeInternal.parseGroupLine('PIDS in U velocity 0 0 3'.split(), 'g')['flow']
+    assert vector == {'kind': 'inlet', 'type': 'velocityVector', 'value': [0.0, 0.0, 3.0]}
+    assert writeInternal.parseGroupLine('PIDS in P total 1.01e5'.split(), 'g')['flow']['type'] == 'totalPressure'
+    assert writeInternal.parseGroupLine('PIDS out P fixed 1e5'.split(), 'g')['flow']['kind'] == 'outlet'
+    assert writeInternal.parseGroupLine('PIDS wall U slip'.split(), 'g')['flow'] is None
+    for bad in ['PIDS in U massFlow 0.5 P fixed 1e5', 'PIDS in U massFlow -1', 'PIDS in U massFlow 0.5 T convective 10 300',
+                'PIDS out P total', 'PIDS in U speed 5', 'PIDS w U slip P fixed 1e5']:
+        with pytest.raises(SystemExit):
+            writeInternal.parseGroupLine(bad.split(), bad)
+    #inlet/outlet T defaults to None (INIT_T), walls keep their default
+    groups = writeInternal.resolveBCGroups('WALL-pipe', {'U_DEFAULT': ['noSlip'], 'T_DEFAULT': ['adiabatic'],
+                                                         'BC_GROUPS': ['pIn', 'pOut'],
+                                                         'pIn': 'PIDS inlet U massFlow 0.02'.split(),
+                                                         'pOut': 'PIDS outlet P fixed 1e5'.split()},
+                                           ['inlet', 'outlet', 'wall'])
+    assert [g['name'] for g in groups] == ['pIn', 'pOut', 'WALL-pipe_default']
+    assert groups[0]['T'] is None and groups[2]['T'] == ['adiabatic'] and groups[2]['flow'] is None
+
+
+def _pipeCase(tmp_path, monkeypatch):
+    #constant/triSurface/WALL-pipe.stl with a 0.1 x 0.1 inlet square (area 0.01), and its wall groups
+    monkeypatch.chdir(tmp_path)
+    surf = tmp_path / 'constant' / 'triSurface'
+    surf.mkdir(parents=True)
+    (tmp_path / 'system').mkdir()
+    square = lambda z: ['facet normal 0 0 1\n outer loop\n  vertex 0 0 %g\n  vertex 0.1 0 %g\n  vertex 0.1 0.1 %g\n endloop\nendfacet\n' % (z, z, z),
+                        'facet normal 0 0 1\n outer loop\n  vertex 0 0 %g\n  vertex 0.1 0.1 %g\n  vertex 0 0.1 %g\n endloop\nendfacet\n' % (z, z, z)]
+    text = 'solid inlet\n%sendsolid inlet\nsolid outlet\n%sendsolid outlet\nsolid wall\n%sendsolid wall\n' \
+           % (''.join(square(0)), ''.join(square(1)), ''.join(square(0.5)))
+    (surf / 'WALL-pipe.stl').write_text(text)
+    geomDict = {'WALL-pipe.stl': {'scale': '1', 'refinement': '1', 'layers': '0', 'expansion': '1.2', 'wallmodel': 'high'}}
+    groups = writeInternal.resolveBCGroups('WALL-pipe', {'U_DEFAULT': ['noSlip'], 'T_DEFAULT': ['flux', '-500'],
+                                                         'BC_GROUPS': ['pIn', 'pOut'],
+                                                         'pIn': 'PIDS inlet U massFlow 0.02 T fixed 600'.split(),
+                                                         'pOut': 'PIDS outlet P fixed 1e5'.split()},
+                                           ['inlet', 'outlet', 'wall'])
+    for group in groups:
+        group['moving'] = []
+    return geomDict, {'WALL-pipe': groups}
+
+
+def test_flow_entries_compressible_and_incompressible(tmp_path, monkeypatch, repo_root):
+    geomDict, wallGroups = _pipeCase(tmp_path, monkeypatch)
+    templateLoc, full = _fullDefaults(repo_root, 'rhoSimpleFoam')
+    full['GLOBAL_SIM_CONTROL']['TURB_MODEL'] = ['kOmegaSST']
+    writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, full, wallGroups)
+    text = (tmp_path / 'system/caseProperties').read_text()
+    inlet = [l for l in text.splitlines() if l.strip().startswith('pIn ')][0]
+    assert 'category inlet; type subSonic;' in inlet and 'flowSpecification flowRate;' in inlet
+    assert 'massFlowRate constant 0.02;' in inlet and 'T uniform 600;' in inlet
+    #k from 5 % intensity of the mean inlet velocity mdot/(rho A), rho of air at 1 bar 600 K
+    rho = 1e5*28.96/(8314.46*600)
+    speed = 0.02/(rho*0.01)
+    k = float(re.search(r'k uniform ([0-9.e+-]+);', inlet).group(1))
+    assert k == pytest.approx(1.5*(0.05*speed)**2, rel=1e-4)
+    outlet = [l for l in text.splitlines() if l.strip().startswith('pOut ')][0]
+    assert 'category outlet;' in outlet and 'returnFlow staticPressure;' in outlet and 'p uniform 100000;' in outlet
+    assert 'T uniform 300;' in outlet
+    wall = [l for l in text.splitlines() if 'WALL-pipe_default' in l][0]
+    assert 'category wall;' in wall and 'heatTransfer heatFlux;' in wall
+    #incompressible: volume flow from the charge density, kinematic gauge p
+    templateLoc, full = _fullDefaults(repo_root, 'simpleFoam')
+    writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, full, wallGroups)
+    text = (tmp_path / 'system/caseProperties').read_text()
+    rhoCharge = writeInternal.getGasDensity(full)
+    inlet = [l for l in text.splitlines() if l.strip().startswith('pIn ')][0]
+    flow = float(re.search(r'volumetricFlowRate constant ([0-9.e+-]+);', inlet).group(1))
+    assert 'flowSpecification volumeFlowRate;' in inlet and flow == pytest.approx(0.02/rhoCharge, rel=1e-6)
+    assert 'T uniform' not in inlet and 'p uniform 0;' in [l for l in text.splitlines() if l.strip().startswith('pOut ')][0]
+    #buoyant: p_rgh starts at the charge pressure
+    templateLoc, full = _fullDefaults(repo_root, 'buoyantSimpleFoam')
+    writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, full, wallGroups)
+    assert 'p_rgh uniform 100000;' in (tmp_path / 'system/caseProperties').read_text()
+
+
+def test_steady_numerics_and_control(tmp_path, monkeypatch, repo_root):
+    templateLoc, full = _fullDefaults(repo_root, 'rhoSimpleFoam')
+    monkeypatch.chdir(tmp_path)
+    writeInternal.writeNumericsInternal(templateLoc, full, pressureBC=True)
+    schemes = (tmp_path / 'system/fvSchemes').read_text()
+    assert 'default steadyState;' in schemes and 'div(phi,U)      bounded Gauss linearUpwind grad(U);' in schemes
+    assert 'div(phi,Ekp)' in schemes
+    solution = (tmp_path / 'system/fvSolution').read_text()
+    assert 'SIMPLE' in solution and 'PIMPLE' not in solution and 'residualControl' in solution
+    assert 'pMinFactor' in solution and 'pRefPoint' not in solution and '<' not in solution
+    assert 'p               0.3;' in solution and 'rho             1;' in solution
+    #closed incompressible steady volume keeps the pressure reference, buoyant relaxes p_rgh
+    templateLoc, full = _fullDefaults(repo_root, 'simpleFoam')
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    solution = (tmp_path / 'system/fvSolution').read_text()
+    assert 'pRefPoint ( 0.001 0.002 0.003 );' in solution and 'pMinFactor' not in solution
+    templateLoc, full = _fullDefaults(repo_root, 'buoyantSimpleFoam')
+    writeInternal.writeNumericsInternal(templateLoc, full, pressureBC=True)
+    assert 'p_rgh           0.3;' in (tmp_path / 'system/fvSolution').read_text()
+    #transient runs keep PIMPLE and Euler
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    assert 'PIMPLE' in (tmp_path / 'system/fvSolution').read_text()
+    assert 'default Euler;' in (tmp_path / 'system/fvSchemes').read_text()
+    #steady controlDict: N_ITER iterations of deltaT 1
+    templateLoc, full = _fullDefaults(repo_root, 'rhoSimpleFoam')
+    full['GLOBAL_CONTROL']['N_ITER'] = ['400']
+    full['GLOBAL_CONTROL']['WRITE_ITER'] = ['100']
+    writeInternal.writeControlDictInternal(templateLoc, full)
+    control = (tmp_path / 'system/controlDict').read_text()
+    assert 'endTime         400;' in control and 'deltaT          1;' in control
+    assert 'writeInterval   100;' in control and 'adjustTimeStep  no;' in control
+
+
+def test_buoyant_thermo_and_gravity(tmp_path, monkeypatch, repo_root):
+    templateLoc, full = _fullDefaults(repo_root, 'buoyantSimpleFoam')
+    monkeypatch.chdir(tmp_path)
+    full['GLOBAL_SIM_CONTROL']['GRAVITY'] = ['0', '-9.81', '0']
+    writeInternal.writeThermoInternal(templateLoc, full)
+    assert 'heRhoThermo' in (tmp_path / 'constant/thermophysicalProperties').read_text()
+    assert 'value           (0 -9.81 0);' in (tmp_path / 'constant/g').read_text()
+    templateLoc, full = _fullDefaults(repo_root, 'rhoSimpleFoam')
+    writeInternal.writeThermoInternal(templateLoc, full)
+    assert 'hePsiThermo' in (tmp_path / 'constant/thermophysicalProperties').read_text()
+    assert not (tmp_path / 'constant/g').exists()
+
+
+def test_flow_function_objects(tmp_path, monkeypatch, repo_root):
+    geomDict, wallGroups = _pipeCase(tmp_path, monkeypatch)
+    templateLoc, full = _fullDefaults(repo_root, 'rhoSimpleFoam')
+    writeInternal.writeFunctionObjectsInternal(wallGroups, full)
+    fos = (tmp_path / 'system/internalFunctionObjects').read_text()
+    assert 'flow_WALL-pipe_inlet' in fos and 'avg_WALL-pipe_outlet' in fos and 'residuals' in fos
+    #wall heat flux on the walls only
+    heat = fos[fos.index('wallHeatFlux\n{'):]
+    heat = heat[:heat.index('}')]
+    assert 'WALL-pipe_wall' in heat and 'WALL-pipe_inlet' not in heat
+    #bookkeeping for post: group kinds and the reference density
+    info = writeInternal.addSetupInfo(full, wallGroups)
+    assert info['BC_GROUP_KINDS']['pIn'] == ['inlet', 'massFlow', '0.02']
+    assert info['BC_GROUP_KINDS']['pOut'][0] == 'outlet' and info['SETUP_INFO']['STEADY'] == ['yes']
+    assert writeInternal.hasPressureBC(wallGroups)
+
+
+#----- fans and porous zones
+
+def _porDefaults(repo_root, solver, **keys):
+    templateLoc, full = _fullDefaults(repo_root, solver)
+    items = dict(setupCore.readAddonTemplate(templateLoc, 'defaultPorous', 'POR_SETUP'))
+    section = dict((key, str(value).split()) for key, value in items.items())
+    for key, value in keys.items():
+        section[key] = value.split()
+    full['POR-matrix'] = section
+    return templateLoc, full, {'POR-matrix.stl': {}}
+
+
+def test_porous_resistance_inputs(repo_root):
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoSimpleFoam', D='1e6 2e6 3e6', F='10 20 30')
+    zone = writeInternal.getPorous(geomDict, full)[0]
+    assert zone['d'] == [1e6, 2e6, 3e6] and zone['f'] == [10, 20, 30] and zone['heat'] == 'none'
+    #wire mesh: Gedeon-Wood, Darcy part 129/(2 eps dh^2)
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoSimpleFoam', RESISTANCE='wireMesh', POROSITY='0.8',
+                                               WIRE_DIA='1e-4', REF_VELOCITY='2', HEAT='fixed', SOLID_T='550')
+    zone = writeInternal.getPorous(geomDict, full)[0]
+    dh = 0.8*1e-4/0.2
+    assert zone['d'][0] == pytest.approx(129.0/(2*0.8*dh**2)) and zone['f'][0] > 0
+    assert zone['heat'] == 'fixed' and zone['ha'] > 0 and zone['Ts'] == 550 and zone['Cs'] == 0
+    #fit: data made from d 5e6, f 400 is fitted back
+    gas = {'RHO': writeInternal.getGasDensity(full), 'MU': writeInternal.getGasProperties(full)['MU']}
+    pairs = []
+    for u in (0.5, 1.0, 2.0, 4.0):
+        pairs += [u, 0.05*(gas['MU']*5e6*u + 0.5*gas['RHO']*400*u*u)]
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoSimpleFoam', RESISTANCE='fit', DP_LENGTH='0.05',
+                                               DP_DATA=' '.join('%.12g' % v for v in pairs))
+    zone = writeInternal.getPorous(geomDict, full)[0]
+    assert zone['d'][0] == pytest.approx(5e6, rel=1e-6) and zone['f'][0] == pytest.approx(400, rel=1e-6)
+    #errors: HA auto without wire mesh, solved matrix in a steady run, bad RESISTANCE
+    for solver, keys in [('rhoSimpleFoam', {'HEAT': 'fixed'}), ('rhoSimpleFoam', {'HEAT': 'solved', 'HA': '1e4'}),
+                         ('rhoSimpleFoam', {'RESISTANCE': 'magic'}), ('rhoSimpleFoam', {'D': '1 2'})]:
+        templateLoc, full, geomDict = _porDefaults(repo_root, solver, **keys)
+        with pytest.raises(SystemExit):
+            writeInternal.getPorous(geomDict, full)
+    #incompressible: heat ignored
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'simpleFoam', HEAT='fixed', HA='1e4')
+    assert writeInternal.getPorous(geomDict, full)[0]['heat'] == 'none'
+
+
+def test_porous_fvoptions_and_function_objects(tmp_path, monkeypatch, repo_root):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'constant').mkdir()
+    (tmp_path / 'system').mkdir()
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoPimpleFoam', HEAT='solved', HA='2e4', SOLID_T='600')
+    porous = writeInternal.getPorous(geomDict, full)
+    assert porous[0]['Cs'] == pytest.approx(0.1*7900*500)
+    writeInternal.writeFvOptionsInternal(porous, full)
+    text = (tmp_path / 'constant/fvOptions').read_text()
+    assert 'type            explicitPorositySource;' in text and 'cellZone        POR-matrix;' in text
+    assert 'd   (10000000 10000000 10000000);' in text and 'rotation { type axes; e1 (1 0 0); e2 (0 1 0); }' in text
+    assert 'type            scalarCodedSource;' in text and 'fields          (e);' in text
+    assert 'const scalar ha = 20000;' in text and 'const scalar Cs = 395000;' in text
+    assert 'Ts_POR-matrix' in text and text.count('#{') == text.count('#}')
+    #function objects: zone averages incl. the matrix T, heat into the gas
+    writeInternal.writeFunctionObjectsInternal({}, full, None, porous)
+    fos = (tmp_path / 'system/internalFunctionObjects').read_text()
+    assert 'porHeat_POR-matrix' in fos and '(Qs_POR-matrix);' in fos and '(p T Ts_POR-matrix);' in fos
+    #no porous zone: fvOptions removed
+    writeInternal.writeFvOptionsInternal([], full)
+    assert not (tmp_path / 'constant/fvOptions').exists()
+
+
+def test_fan_baffles(tmp_path, monkeypatch, repo_root):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'system').mkdir()
+    templateLoc, full = _fullDefaults(repo_root, 'simpleFoam')
+    full['FAN-disk'] = {'FAN_PRESSURE_RISE': ['50']}
+    fans = writeInternal.writeFanBaffles({'WALL-pipe.stl': {}, 'FAN-disk.stl': {}}, full)
+    text = (tmp_path / 'system/createBafflesDict').read_text()
+    jump = 50.0/writeInternal.getGasDensity(full)
+    assert fans == ['FAN-disk'] and 'zoneName FAN-disk;' in text and 'FAN-disk_master' in text
+    assert 'jumpTable constant %.9g;' % (jump) in text and 'p { type fan; patchType cyclic;' in text
+    #buoyant: jump on p_rgh in Pa
+    templateLoc, full = _fullDefaults(repo_root, 'buoyantSimpleFoam')
+    full['FAN-disk'] = {'FAN_PRESSURE_RISE': ['50']}
+    writeInternal.writeFanBaffles({'FAN-disk.stl': {}}, full)
+    assert 'p_rgh { type fan; patchType cyclic; jump uniform 0; value uniform 100000; jumpTable constant 50; }' \
+        in (tmp_path / 'system/createBafflesDict').read_text()
+    assert writeInternal.writeFanBaffles({'WALL-pipe.stl': {}}, full) == []
+    assert not (tmp_path / 'system/createBafflesDict').exists()

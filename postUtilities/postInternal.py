@@ -169,9 +169,17 @@ def hours(seconds):
 
 #----- function object output
 
-def readDat(foDir, fileName):
+def toFloat(value):
+    try:
+        return float(value)
+    except ValueError:
+        return float('nan')
+
+
+def readDat(foDir, fileName, textColumns=False):
     #all <foDir>/<startTime>/<fileName>*.dat (restarts start a new directory or file), merged in time order;
     #later files replace overlapping times. returns (column names, array)
+    #textColumns: text entries (solverInfo solver names, true/false) become nan instead of dropping the row
     files = []
     for timeDir in glob.glob(os.path.join(foDir, '*')):
         try:
@@ -194,7 +202,8 @@ def readDat(foDir, fileName):
                     try:
                         rows.append([float(v) for v in values])
                     except ValueError:
-                        continue
+                        if textColumns:
+                            rows.append([toFloat(v) for v in values])
         if not rows or names is None:
             continue
         rows = np.array(rows)
@@ -283,9 +292,117 @@ def readCrank(caseDir, post):
     return names, crank, theta0
 
 
+def patchArea(foDir):
+    #patch area from the '# Area' header line of a surfaceFieldValue file, None if missing
+    for path in sorted(glob.glob(os.path.join(foDir, '*', '*.dat'))):
+        with open(path, errors='replace') as f:
+            for line in f:
+                if not line.startswith('#'):
+                    break
+                match = re.match(r'^#\s*Area\s*:\s*([-0-9.eE+]+)', line)
+                if match:
+                    return float(match.group(1))
+    return None
+
+
+def flowGroups(config):
+    #inlet and outlet groups: {group: (kind, [patches])} from BC_GROUP_KINDS / BC_GROUPS_RESOLVED
+    kinds = dict(config.items('BC_GROUP_KINDS')) if config.has_section('BC_GROUP_KINDS') else {}
+    patches = dict(config.items('BC_GROUPS_RESOLVED')) if config.has_section('BC_GROUPS_RESOLVED') else {}
+    return dict((group, (kind.split()[0], patches.get(group, '').split())) for group, kind in kinds.items()
+                if kind.split()[0] in ('inlet', 'outlet'))
+
+
+def flowUnits(config, compressible):
+    #(flow key, flux scale, p scale, p offset): incompressible flux and kinematic p times RHO_REF, p plus
+    #CHARGE_PRESSURE, so both flow types give kg/s and Pa (raw m3/s and kinematic p without RHO_REF)
+    if compressible:
+        return 'MDOT', 1.0, 1.0, 0.0
+    rhoRef = getSetting(config, 'SETUP_INFO', 'RHO_REF', '')
+    if not rhoRef:
+        return 'VOLUME_FLOW', 1.0, 1.0, 0.0
+    return 'MDOT', float(rhoRef), float(rhoRef), float(getSetting(config, 'GLOBAL_MATERIAL', 'CHARGE_PRESSURE', '0'))
+
+
+def flowSummary(caseDir, config, t0, t1, compressible):
+    #per inlet/outlet group over t0..t1: MDOT (kg/s, + into the domain), area-averaged P (Pa) and T; then the mass
+    #balance and the pressure drop (inlets minus outlets). incompressible: flux and kinematic p times RHO_REF
+    #(gas density at the charge state), p plus CHARGE_PRESSURE; without RHO_REF the raw VOLUME_FLOW and kinematic p
+    post = os.path.join(caseDir, 'postProcessing')
+    flowKey, fluxScale, pScale, pOffset = flowUnits(config, compressible)
+    results, total, inflow, pIn, pOut = {}, 0.0, 0.0, [], []
+    for group, (kind, patches) in flowGroups(config).items():
+        flux, found, pSum, tSum, weight = 0.0, False, 0.0, 0.0, 0.0
+        for patch in patches:
+            names, rows = readDat(os.path.join(post, 'flow_%s' % (patch)), 'surfaceFieldValue')
+            if rows is not None:
+                flux -= fluxScale*timeMean(rows[:, 0], rows[:, 1], t0, t1)
+                found = True
+            aNames, avg = readDat(os.path.join(post, 'avg_%s' % (patch)), 'surfaceFieldValue')
+            if avg is not None:
+                area = patchArea(os.path.join(post, 'avg_%s' % (patch))) or 1.0
+                pSum += area*(pOffset + pScale*timeMean(avg[:, 0], avg[:, aNames.index('areaAverage(p)')], t0, t1))
+                if 'areaAverage(T)' in aNames:
+                    tSum += area*timeMean(avg[:, 0], avg[:, aNames.index('areaAverage(T)')], t0, t1)
+                weight += area
+        if not found:
+            continue
+        results['%s_%s' % (flowKey, group)] = flux
+        total += flux
+        inflow += max(flux, 0.0)
+        if weight > 0:
+            results['P_%s' % (group)] = pSum/weight
+            (pIn if kind == 'inlet' else pOut).append(pSum/weight)
+            if compressible and tSum:
+                results['T_%s' % (group)] = tSum/weight
+    if results:
+        results['%s_IMBALANCE' % (flowKey)] = total/inflow if inflow > 0 else ''
+        if pIn and pOut:
+            results['P_DROP'] = float(np.mean(pIn) - np.mean(pOut))
+    return results
+
+
+def heatSummary(config, post, t0, t1):
+    #mean heat rate per BC group over t0..t1 (W, + into the gas), from wallHeatFlux and BC_GROUPS_RESOLVED
+    heat = readWallHeatFlux(os.path.join(post, 'wallHeatFlux'))
+    groupPatches = dict(config.items('BC_GROUPS_RESOLVED')) if config.has_section('BC_GROUPS_RESOLVED') else {}
+    results = {}
+    for group, patches in groupPatches.items():
+        total, found = 0.0, False
+        for patch in patches.split():
+            if patch in heat:
+                rows = heat[patch]
+                sel = window(rows[:, 0], t0, t1)
+                if sel.sum() > 1:
+                    total += integrate(rows[sel, 0], rows[sel, 1])/(t1 - t0)
+                    found = True
+        if found:
+            results['HEAT_%s' % (group)] = total
+    return results
+
+
+def porousSummary(post, t0, t1):
+    #porous zones over t0..t1: HEAT_<zone> (W from the matrix into the gas), TS_MEAN_<zone> (matrix T), T_MEAN_<zone>
+    results = {}
+    for foDir in sorted(glob.glob(os.path.join(post, 'porHeat_*'))):
+        names, rows = readDat(foDir, 'volFieldValue')
+        if rows is not None:
+            results['HEAT_%s' % (os.path.basename(foDir)[len('porHeat_'):])] = timeMean(rows[:, 0], rows[:, 1], t0, t1)
+    for foDir in sorted(glob.glob(os.path.join(post, 'por_*'))):
+        zone = os.path.basename(foDir)[len('por_'):]
+        names, rows = readDat(foDir, 'volFieldValue')
+        if rows is None:
+            continue
+        for k, name in enumerate(names[1:], start=1):
+            field = re.sub(r'^volAverage\((.*)\)$', r'\1', name)
+            key = 'TS_MEAN_%s' % (zone) if field.startswith('Ts_') else '%s_MEAN_%s' % (field.upper(), zone)
+            results[key] = timeMean(rows[:, 0], rows[:, k], t0, t1)
+    return results
+
+
 #----- summary
 
-def buildSummary(caseDir, avgCycles=1):
+def buildSummary(caseDir, avgCycles=1, avgIters=50):
     start = time.time()
     caseDir = os.path.abspath(caseDir)
     config = readCaseSetup(caseDir)
@@ -300,7 +417,7 @@ def buildSummary(caseDir, avgCycles=1):
 
     #setup values
     solver = getSetting(config, 'GLOBAL_SIM_CONTROL', 'SOLVER')
-    freq = float(getSetting(config, 'GLOBAL_CONTROL', 'FREQ'))
+    freq = float(getSetting(config, 'GLOBAL_CONTROL', 'FREQ') or 0)
     compressible = getSetting(config, 'SETUP_INFO', 'FLOW', 'compressible') == 'compressible'
     for key, section, item in [('SOLVER', 'GLOBAL_SIM_CONTROL', 'SOLVER'), ('TURB_MODEL', 'GLOBAL_SIM_CONTROL', 'TURB_MODEL'),
                                ('GAS', 'GLOBAL_MATERIAL', 'GAS'), ('CHARGE_PRESSURE', 'GLOBAL_MATERIAL', 'CHARGE_PRESSURE'),
@@ -334,6 +451,31 @@ def buildSummary(caseDir, avgCycles=1):
     post = os.path.join(caseDir, 'postProcessing')
     names, gasAvg = readDat(os.path.join(post, 'gasAvg'), 'volFieldValue')
     endTime = float(gasAvg[-1, 0]) if gasAvg is not None else 0.0
+
+    #steady solvers: results averaged over the last avgIters iterations, no cycles
+    if getSetting(config, 'SETUP_INFO', 'STEADY', 'no') == 'yes':
+        for key in ['FREQ', 'N_CYCLES']:
+            summary.pop(key, None)
+        summary['N_ITER'] = getSetting(config, 'GLOBAL_CONTROL', 'N_ITER')
+        summary['END_ITER'] = int(round(endTime))
+        summary['FINISHED'] = 'yes' if summary['COMPLETION_DATE'] else 'no'
+        if gasAvg is None:
+            print('\tWARNING: no gasAvg output yet, results left empty')
+            summary['POST_TIME'] = hours(time.time() - start + (exportTime or 0.0))
+            return summary
+        t0, t1 = max(float(gasAvg[0, 0]), endTime - avgIters), endTime
+        summary['AVG_ITERS'] = int(round(t1 - t0))
+        print('\taveraging over iterations %d to %d' % (int(t0), int(t1)))
+        for k, name in enumerate(names[1:], start=1):
+            field = re.sub(r'^volAverage\((.*)\)$', r'\1', name).upper()
+            summary['%s_MEAN' % (field)] = timeMean(gasAvg[:, 0], gasAvg[:, k], t0, t1)
+        summary.update(flowSummary(caseDir, config, t0, t1, compressible))
+        summary.update(porousSummary(post, t0, t1))
+        if compressible:
+            summary.update(heatSummary(config, post, t0, t1))
+        summary['POST_TIME'] = hours(time.time() - start + (exportTime or 0.0))
+        return summary
+
     crankNames, crank, theta0 = readCrank(caseDir, post)
     summary['DRIVE'] = getSetting(config, 'MESH_MOTION', 'DRIVE', 'prescribed') if bodies else ''
     if crank is not None:
@@ -446,20 +588,11 @@ def buildSummary(caseDir, avgCycles=1):
                 summary['PV_WORK'] = integrate(volume[sel], pAvg[sel])/nAvg
                 summary['GAS_VOLUME_MIN'] = float(volume[sel].min())
                 summary['GAS_VOLUME_MAX'] = float(volume[sel].max())
-        heat = readWallHeatFlux(os.path.join(post, 'wallHeatFlux'))
-        groupPatches = dict(config.items('BC_GROUPS_RESOLVED')) if config.has_section('BC_GROUPS_RESOLVED') else {}
-        for group, patches in groupPatches.items():
-            total, found = 0.0, False
-            for patch in patches.split():
-                if patch in heat:
-                    rows = heat[patch]
-                    sel = window(rows[:, 0], t0, t1)
-                    if sel.sum() > 1:
-                        total += integrate(rows[sel, 0], rows[sel, 1])/(t1 - t0)
-                        found = True
-            if found:
-                summary['HEAT_%s' % (group)] = total
+        summary.update(heatSummary(config, post, t0, t1))
 
+    #inlets and outlets of a through-flow case, porous zones
+    summary.update(flowSummary(caseDir, config, t0, t1, compressible))
+    summary.update(porousSummary(post, t0, t1))
     summary['POST_TIME'] = hours(time.time() - start + (exportTime or 0.0))
     return summary
 
@@ -572,6 +705,80 @@ def pvLoops(caseDir, nLoops=3):
     return loops
 
 
+def flowSeries(caseDir):
+    #steady convergence: initial residuals and, per inlet/outlet group, flow (+ into the domain), p and T vs iteration
+    caseDir = os.path.abspath(caseDir)
+    config = readCaseSetup(caseDir)
+    post = os.path.join(caseDir, 'postProcessing')
+    series = {'residuals': {}, 'flow': {}, 'p': {}, 'T': {}}
+    compressible = getSetting(config, 'SETUP_INFO', 'FLOW', 'compressible') == 'compressible'
+    flowKey, fluxScale, pScale, pOffset = flowUnits(config, compressible)
+    series['flowKey'] = flowKey
+    rNames, residuals = readDat(os.path.join(post, 'residuals'), 'solverInfo', textColumns=True)
+    if residuals is not None:
+        series['residualIter'] = residuals[:, 0]
+        for k, name in enumerate(rNames):
+            if name.endswith('_initial'):
+                series['residuals'][name[:-len('_initial')]] = residuals[:, k]
+    for group, (kind, patches) in flowGroups(config).items():
+        iters, flux, pSum, tSum, weight = None, None, None, None, 0.0
+        for patch in patches:
+            names, rows = readDat(os.path.join(post, 'flow_%s' % (patch)), 'surfaceFieldValue')
+            aNames, avg = readDat(os.path.join(post, 'avg_%s' % (patch)), 'surfaceFieldValue')
+            if rows is None or avg is None:
+                continue
+            if iters is None:
+                iters = rows[:, 0]
+                flux, pSum, tSum = np.zeros_like(iters), np.zeros_like(iters), np.zeros_like(iters)
+            area = patchArea(os.path.join(post, 'avg_%s' % (patch))) or 1.0
+            flux -= fluxScale*np.interp(iters, rows[:, 0], rows[:, 1])
+            pSum += area*(pOffset + pScale*np.interp(iters, avg[:, 0], avg[:, aNames.index('areaAverage(p)')]))
+            if 'areaAverage(T)' in aNames:
+                tSum += area*np.interp(iters, avg[:, 0], avg[:, aNames.index('areaAverage(T)')])
+            weight += area
+        if iters is None:
+            continue
+        series['flow'][group] = (iters, flux)
+        series['p'][group] = (iters, pSum/weight)
+        if tSum.any():
+            series['T'][group] = (iters, tSum/weight)
+    return series
+
+
+def writeFlowPlot(caseDir, plt):
+    #flowConvergence.png for steady runs
+    series = flowSeries(caseDir)
+    panels = []
+    if series['residuals']:
+        panels.append(('residuals', 'initial residual'))
+    if series['flow']:
+        massFlow = series['flowKey'] == 'MDOT'
+        panels.append(('flow', 'mass flow [kg/s], + in' if massFlow else 'volume flow [m$^3$/s], + in'))
+        panels.append(('p', 'area-averaged p [Pa]' if massFlow else 'area-averaged p [m$^2$/s$^2$]'))
+    if series['T']:
+        panels.append(('T', 'area-averaged T [K]'))
+    if not panels:
+        return None
+    fig, axes = plt.subplots(len(panels), 1, figsize=(8, 2.8*len(panels)), sharex=True, squeeze=False)
+    for ax, (key, label) in zip(axes[:, 0], panels):
+        if key == 'residuals':
+            for name, values in series['residuals'].items():
+                ax.semilogy(series['residualIter'], np.maximum(values, 1e-12), label=name)
+        else:
+            for group, (iters, values) in series[key].items():
+                ax.plot(iters, values, label=group)
+            ax.ticklabel_format(axis='y', useOffset=False)
+        ax.set_ylabel(label, fontsize=9)
+        ax.legend(fontsize=8)
+        ax.grid(True)
+    axes[-1, 0].set_xlabel('iteration')
+    axes[0, 0].set_title('%s convergence' % (os.path.basename(os.path.abspath(caseDir))))
+    path = os.path.join(os.path.abspath(caseDir), 'flowConvergence.png')
+    fig.savefig(path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    return path
+
+
 def writePlots(caseDir, nLoops=3):
     #pV.png (last cycles overlaid) and cycleConvergence.png in the case directory
     try:
@@ -584,6 +791,10 @@ def writePlots(caseDir, nLoops=3):
     caseDir = os.path.abspath(caseDir)
     caseName = os.path.basename(caseDir)
     written = []
+    #steady runs: flowConvergence.png only
+    if getSetting(readCaseSetup(caseDir), 'SETUP_INFO', 'STEADY', 'no') == 'yes':
+        path = writeFlowPlot(caseDir, plt)
+        return [path] if path else []
 
     loops = pvLoops(caseDir, nLoops)
     if loops:
