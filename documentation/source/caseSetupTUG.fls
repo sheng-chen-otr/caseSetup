@@ -376,6 +376,8 @@ INPUT .\sections\internalFlow.tex
 INPUT .\sections\internalFlow.tex
 INPUT sections\internalFlow.tex
 INPUT C:\Users\sheng\AppData\Local\Programs\MiKTeX\fonts\tfm\jknappen\ec\ecit0800.tfm
+INPUT C:\Users\sheng\AppData\Local\Programs\MiKTeX\fonts\tfm\jknappen\ec\ecrm1000.tfm
+INPUT C:\Users\sheng\AppData\Local\Programs\MiKTeX\fonts\tfm\jknappen\ec\ectt1095.tfm
 INPUT caseSetupTUG.aux
 INPUT .\sections\introduction.aux
 INPUT .\sections\introduction.aux
@@ -406,6 +408,10 @@ INPUT .\sections\internalFlow.aux
 INPUT sections\internalFlow.aux
 INPUT .\caseSetupTUG.out
 INPUT .\caseSetupTUG.out
+INPUT C:\Users\sheng\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi600\ectt1095.pk
+INPUT C:\Users\sheng\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi600\ectt1095.pk
+INPUT C:\Users\sheng\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi600\ecrm1000.pk
+INPUT C:\Users\sheng\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi600\ecrm1000.pk
 INPUT C:\Users\sheng\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi450\ecit0800.pk
 INPUT C:\Users\sheng\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi450\ecit0800.pk
 INPUT C:\Users\sheng\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi450\ectt0800.pk

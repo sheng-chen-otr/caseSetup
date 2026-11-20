@@ -401,6 +401,115 @@ A closed \codeword{POR-<name>.stl} marks a porous region: the cells inside it be
 \end{itemize}
 The heat source is a \codeword{scalarCodedSource} in \codeword{constant/fvOptions}, compiled when the solver starts, so a C++ compiler must be available where the job runs. \codeword{postInternal.py} reports \codeword{HEAT_<zone>} (W from the matrix into the gas), \codeword{TS_MEAN_<zone>}, \codeword{T_MEAN_<zone>} and \codeword{P_MEAN_<zone>}.
 
+\subsubsection{Wire-Screen Regenerator Model}\label{sec:regenModel}
+This section gives the equations behind \codeword{RESISTANCE = wireMesh}, \codeword{HA = auto} and \codeword{HEAT = solved}, as they are implemented in \codeword{writeInternal.wireMeshCoeffs} and the heat source in \codeword{constant/fvOptions}.
+
+\paragraph{A stack of screens as one porous zone.}
+A regenerator of $N$ stacked woven screens is modelled as one homogeneous porous zone. The correlations below are written for stacks of screens per unit length of matrix, so the number of screens only enters through the length of the zone: the height of the \codeword{POR} solid along the flow is the stack length $L$. For uncompressed plain-weave screens each layer is about two wire diameters thick,
+\begin{equation}
+L \approx 2 N d_w ,
+\end{equation}
+with $d_w$ the wire diameter. The porosity of the stack follows from the wire volume per layer. A screen with mesh number $m$ (wires per metre in each direction) holds a wire length of $2m$ per unit area; with cross-section $\pi d_w^2/4$ and layer thickness $2 d_w$, and neglecting the crimp of the weave,
+\begin{equation}
+1 - \varepsilon = \frac{2m \, \pi d_w^2/4}{2 d_w} = \frac{\pi m d_w}{4},
+\qquad \varepsilon \approx 1 - \frac{\pi m d_w}{4} .
+\end{equation}
+For compressed or sintered stacks the porosity is best taken from the mass $M$ of the stack: $\varepsilon = 1 - M/(\rho_s V_{stack})$.
+
+\paragraph{Geometry of the matrix.}
+The wetted surface per unit matrix volume (wires as cylinders, surface/volume $= 4/d_w$ of the solid) and the hydraulic diameter are
+\begin{equation}
+a = \frac{4(1-\varepsilon)}{d_w}, \qquad d_h = \frac{4\varepsilon}{a} = \frac{\varepsilon d_w}{1-\varepsilon} .
+\end{equation}
+OpenFOAM works with the superficial velocity $U$ (flow rate over the full cross-section of the zone). The velocity in the pores is $u = U/\varepsilon$, and the Reynolds number of the correlations is built on it:
+\begin{equation}
+Re = \frac{\rho u d_h}{\mu} = \frac{\rho U d_h}{\varepsilon \mu} .
+\end{equation}
+
+\paragraph{Pressure drop.}
+Gedeon and Wood (1996, NASA CR-198442, oscillating-flow tests on woven-screen stacks) correlate the friction factor as
+\begin{equation}
+f = \frac{129}{Re} + 2.91\, Re^{-0.103},
+\qquad \frac{\Delta p}{L} = f\, \frac{\rho u^2}{2 d_h} .
+\end{equation}
+OpenFOAM's \codeword{DarcyForchheimer} model adds the momentum sink
+\begin{equation}
+\frac{\Delta p}{L} = \mu D\, U + \frac{1}{2}\rho F\, |U|\, U .
+\end{equation}
+Matching the two term by term, with $u = U/\varepsilon$. The viscous term:
+\begin{equation}
+\frac{129}{Re}\,\frac{\rho u^2}{2 d_h} = \frac{129\,\mu}{\rho u d_h}\,\frac{\rho u^2}{2 d_h} = \frac{129\,\mu u}{2 d_h^2} = \mu\, \frac{129}{2\varepsilon d_h^2}\, U
+\quad\Rightarrow\quad D = \frac{129}{2\varepsilon d_h^2} .
+\end{equation}
+The inertial term:
+\begin{equation}
+2.91\,Re^{-0.103}\,\frac{\rho u^2}{2 d_h} = \frac{1}{2}\rho\, \frac{2.91\, Re^{-0.103}}{\varepsilon^2 d_h}\, U^2
+\quad\Rightarrow\quad F = \frac{2.91\, Re_{ref}^{-0.103}}{\varepsilon^2 d_h} .
+\end{equation}
+$D$ and $F$ must be constants, so the weak Reynolds-number dependence of the second term is frozen at \codeword{REF_VELOCITY} ($Re_{ref}$ evaluated with $U = $ \codeword{REF_VELOCITY}). Away from it the inertial part is off by the factor $(U/U_{ref})^{-0.103}$: about 7\,\% at twice or half the reference velocity, so set \codeword{REF_VELOCITY} to a typical superficial velocity through the regenerator. $D$ is the same along \codeword{E1}, \codeword{E2} and their cross product (isotropic); inside a hole the flow is along the hole anyway.
+
+\paragraph{Heat transfer coefficient.}
+Gedeon and Wood give for the same screens
+\begin{equation}
+Nu = \frac{h\, d_h}{k} = \left(1 + 0.99\,(Re\,Pr)^{0.66}\right) \varepsilon^{1.79} ,
+\end{equation}
+with the gas conductivity from its viscosity, specific heat and Prandtl number, $k = \mu c_p/Pr$. The volumetric coefficient used by the source is
+\begin{equation}
+h a = \frac{Nu\, k}{d_h}\cdot\frac{4(1-\varepsilon)}{d_w} ,
+\end{equation}
+evaluated, like $F$, at \codeword{REF_VELOCITY}. All gas properties ($\rho$, $\mu$, $c_p$, $Pr$) are those of \codeword{GAS} at \codeword{CHARGE_PRESSURE} and \codeword{INIT_T} ($\rho$ from the ideal gas law). With \codeword{HA} given as a number, it replaces this value.
+
+\paragraph{Matrix temperature (local thermal non-equilibrium).}
+Each cell of the zone has a gas temperature $T$ and a matrix temperature $T_s$. The matrix exchanges heat only with the gas in the same cell (no conduction along the matrix; stacked screens conduct poorly through their contacts):
+\begin{equation}
+C_s \frac{dT_s}{dt} = h a\,(T - T_s), \qquad C_s = (1-\varepsilon)\,\rho_s c_s ,
+\end{equation}
+with $\rho_s$ = \codeword{SOLID_RHO}, $c_s$ = \codeword{SOLID_CP}. Over one time step with $T$ held at its current value this has the exact solution
+\begin{equation}
+T_s^{n+1} = T + \left(T_s^{n} - T\right) \exp\!\left(-\frac{h a\, \Delta t}{C_s}\right),
+\end{equation}
+which is used once per time step, so it is stable for any time step. With \codeword{HEAT = fixed}, $C_s$ is taken as zero and $T_s$ stays at \codeword{SOLID_T}.
+
+\paragraph{Heat source in the gas energy equation.}
+The gas receives, per unit volume,
+\begin{equation}
+Q_s = h a\,(T_s - T) .
+\end{equation}
+For a large $h a$ an explicit source makes the energy equation stiff, so it is linearised in the internal energy $e$: with $T \approx T^* + (e - e^*)/c_v$ around the current state $(T^*, e^*)$,
+\begin{equation}
+Q_s \approx \underbrace{h a\,(T_s - T^*) + \frac{h a}{c_v}\, e^*}_{\textrm{explicit}} \;-\; \underbrace{\frac{h a}{c_v}\, e}_{\textrm{implicit}} ,
+\end{equation}
+with $c_v = c_p - R_u/M$ of the gas. The implicit part goes on the matrix diagonal, the explicit part into the source. At convergence both give $Q_s = h a (T_s - T)$. The heat from the matrix into the gas, $\int_V Q_s\,dV$, is written by the \codeword{porHeat_<zone>} function object and reported as \codeword{HEAT_<zone>}.
+
+\paragraph{Fit to measured data (\texttt{RESISTANCE = fit}).}
+For measured pairs $(U_i, \Delta p_i)$ over a sample of length \codeword{DP_LENGTH} $= L$, $D$ and $F$ are the least-squares solution through the origin of
+\begin{equation}
+\left(\begin{array}{cc} \mu U_1 & \frac{1}{2}\rho U_1|U_1| \\ \vdots & \vdots \\ \mu U_n & \frac{1}{2}\rho U_n|U_n| \end{array}\right)
+\left(\begin{array}{c} D \\ F \end{array}\right) =
+\left(\begin{array}{c} \Delta p_1/L \\ \vdots \\ \Delta p_n/L \end{array}\right) .
+\end{equation}
+The setup prints the largest misfit and stops if either coefficient comes out negative.
+
+\paragraph{Known modelling errors.}
+\begin{itemize}
+    \item The solver treats the whole zone as gas volume (no $\varepsilon$ in the time derivative), so the gas volume and gas heat capacity in the matrix are over-counted by $(1-\varepsilon) V_{zone}$. Count it as extra dead volume.
+    \item $F$ and $h a$ use a fixed $Re_{ref}$ (see above).
+    \item The zone is meshed conformally: snappy selects the cells inside the \codeword{POR} solid and then snaps the zone boundary onto the surface, so the stack length is the drawn one to snapping accuracy (on the test pipe the zone volume matched the drawn cylinder within 0.5\,\%). Flat end faces and five to ten cells along the stack snap cleanly and resolve the temperature along it.
+    \item No axial conduction in the matrix.
+\end{itemize}
+
+\paragraph{Worked example.}
+Fifty 100-mesh screens, $d_w = 0.1$\,mm, stainless steel ($\rho_s = 7900$, $c_s = 500$), air at 1\,bar and 300\,K ($\rho = 1.161$\,kg/m$^3$, $\mu = 1.81\cdot10^{-5}$\,Pa\,s, $c_p = 1005$\,J/kg\,K, $Pr = 0.71$), \codeword{REF_VELOCITY} $= 1$\,m/s:
+\begin{itemize}
+    \item $m = 100/0.0254 = 3937$\,m$^{-1}$, $\varepsilon = 1 - \pi \cdot 3937 \cdot 10^{-4}/4 = 0.691$, $L \approx 2 \cdot 50 \cdot 0.1$\,mm $= 10$\,mm.
+    \item $d_h = 0.691 \cdot 10^{-4}/0.309 = 2.234\cdot10^{-4}$\,m, $a = 1.237\cdot10^{4}$\,m$^{-1}$, $u = 1.448$\,m/s, $Re = 20.7$.
+    \item $D = 129/(2 \cdot 0.691 \cdot (2.234\cdot10^{-4})^2) = 1.87\cdot10^{9}$\,m$^{-2}$, $Re^{-0.103} = 0.732$, $F = 2.91 \cdot 0.732/(0.691^2 \cdot 2.234\cdot10^{-4}) = 2.00\cdot10^{4}$\,m$^{-1}$.
+    \item At 1\,m/s: $\mu D U = 33.9$\,kPa/m, $\frac{1}{2}\rho F U^2 = 11.6$\,kPa/m, together 45.5\,kPa/m, or 455\,Pa over the 10\,mm stack.
+    \item $Re\,Pr = 14.7$, $Nu = (1 + 0.99 \cdot 14.7^{0.66}) \cdot 0.691^{1.79} = 3.53$, $k = 0.0256$\,W/m\,K, $h = 405$\,W/m$^2$K, $h a = 5.0\cdot10^{6}$\,W/m$^3$K.
+    \item $C_s = 0.309 \cdot 7900 \cdot 500 = 1.22\cdot10^{6}$\,J/m$^3$K, so the matrix follows the gas with the time constant $C_s/(h a) = 0.24$\,s.
+\end{itemize}
+These are the values the setup prints for \codeword{POROSITY = 0.6908}, \codeword{WIRE_DIA = 1e-4}, \codeword{REF_VELOCITY = 1}.
+
 \subsection{Function Objects}
 Written to \codeword{system/internalFunctionObjects}, every time step:
 \begin{itemize}
