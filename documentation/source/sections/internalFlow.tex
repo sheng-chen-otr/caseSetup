@@ -296,6 +296,7 @@ The setup prints the load torque and power at the start speed. The crank angle a
     DECOMP = auto
     ACCOUNT = def-xxxx
     MODULES = StdEnv/2023 gcc/12.3 openmpi/4.1.5 openfoam/v2412
+    MPI_RUN = srun
     NODES = 1
     JOB_NAME = auto
     RUN_TIME = 0-12:00
@@ -312,6 +313,7 @@ The setup prints the load torque and power at the start speed. The crank angle a
     \item \codeword{NUM_PROCS} - Slurm tasks (192 = one full node on a 192-core cluster). \codeword{LOCAL_PROCS} - cores for a local run.
     \item \codeword{DECOMP_METHOD} - \codeword{scotch} (default), or \codeword{hierarchical} / \codeword{simple} for clusters without scotch.
     \item \codeword{DECOMP} - split for \codeword{hierarchical}/\codeword{simple}. \codeword{auto}: the scripts choose \codeword{n (nx ny nz)} for the task count of each run, with subdomains of the background mesh box as close to cubes as possible. \codeword{nx ny nz}: that split is used, and \codeword{nx}$\cdot$\codeword{ny}$\cdot$\codeword{nz} must equal \codeword{NUM_PROCS} (and \codeword{LOCAL_PROCS} for a local run). Ignored for other methods.
+    \item \codeword{MPI_RUN} - how the parallel tools are started inside a Slurm job: \codeword{srun} (default), or e.g. \codeword{/usr/bin/mpirun} on clusters where Open MPI was not built to start under srun (all ranks then abort in \codeword{MPI_Init}). Outside Slurm the scripts always use \codeword{mpirun -np LOCAL_PROCS}.
     \item \codeword{ACCOUNT}, \codeword{MODULES}, \codeword{NODES}, \codeword{JOB_NAME} (\codeword{auto} = case directory name), \codeword{RUN_TIME}, \codeword{MOTION_TIME} - Slurm header and environment.
     \item \codeword{EXPORT} - \codeword{ensight} (\codeword{foamToEnsight} at the end of the run) or \codeword{none}. The images and videos need the EnSight export.
     \item \codeword{POST_MODULES}, \codeword{POST_CPUS}, \codeword{POST_MEM}, \codeword{POST_TIME} - the post-processing job (one task). The modules must provide \codeword{python3} with numpy, \codeword{pvbatch} and \codeword{ffmpeg}.
@@ -322,7 +324,7 @@ The scripts set \codeword{numberOfSubdomains} (and the hierarchical split) every
 
 Generated scripts (each runs as a Slurm job with \codeword{sbatch}, or locally with \codeword{./script} using \codeword{mpirun}):
 \begin{itemize}
-    \item \codeword{runScript} - mesh + solve + export in one job: \codeword{blockMesh}, \codeword{surfaceFeatureExtract}, \codeword{decomposePar}, \codeword{snappyHexMesh}, \codeword{topoSet} (motion zones), face zone reorder, \codeword{checkMesh}, \codeword{createZeroDirectory}, the solver and \codeword{foamToEnsight}. The mesh is kept (\codeword{.meshDone}): running it again skips the meshing and continues the solve from the latest time. Remove \codeword{processor*} and \codeword{.meshDone} to remesh. \codeword{--meshOnly} stops after the mesh. Earlier solver logs are kept as \codeword{log.<solver>.N}.
+    \item \codeword{runScript} - mesh + solve + export in one job: \codeword{blockMesh}, \codeword{surfaceFeatureExtract}, \codeword{decomposePar}, \codeword{snappyHexMesh}, \codeword{topoSet} (motion zones), face zone reorder, \codeword{checkMesh}, \codeword{createZeroDirectory}, the solver and \codeword{foamToEnsight}. The mesh is kept (\codeword{.meshDone}): running it again skips the meshing and continues the solve from the latest time. Remove \codeword{processor*} and \codeword{.meshDone} to remesh. The setup writes \codeword{system/meshSignature} (a checksum of the meshing dicts, the motion zones in \codeword{topoSetDict} and the geometry as meshed). If rerunning the setup changes it, \codeword{runScript} and \codeword{motionCheckScript} stop and ask for a remesh, instead of running on a mesh that no longer matches the setup (for example a new MOVE body whose motion zone was never made). \codeword{--meshOnly} stops after the mesh. Earlier solver logs are kept as \codeword{log.<solver>.N}.
     \item \codeword{motionCheckScript} - the mesh motion dry run (moving cases only).
     \item \codeword{postScript} - post-processing (Section \ref{sec:internalPost}): summary, gsheet row, images and videos. A failed step is reported and the next step still runs; the job then ends with exit code 1.
     \item \codeword{submitScript} - submits \codeword{runScript} and then \codeword{postScript} (started when \codeword{runScript} has finished without error). \codeword{--noPost}: \codeword{runScript} only. \codeword{--post}: \codeword{postScript} only, e.g. after changing the image settings. \codeword{--check}: \codeword{runScript --meshOnly} followed by \codeword{motionCheckScript}.
@@ -479,6 +481,13 @@ Each image has a title with the case, panel, variable, time and crank angle. Run
 \begin{lstlisting}
     python3 /path/to/caseSetup/postUtilities/imagesToMovies.py [--fps N]
 \end{lstlisting}
+
+\subsubsection{Copy Back to Google Drive}
+\codeword{postUtilities/copyBackInternal.py} uploads the run data of a case to \codeword{<folder>/<JOB>/<case>/} on Google Drive, keeping the case's own sub-paths: logs and Slurm \codeword{.out} files, \codeword{internalSetup}, \codeword{fullCaseSetupDict}, \codeword{pvPostInternalSetup}, \codeword{summary.csv} and the plots, every \codeword{postProcessing/**/*.dat}, the images and the videos. Only new or changed files are uploaded (MD5 compared with the copy on Drive). It is the last step of \codeword{postScript} when \codeword{COPY_BACK = True} (\codeword{[GLOBAL_COMPUTE_SETUP]}), and can be run by hand:
+\begin{lstlisting}
+    python3 /path/to/caseSetup/postUtilities/copyBackInternal.py [cases ...] [--dryRun] [--noImages]
+\end{lstlisting}
+Settings in \codeword{~/.config/caseSetup/drive.ini} (or \codeword{--config}): a \codeword{[drive]} section with \codeword{folderID} (the id or the folder URL) and \codeword{credentials} (the service account key, default \codeword{~/.config/caseSetup/internal_cfd_credentials.json}); \codeword{INTERNAL_DRIVE_FOLDER} and \codeword{INTERNAL_DRIVE_CREDENTIALS} override it. The folder must be on a Shared Drive, because service accounts have no storage of their own, and shared with the service account as Content manager. Needs \codeword{google-api-python-client} and \codeword{google-auth}.
 
 \subsection{Demo Cases}
 \codeword{internalDemoCase/CASES} has two cases (geometry in \codeword{internalDemoCase/02_reference/MSH}):

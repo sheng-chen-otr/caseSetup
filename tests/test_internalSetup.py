@@ -858,3 +858,66 @@ def test_motion_frames(repo_root):
         full['MESH_MOTION']['MOTION_FRAMES'] = [bad]
         with pytest.raises(SystemExit):
             writeInternal.getMotionFrames(full)
+
+
+def test_mpi_launcher_key(tmp_path, monkeypatch, repo_root):
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    monkeypatch.chdir(tmp_path)
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    for name in ['runScript', 'motionCheckScript']:
+        assert 'RUN="srun"' in (tmp_path / name).read_text()
+    #a cluster whose Open MPI cannot start under srun: every script uses the given launcher
+    full['GLOBAL_COMPUTE_SETUP']['MPI_RUN'] = '/usr/bin/mpirun /opt/of/bin/tools/foamExec'.split()
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    for name in ['runScript', 'motionCheckScript']:
+        text = (tmp_path / name).read_text()
+        assert 'RUN="/usr/bin/mpirun /opt/of/bin/tools/foamExec"' in text and 'srun' not in text
+    #missing key (older template sets): srun
+    del full['GLOBAL_COMPUTE_SETUP']['MPI_RUN']
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    assert '<MPI_RUN>' not in (tmp_path / 'motionCheckScript').read_text()
+
+
+def test_mesh_signature_and_stale_check(tmp_path, monkeypatch, repo_root):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'system').mkdir()
+    surf = tmp_path / 'constant' / 'triSurface'
+    surf.mkdir(parents=True)
+    (tmp_path / 'system/snappyHexMeshDict').write_text('a')
+    (tmp_path / 'system/topoSetDict').write_text('zones 4')
+    (surf / 'WALL-x.stl').write_text('solid a\nendsolid a\n')
+    (surf / 'WALL-x.eMesh').write_text('made by surfaceFeatureExtract')
+    writeInternal.writeMeshSignature()
+    first = (tmp_path / 'system/meshSignature').read_text()
+    assert 'system/topoSetDict' in first and 'constant/triSurface/WALL-x.stl' in first and 'eMesh' not in first
+    #generated feature edges do not change it, a new motion zone does
+    (surf / 'WALL-x.eMesh').write_text('changed')
+    writeInternal.writeMeshSignature()
+    assert (tmp_path / 'system/meshSignature').read_text() == first
+    (tmp_path / 'system/topoSetDict').write_text('zones 5')
+    writeInternal.writeMeshSignature()
+    assert (tmp_path / 'system/meshSignature').read_text() != first
+    #the scripts compare it with the copy kept in .meshDone
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    run = (tmp_path / 'runScript').read_text()
+    assert '! cmp -s system/meshSignature .meshDone' in run and 'cp system/meshSignature .meshDone;' in run
+    assert run.index('cmp -s system/meshSignature') < run.index('blockMesh')
+    assert '! cmp -s system/meshSignature .meshDone' in (tmp_path / 'motionCheckScript').read_text()
+
+
+def test_copy_back_step(tmp_path, monkeypatch, repo_root):
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    monkeypatch.chdir(tmp_path)
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
+    post = (tmp_path / 'postScript').read_text()
+    assert post.index("imagesToMovies.py' > log.imagesToMovies") < post.index("copyBackInternal.py' > log.copyBackInternal")
+    full['GLOBAL_COMPUTE_SETUP']['COPY_BACK'] = ['False']
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
+    assert "copyBackInternal.py' > log.copyBackInternal" not in (tmp_path / 'postScript').read_text()
+    full['GLOBAL_COMPUTE_SETUP']['COPY_BACK'] = ['sometimes']
+    with pytest.raises(SystemExit):
+        writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)

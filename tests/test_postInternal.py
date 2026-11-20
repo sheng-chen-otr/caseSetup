@@ -19,6 +19,7 @@ and limitations.
 #tests for the internal post (summary) and the database gsheet push logic (no OpenFOAM, no Google API)
 import math
 import os
+import re
 import sys
 
 import numpy as np
@@ -447,3 +448,134 @@ def test_gsheet_settings_order(tmp_path, monkeypatch):
     monkeypatch.setenv('USERPROFILE', str(tmp_path))
     with pytest.raises(SystemExit):
         gsheetInternal.getSettings()
+
+
+def test_gsheet_id_cleanup(tmp_path, monkeypatch):
+    #quotes, spaces and a pasted full URL all give the bare id
+    sheet = '1AbC-dEf_123'
+    for value in [sheet, '"%s"' % (sheet), " '%s' " % (sheet),
+                  'https://docs.google.com/spreadsheets/d/%s/edit#gid=0' % (sheet)]:
+        assert gsheetInternal.cleanSheetId(value) == sheet
+    for key in ['INTERNAL_GSHEET_ID', 'INTERNAL_GSHEET_WORKSHEET', 'INTERNAL_GSHEET_CREDENTIALS']:
+        monkeypatch.delenv(key, raising=False)
+    config = tmp_path / 'g.ini'
+    config.write_text('[gsheet]\nSheetId = "https://docs.google.com/spreadsheets/d/%s/edit"\nworksheet = "runs"\n' % (sheet))
+    s = gsheetInternal.getSettings(configFile=str(config))
+    assert s['sheetID'] == sheet and s['worksheet'] == 'runs'
+
+
+#----- copy back to Drive (in-memory fake of the Drive API)
+
+import copyBackInternal
+
+
+class FakeRequest:
+    def __init__(self, result):
+        self.result = result
+
+    def execute(self):
+        return self.result
+
+
+class FakeFiles:
+    #folders and files by id: {id: {name, parent, mimeType, md5Checksum}}
+    def __init__(self, root):
+        self.items = {root: {'name': 'root', 'parent': None, 'mimeType': copyBackInternal.FOLDER_TYPE}}
+        self.uploads = []
+        self.count = 0
+
+    def list(self, q, fields, pageSize, pageToken, includeItemsFromAllDrives, supportsAllDrives):
+        parent = re.match(r"'([^']+)' in parents", q).group(1)
+        files = [dict(item, id=i) for i, item in self.items.items() if item['parent'] == parent]
+        return FakeRequest({'files': files})
+
+    def create(self, body, fields, supportsAllDrives, media_body=None):
+        self.count += 1
+        newId = 'id%d' % (self.count)
+        item = {'name': body['name'], 'parent': body['parents'][0], 'mimeType': body.get('mimeType', 'file')}
+        if media_body is not None:
+            item['md5Checksum'] = copyBackInternal.md5(media_body.path)
+            self.uploads.append(('create', body['name']))
+        self.items[newId] = item
+        return FakeRequest({'id': newId})
+
+    def update(self, fileId, media_body, supportsAllDrives):
+        self.items[fileId]['md5Checksum'] = copyBackInternal.md5(media_body.path)
+        self.uploads.append(('update', self.items[fileId]['name']))
+        return FakeRequest({'id': fileId})
+
+
+class FakeMedia:
+    def __init__(self, path, resumable=False):
+        self.path = path
+
+
+def _fakeDrive(monkeypatch, root='ROOT'):
+    import types
+    drive = copyBackInternal.Drive.__new__(copyBackInternal.Drive)
+    files = FakeFiles(root)
+    drive.service = types.SimpleNamespace(files=lambda: files)
+    drive.root, drive.listings, drive.email = root, {}, 'sa@example.iam.gserviceaccount.com'
+    fakeHttp = types.ModuleType('googleapiclient.http')
+    fakeHttp.MediaFileUpload = FakeMedia
+    monkeypatch.setitem(sys.modules, 'googleapiclient', types.ModuleType('googleapiclient'))
+    monkeypatch.setitem(sys.modules, 'googleapiclient.http', fakeHttp)
+    return drive, files
+
+
+def test_copy_back_files_and_ids(tmp_path):
+    case = tmp_path / 'JOB9' / 'CASES' / '007'
+    (case / 'postProcessing' / 'gasAvg' / '0').mkdir(parents=True)
+    (case / 'postProcessing' / 'images' / 'yMid_U').mkdir(parents=True)
+    (case / 'postProcessing' / 'movies').mkdir(parents=True)
+    (case / 'processor0').mkdir()
+    for path in ['log.rhoPimpleFoam', '01_007_12.out', 'internalSetup', 'summary.csv', 'pV.png',
+                 'postProcessing/gasAvg/0/volFieldValue.dat', 'postProcessing/images/yMid_U/007_yMid_U_00000.png',
+                 'postProcessing/movies/007_yMid_U.mp4', 'processor0/big', 'constant_note.txt']:
+        (case / path).write_text(path)
+    files = copyBackInternal.collectFiles(str(case))
+    assert 'postProcessing/gasAvg/0/volFieldValue.dat' in files and 'log.rhoPimpleFoam' in files
+    assert 'postProcessing/images/yMid_U/007_yMid_U_00000.png' in files and '01_007_12.out' in files
+    assert 'processor0/big' not in files and 'constant_note.txt' not in files
+    assert 'postProcessing/images/yMid_U/007_yMid_U_00000.png' not in copyBackInternal.collectFiles(str(case), images=False)
+    assert copyBackInternal.jobAndCase(str(case)) == ('JOB9', '007')
+    assert copyBackInternal.cleanFolderId('"https://drive.google.com/drive/folders/1qX-y_z?usp=sharing"') == '1qX-y_z'
+    assert copyBackInternal.planUploads({'a': '1', 'b': '2', 'c': '3'}, {'b': '2', 'c': 'x'}) == (['a'], ['c'], ['b'])
+
+
+def test_copy_back_uploads_only_changes(tmp_path, monkeypatch):
+    case = tmp_path / 'JOB9' / 'CASES' / '007'
+    (case / 'postProcessing' / 'gasAvg' / '0').mkdir(parents=True)
+    (case / 'log.rhoPimpleFoam').write_text('run 1')
+    (case / 'postProcessing' / 'gasAvg' / '0' / 'volFieldValue.dat').write_text('1 2 3')
+    drive, files = _fakeDrive(monkeypatch)
+    #dry run: nothing made on Drive
+    assert copyBackInternal.copyCase(drive, str(case), dryRun=True) == 0 and len(files.items) == 1
+    #first copy: folders JOB9/007/postProcessing/gasAvg/0 and both files
+    assert copyBackInternal.copyCase(drive, str(case)) == 2
+    names = sorted(item['name'] for item in files.items.values())
+    assert names == sorted(['root', 'JOB9', '007', 'postProcessing', 'gasAvg', '0', 'log.rhoPimpleFoam', 'volFieldValue.dat'])
+    #nothing changed: nothing uploaded; a changed log is updated in place, a new file created
+    drive.listings = {}
+    assert copyBackInternal.copyCase(drive, str(case)) == 0
+    (case / 'log.rhoPimpleFoam').write_text('run 2')
+    (case / 'summary.csv').write_text('NAME,007')
+    drive.listings = {}
+    files.uploads = []
+    assert copyBackInternal.copyCase(drive, str(case)) == 2
+    assert sorted(files.uploads) == [('create', 'summary.csv'), ('update', 'log.rhoPimpleFoam')]
+
+
+def test_copy_back_settings(tmp_path, monkeypatch):
+    for key in ['INTERNAL_DRIVE_FOLDER', 'INTERNAL_DRIVE_CREDENTIALS']:
+        monkeypatch.delenv(key, raising=False)
+    config = tmp_path / 'drive.ini'
+    config.write_text('[drive]\nfolderID = https://drive.google.com/drive/folders/ABC123\ncredentials = %s\n'
+                      % (tmp_path / 'k.json'))
+    s = copyBackInternal.getSettings(configFile=str(config))
+    assert s['folderID'] == 'ABC123' and s['credentials'] == str(tmp_path / 'k.json')
+    monkeypatch.setenv('INTERNAL_DRIVE_FOLDER', 'ENV1')
+    assert copyBackInternal.getSettings(configFile=str(config))['folderID'] == 'ENV1'
+    assert copyBackInternal.getSettings('ARG1', str(config))['folderID'] == 'ARG1'
+    with pytest.raises(SystemExit):
+        copyBackInternal.getSettings(configFile=str(tmp_path / 'missing.ini'))

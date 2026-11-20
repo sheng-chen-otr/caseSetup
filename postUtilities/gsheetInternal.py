@@ -31,6 +31,7 @@ and limitations.
 import argparse
 import configparser
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -57,22 +58,59 @@ def getSettings(sheetId=None, worksheet=None, configFile=None):
         'worksheet': worksheet or os.getenv('INTERNAL_GSHEET_WORKSHEET') or fromFile.get('worksheet', ''),
         'credentials': os.path.expanduser(os.path.expandvars(
             os.getenv('INTERNAL_GSHEET_CREDENTIALS') or fromFile.get('credentials', DEFAULT_CREDENTIALS)))}
+    settings['sheetID'] = cleanSheetId(settings['sheetID'])
+    settings['worksheet'] = settings['worksheet'].strip().strip('\'"')
+    settings['configPath'] = configPath
     if not settings['sheetID']:
-        sys.exit('ERROR! No sheet id: set INTERNAL_GSHEET_ID, --sheetId or sheetID in %s' % (configPath))
+        sys.exit('ERROR! No sheet id: set INTERNAL_GSHEET_ID, --sheetId or sheetID in %s (found the file: %s)'
+                 % (configPath, 'yes' if os.path.isfile(configPath) else 'no'))
     return settings
 
 
+def cleanSheetId(value):
+    #the id between /d/ and the next / of the sheet URL; quotes and a pasted full URL are accepted
+    value = str(value).strip().strip('\'"').strip()
+    match = re.search(r'/spreadsheets/d/([A-Za-z0-9_-]+)', value)
+    return match.group(1) if match else value
+
+
 def openWorksheet(settings):
-    import gspread
-    from google.oauth2.service_account import Credentials
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+    except ImportError:
+        sys.exit('ERROR! gspread / google-auth missing: pip install --user gspread google-auth')
     if not os.path.isfile(settings['credentials']):
-        sys.exit('ERROR! Credentials file %s not found: set INTERNAL_GSHEET_CREDENTIALS' % (settings['credentials']))
-    creds = Credentials.from_service_account_file(settings['credentials'],
-                                                  scopes=['https://www.googleapis.com/auth/spreadsheets'])
-    spreadsheet = gspread.authorize(creds).open_by_key(settings['sheetID'])
-    if settings['worksheet']:
-        return spreadsheet.worksheet(settings['worksheet'])
-    return spreadsheet.sheet1
+        sys.exit('ERROR! Credentials file %s not found: set credentials in %s or INTERNAL_GSHEET_CREDENTIALS'
+                 % (settings['credentials'], settings.get('configPath', CONFIG_FILE)))
+    try:
+        creds = Credentials.from_service_account_file(settings['credentials'],
+                                                      scopes=['https://www.googleapis.com/auth/spreadsheets'])
+    except ValueError as error:
+        sys.exit('ERROR! %s is not a service account key (json from Google Cloud > IAM > Service accounts > Keys): %s'
+                 % (settings['credentials'], error))
+    print('\tservice account %s, sheet %s' % (creds.service_account_email, settings['sheetID']))
+    try:
+        spreadsheet = gspread.authorize(creds).open_by_key(settings['sheetID'])
+        if settings['worksheet']:
+            return spreadsheet.worksheet(settings['worksheet'])
+        return spreadsheet.sheet1
+    except gspread.exceptions.SpreadsheetNotFound:
+        sys.exit('ERROR! Sheet %s not found: check the id (between /d/ and /edit in the URL) and share the sheet with '
+                 '%s as Editor' % (settings['sheetID'], creds.service_account_email))
+    except gspread.exceptions.WorksheetNotFound:
+        sys.exit('ERROR! No tab "%s" in the sheet: check worksheet (tab names, case and spaces count)' % (settings['worksheet']))
+    except gspread.exceptions.APIError as error:
+        text = str(error)
+        if 'has not been used' in text or 'is disabled' in text or 'SERVICE_DISABLED' in text:
+            sys.exit('ERROR! The Google Sheets API is not enabled for the key\'s Google Cloud project: enable it under '
+                     'APIs & Services, wait a minute, retry.\n%s' % (text))
+        if 'PERMISSION_DENIED' in text or '403' in text:
+            sys.exit('ERROR! Permission denied: share the sheet with %s as Editor.\n%s' % (creds.service_account_email, text))
+        if '404' in text:
+            sys.exit('ERROR! Sheet %s not found: check the id and the sharing with %s.\n%s'
+                     % (settings['sheetID'], creds.service_account_email, text))
+        raise
 
 
 def normalise(name):

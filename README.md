@@ -385,9 +385,9 @@ P_BUFFER = charge       # pressure behind the bodies
 
 ### Decomposition and cluster
 
-`[GLOBAL_COMPUTE_SETUP]` has `NUM_PROCS`, `LOCAL_PROCS`, `ACCOUNT`, `MODULES`, `RUN_TIME`, `MOTION_TIME`, `EXPORT` and the decomposition. `DECOMP_METHOD = scotch` by default; on clusters without scotch use `hierarchical` (or `simple`) with `DECOMP = auto` (split chosen for the task count of each run, subdomains close to cubes) or `DECOMP = nx ny nz` (the product must equal `NUM_PROCS`). the scripts set numberOfSubdomains on every run, so the same case runs on the cluster and locally.
+`[GLOBAL_COMPUTE_SETUP]` has `NUM_PROCS`, `LOCAL_PROCS`, `ACCOUNT`, `MODULES`, `MPI_RUN` (parallel launcher inside a Slurm job, default `srun`; e.g. `/usr/bin/mpirun` where Open MPI can't start under srun), `RUN_TIME`, `MOTION_TIME`, `EXPORT` and the decomposition. `DECOMP_METHOD = scotch` by default; on clusters without scotch use `hierarchical` (or `simple`) with `DECOMP = auto` (split chosen for the task count of each run, subdomains close to cubes) or `DECOMP = nx ny nz` (the product must equal `NUM_PROCS`). the scripts set numberOfSubdomains on every run, so the same case runs on the cluster and locally.
 
-`runScript` keeps the mesh (`.meshDone`): running it again continues the solve from the latest time. remove `processor*` and `.meshDone` to remesh.
+`runScript` keeps the mesh (`.meshDone`): running it again continues the solve from the latest time. remove `processor*` and `.meshDone` to remesh. the setup writes `system/meshSignature` (meshing dicts, motion zones, geometry as meshed); if a rerun of the setup changes it, `runScript` and `motionCheckScript` stop and ask for a remesh instead of using a mesh that no longer matches (e.g. a new MOVE body without its motion zone).
 
 `submitScript` submits `runScript` and then `postScript` (afterok). `--noPost` skips the post job, `--post` submits only `postScript`, `--check` does the mesh motion dry run. the post job has its own keys: `POST_MODULES` (needs python3 + numpy, pvbatch and ffmpeg), `POST_CPUS`, `POST_MEM`, `POST_TIME`, `PVBATCH`, `GSHEET`.
 
@@ -405,6 +405,18 @@ python3 /path/to/caseSetup/postUtilities/imagesToMovies.py [--fps N]
 images are set up like pvPost: `pvPostInternalSetup` in the case (copied there by the setup, kept if it exists) lists the slices (`NAMES`, `NORMALS`, `ORIGINS` = center | loc | x,y,z, `FOLLOW` = a body so a z slice moves with the displacer), the surface patches and views, the variables and `[MOVIES] FPS`. variables (equation, label, range auto | symmetric | [min, max], colour map) are in `postUtilities/default/defaultInternalVariables`; ranges are fixed over the run. output: `postProcessing/images/<panel>/` (one png per written time) and `postProcessing/movies/<case>_<panel>.mp4`.
 
 `summary.csv`, `pV.png` (last cycles overlaid, compressible) and `cycleConvergence.png` (work per body, mean gas T, mass drift, heat per BC group and crank speed per cycle) in the case folder: run info and times, cycles done, work per body and `AVG_ENERGY`/`AVG_POWER` over the last N cycles, gas p/T/rho, face pressures, and for compressible runs mass drift, p-V work and heat per BC group; for the crank drive also speed, load and generator power. `gsheetInternal.py` pushes the summary to the database sheet (settings in `~/.config/caseSetup/gsheet.ini` or `INTERNAL_GSHEET_*`; keep the service account key out of git).
+
+### Copy back to Google Drive
+
+`postUtilities/copyBackInternal.py [cases ...] [--dryRun] [--noImages]` uploads the run data to `<folder>/<JOB>/<case>/` on Google Drive, keeping the case's sub-paths: logs and Slurm `.out` files, `internalSetup`, `fullCaseSetupDict`, `pvPostInternalSetup`, `summary.csv` and plots, every `postProcessing/**/*.dat`, the images and the videos. only new or changed files are uploaded (md5 against Drive), so rerunning it is cheap. it is the last step of `postScript` (`COPY_BACK = True` in `[GLOBAL_COMPUTE_SETUP]`). settings: `~/.config/caseSetup/drive.ini`
+
+```ini
+[drive]
+folderID = <folder id, or the folder URL>
+credentials = ~/.config/caseSetup/internal_cfd_credentials.json
+```
+
+or `INTERNAL_DRIVE_FOLDER` / `INTERNAL_DRIVE_CREDENTIALS`, or `--config` / `--folderId`. the folder has to be on a Shared Drive (service accounts have no storage of their own) and shared with the service account as Content manager. needs `google-api-python-client` and `google-auth`.
 
 ### Demo cases
 

@@ -23,6 +23,7 @@ import os
 import sys
 import json
 import math
+import hashlib
 
 import numpy as np
 
@@ -1540,9 +1541,33 @@ def motionCheckTimes(fullCaseSetupDict):
 
 #----- scripts
 
+def writeMeshSignature():
+    #system/meshSignature: md5 of everything the mesh is made from (meshing dicts, topoSetDict motion zones, the
+    #geometry as meshed); the run scripts keep an existing mesh only while it matches the copy in .meshDone
+    files = [os.path.join('system', name) for name in ['blockMeshDict', 'snappyHexMeshDict', 'snappyRefinementDict',
+                                                       'surfaceFeatureExtractDict', 'topoSetDict']]
+    surfDir = os.path.join('constant', 'triSurface')
+    if os.path.isdir(surfDir):
+        files += [os.path.join(surfDir, name) for name in sorted(os.listdir(surfDir))
+                  if not name.endswith('.eMesh') and os.path.isfile(os.path.join(surfDir, name))]
+    lines = []
+    for path in files:
+        if not os.path.isfile(path):
+            continue
+        digest = hashlib.md5()
+        with open(path, 'rb') as f:
+            for block in iter(lambda: f.read(1 << 20), b''):
+                digest.update(block)
+        lines.append('%s  %s' % (digest.hexdigest(), path.replace('\\', '/')))
+    with open(os.path.join('system', 'meshSignature'), 'w', newline='\n') as f:
+        f.write('\n'.join(lines) + '\n')
+
+
 def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None, fanNames=None):
     #writing runScript, postScript, motionCheckScript and submitScript from clusterDict
     print('\n\tWriting scripts...')
+    os.makedirs('system', exist_ok=True)
+    writeMeshSignature()
     with open('%s/defaultCluster/slurm/clusterDict' % (templateLoc)) as f:
         clusterDict = json.load(f)
     solver = getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER')
@@ -1564,6 +1589,12 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
         sys.exit('ERROR! GLOBAL_COMPUTE_SETUP GSHEET must be True or False!')
     if gsheet == 'false':
         skipSteps.append('gsheet')
+    #copy the run data back to Google Drive at the end of the post job (copyBackInternal.py)
+    copyBack = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('COPY_BACK', ['True'])[0].lower()
+    if copyBack not in ('true', 'false'):
+        sys.exit('ERROR! GLOBAL_COMPUTE_SETUP COPY_BACK must be True or False!')
+    if copyBack == 'false':
+        skipSteps.append('copyBack')
     if export == 'none':
         skipSteps += ['images', 'movies']
     scripts = [('run', 'runScript'), ('post', 'postScript'), ('submit', 'submitScript')]
@@ -1587,6 +1618,9 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
     for key in compute:
         replaceDict['<%s>' % key] = ' '.join(compute[key])
+    #parallel launcher inside a Slurm job (srun, or e.g. mpirun where Open MPI cannot start under srun)
+    if replaceDict.get('<MPI_RUN>', '').strip() == '':
+        replaceDict['<MPI_RUN>'] = 'srun'
     if replaceDict.get('<JOB_NAME>', 'auto') == 'auto':
         replaceDict['<JOB_NAME>'] = os.path.basename(os.getcwd())
     for section, scriptName in scripts:
