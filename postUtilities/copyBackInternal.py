@@ -41,7 +41,10 @@ DEFAULT_CREDENTIALS = os.path.join('~', '.config', 'caseSetup', 'internal_cfd_cr
 FOLDER_TYPE = 'application/vnd.google-apps.folder'
 
 #files of a case to copy back, relative to the case directory
-CASE_FILES = ['log.*', '*.out', 'internalSetup', 'fullCaseSetupDict', 'pvPostInternalSetup', 'summary.csv', '*.png']
+CASE_FILES = ['log.*', '*.out', 'internalSetup', 'fullCaseSetupDict', 'pvPostInternalSetup', 'summary.csv',
+ '*.png',
+ os.path.join('constant','triSurface','*.stl*',),
+ os.path.join('constant','triSurface','*.obj*',)]
 DATA_FILES = [os.path.join('postProcessing', '**', '*.dat')]
 IMAGE_FILES = [os.path.join('postProcessing', 'images', '**', '*.png'),
                os.path.join('postProcessing', 'meshImages', '**', '*.png')]

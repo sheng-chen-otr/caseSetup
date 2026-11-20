@@ -258,7 +258,7 @@ F_{body} = \sum (p - p_{ref})\, \mathbf{S}_f \cdot \mathbf{e}_z, \qquad T_{body}
 \begin{equation}
 I\,\frac{d\omega}{dt} = \sum T_{body} - T_{load} - T_{friction}
 \end{equation}
-The forces are pressure only, from the previous time step. Speed-proportional terms are treated implicitly.
+The forces are pressure only, from the previous time step. Speed-proportional terms are treated implicitly. The full equations, the load models and the summary values are in Section~\ref{sec:postMath}.
 \begin{lstlisting}
     [MESH_MOTION]
     DRIVE = crank
@@ -542,7 +542,7 @@ Logs: \codeword{log.postInternal}, \codeword{log.gsheetInternal}, \codeword{log.
     \item Compressible: gas mass drift, p--V work, gas volume range, heat per BC group (W, positive into the gas).
     \item Crank drive: work from $\oint T\,d\theta$, cycles counted by crank angle, mean/min/max speed, speed change over the last cycle (convergence), mean gas torque, load power and electrical power.
 \end{itemize}
-Restarted runs are handled: the function object directories are merged in time order.
+Restarted runs are handled: the function object directories are merged in time order. The equations behind every value are in Section~\ref{sec:postMath}.
 
 \codeword{postUtilities/gsheetInternal.py} pushes the summaries to the database sheet, one row per case found by job and name (\codeword{--comment}, \codeword{--dryRun}). The sheet id and the service account key are read from \codeword{~/.config/caseSetup/gsheet.ini} or the \codeword{INTERNAL_GSHEET_*} environment variables. Keep the key out of git.
 
@@ -599,6 +599,256 @@ Each image has a title with the case, panel, variable, time and crank angle. Run
     python3 /path/to/caseSetup/postUtilities/copyBackInternal.py [cases ...] [--dryRun] [--noImages]
 \end{lstlisting}
 Settings in \codeword{~/.config/caseSetup/drive.ini} (or \codeword{--config}): a \codeword{[drive]} section with \codeword{folderID} (the id or the folder URL) and \codeword{credentials} (the service account key, default \codeword{~/.config/caseSetup/internal_cfd_credentials.json}); \codeword{INTERNAL_DRIVE_FOLDER} and \codeword{INTERNAL_DRIVE_CREDENTIALS} override it. The folder must be on a Shared Drive, because service accounts have no storage of their own, and shared with the service account as Content manager. Needs \codeword{google-api-python-client} and \codeword{google-auth}.
+
+\subsection{Post-Processing and Motion Calculations}\label{sec:postMath}
+This section gives the equations behind the numbers in \codeword{summary.csv}, \codeword{pV.png}, \codeword{cycleConvergence.png} and \codeword{flowConvergence.png} (\codeword{postUtilities/postInternal.py}), the crank drive (\codeword{foamLibs/stirlingMotion}) and the mesh motion report printed by the setup (\codeword{motionUtilities.py}). Units are SI throughout, angles in the equations are in radians unless given in degrees.
+
+\subsubsection{Input Data and Sign Conventions}
+\begin{itemize}
+    \item The function objects write one row per time step to \codeword{postProcessing/<name>/<startTime>/*.dat}. After a restart there are several start times. They are merged in time order, and a later file replaces the overlapping times of an earlier one.
+    \item $\mathbf{S}_f$ is the face area vector of a boundary face. OpenFOAM points it out of the gas, so on a moving body it points into the body. The force of the gas on a body, $\mathbf{F} = \sum_f p\,\mathbf{S}_f$ (plus the viscous part), is then positive in the direction the gas pushes the body.
+    \item Work and power are positive when they leave the gas (the gas pushes a body the way it moves: engine output). Heat is positive into the gas. Mass flow is positive into the domain.
+    \item The motion tables give the displacement $\Delta z(t)$ of each body from the meshed position. The solver interpolates them linearly in time.
+\end{itemize}
+
+\subsubsection{Cycles and Time Averages}
+\paragraph{Cycle windows.}
+With a prescribed motion the run starts at $t = 0$ at \codeword{START_ANGLE}, and cycle $k$ ($k = 1, 2, \ldots$) runs from $t_{k-1}$ to $t_k$ with
+\begin{equation}
+t_k = \frac{k}{f}, \qquad N_{done} = \left\lfloor t_{end} f \right\rfloor ,
+\end{equation}
+$f$ = \codeword{FREQ}, $t_{end}$ = the last time in \codeword{gasAvg}. Only complete cycles count. The results are averaged over the last $N = \min($\codeword{--avgCycles}$, N_{done})$ cycles, the window
+\begin{equation}
+t_0 = \frac{N_{done} - N}{f}, \qquad t_1 = \frac{N_{done}}{f} .
+\end{equation}
+With the crank drive the speed is not fixed, so cycles are counted by the crank angle $\theta$ (accumulated, degrees, from the log \codeword{crank.dat}) instead of time: $N_{done} = \lfloor(\theta_{end} - \theta_0)/360\rfloor$ with $\theta_0$ the start angle, and the cycle edges are the times at which $\theta = \theta_0 + 360k$, interpolated linearly in the log. If the crank stops or turns backwards, only the cycles before the first stop are used.
+
+\paragraph{Time average.}
+The time step varies, so a plain average of the samples would weigh the parts of the cycle with small time steps too much. Every average is a time average with the trapezoidal rule, with the window ends interpolated:
+\begin{equation}
+\overline{y} = \frac{1}{t_1 - t_0}\int_{t_0}^{t_1} y\,dt \approx \frac{1}{t_1 - t_0}\sum_i \frac{y_i + y_{i+1}}{2}\,(t_{i+1} - t_i) .
+\end{equation}
+Example: samples $y = 2, 4, 4$ at $t = 0, 1, 3$ give $\overline{y} = (3 \cdot 1 + 4 \cdot 2)/3 = 3.67$, the sample mean would be 3.33. All \codeword{_MEAN} values are computed like this. \codeword{_MAX} and \codeword{_MIN} are the extreme samples in the window, and an amplitude is half the range:
+\begin{equation}
+y_{amp} = \frac{1}{2}\left(\max_{t_0 \le t \le t_1} y - \min_{t_0 \le t \le t_1} y\right) .
+\end{equation}
+This is used for \codeword{P_<patch>_AMP} (area-averaged pressure on each moving face) and \codeword{FORCE_Z_AMP_<body>}.
+
+\subsubsection{Work and Power, Prescribed Motion}
+The work done by the gas on a body over the window, per cycle:
+\begin{equation}
+W_{body} = \frac{1}{N}\int_{t_0}^{t_1} F_z(t)\, v(t)\, dt ,
+\end{equation}
+with $F_z$ the \codeword{total_z} column of \codeword{force_<body>} (pressure and viscous) and $v$ the body velocity from its motion table. Because the solver interpolates the table linearly in time, the mesh moves with a constant velocity between two table points $t_j$ and $t_{j+1}$:
+\begin{equation}
+v(t) = \frac{\Delta z_{j+1} - \Delta z_j}{t_{j+1} - t_j}, \qquad t_j \le t < t_{j+1} .
+\end{equation}
+The same piecewise constant velocity is used in the integral, so the work matches what the mesh actually did. Then
+\begin{equation}
+\mathrm{AVG\_ENERGY} = \sum_{bodies} W_{body}, \qquad \mathrm{AVG\_POWER} = \mathrm{AVG\_ENERGY}\cdot f .
+\end{equation}
+A body that only moves gas around (a displacer alone) has $W < 0$: it takes work to drive it, the flow loss through the holes and the gap.
+
+The force function objects use the absolute pressure. A constant pressure $p_c$ on a face of area $A$ adds $p_c A \oint dz = 0$ over a closed cycle, so the work does not depend on the pressure level; the force amplitude does not either.
+
+\subsubsection{Crank Drive}
+\paragraph{In the solver, every time step.}
+The force of the gas on each body along the axis, pressure only, relative to the pressure behind the body $p_{ref}$ (\codeword{P_BUFFER}):
+\begin{equation}
+F_{body} = \sum_{f \in body} (p_f - p_{ref})\,\mathbf{S}_f \cdot \mathbf{e}_z .
+\end{equation}
+For \codeword{pimpleFoam} $p$ is kinematic, so $F$ is multiplied by the gas density at the charge state and $p_{ref} = 0$. The viscous force is left out; in 009-type runs it was about $10^{-6}$ of the pressure force.
+
+The torque on the crank follows from the virtual work, $F\,dz = T\,d\theta$:
+\begin{equation}
+T_{body} = F_{body}\,\frac{dz_{body}}{d\theta}, \qquad \frac{dz}{d\theta} \approx \frac{z(\theta + h) - z(\theta - h)}{2h}, \quad h = 0.25^\circ ,
+\end{equation}
+with $z(\theta)$ from the crank table \codeword{<body>Crank} (in m per rad). The flywheel:
+\begin{equation}
+I\,\frac{d\omega}{dt} = T_{gas} - T_0 - c\,\omega, \qquad T_{gas} = \sum_{bodies} T_{body} ,
+\end{equation}
+with $I$ = \codeword{INERTIA}. The load is split into a constant part $T_0$ and a speed-proportional part $c\,\omega$:
+\begin{center}
+\begin{tabular}{l l l}
+\hline
+\codeword{LOAD} & $T_0$ & $c$ \\
+\hline
+\codeword{torque} & $T_{fr}\,\mathrm{sign}(\omega) + T_{load}$ & $c_{fr}$ \\
+\codeword{damper} & $T_{fr}\,\mathrm{sign}(\omega)$ & $c_{fr} + c_{damp}$ \\
+\codeword{generator} & $T_{fr}\,\mathrm{sign}(\omega)$ & $c_{fr} + k^2/(R_{load} + R_{int})$ \\
+\hline
+\end{tabular}
+\end{center}
+$T_{fr}$ = \codeword{FRICTION_TORQUE}, $c_{fr}$ = \codeword{FRICTION_COEFF}, $T_{load}$ = \codeword{LOAD_TORQUE}, $c_{damp}$ = \codeword{LOAD_DAMPING}, $k$ = \codeword{GEN_K}. The generator line comes from the electrical circuit: the back-EMF $k\omega$ drives the current $I_e = k\omega/(R_{load} + R_{int})$, the generator torque is $k I_e = k^2\omega/(R_{load} + R_{int})$, and the power in the load resistor is
+\begin{equation}
+P_{elec} = I_e^2 R_{load} .
+\end{equation}
+The gas torque is explicit (from the pressure of the previous step), the speed-proportional part implicit, so a large damping cannot make the step unstable:
+\begin{equation}
+\omega^{n+1} = \frac{I\,\omega^n + \Delta t\,(T_{gas} - T_0)}{I + \Delta t\, c}, \qquad
+\theta^{n+1} = \theta^n + \frac{\Delta t}{2}\left(\omega^n + \omega^{n+1}\right) .
+\end{equation}
+The logged load torque is $T_0 + c\,\omega^{n+1}$, so it includes the friction. With \codeword{LOAD = speed}, $\omega$ stays at $2\pi f$ and the load torque is set equal to the gas torque. With mesh motion outer correctors the step is redone from $(\theta^n, \omega^n)$ with the newer pressure.
+
+\paragraph{In the summary.}
+The work per body is the torque integrated over the crank angle,
+\begin{equation}
+W_{body} = \frac{1}{N}\int_{\theta(t_0)}^{\theta(t_1)} T_{body}\, d\theta ,
+\end{equation}
+which is the same as $\int F v\,dt$ because $v = (dz/d\theta)\,\omega$. Speed and power:
+\begin{equation}
+\mathrm{FREQ\_MEAN} = \frac{N}{t_1 - t_0}, \qquad \mathrm{AVG\_POWER} = \mathrm{AVG\_ENERGY}\cdot \mathrm{FREQ\_MEAN},
+\end{equation}
+\begin{equation}
+\mathrm{FREQ\_MIN/MAX} = \frac{\omega_{min/max}}{2\pi} ,
+\end{equation}
+\begin{equation}
+\mathrm{TORQUE\_GAS\_MEAN} = \frac{1}{\theta(t_1) - \theta(t_0)}\int T_{gas}\,d\theta ,
+\end{equation}
+\begin{equation}
+\mathrm{POWER\_LOAD} = \overline{T_{load}\,\omega}, \qquad \mathrm{POWER\_ELEC} = \overline{P_{elec}} .
+\end{equation}
+\codeword{POWER_LOAD} includes the friction losses. The speed change of the last cycle is a convergence measure:
+\begin{equation}
+\mathrm{FREQ\_CHANGE} = \frac{1}{t_{N_{done}} - t_{N_{done}-1}} - \frac{1}{t_{N_{done}-1} - t_{N_{done}-2}} .
+\end{equation}
+At a periodic state the mean gas torque equals the mean load torque, $\overline{T_{gas}} = \overline{T_0 + c\,\omega}$, and \codeword{FREQ_CHANGE} goes to zero.
+
+\subsubsection{Gas State, p--V Loop and Mass}
+\paragraph{Gas volume.}
+\codeword{gasAvg} writes the volume averages $\bar{p}$, $\bar{T}$, $\bar{\rho}$ and \codeword{gasMass} the gas mass $m = \int \rho\, dV$. Since $\bar{\rho} = m/V$ by definition, the gas volume follows exactly, without the mesh volume:
+\begin{equation}
+V(t) = \frac{m(t)}{\bar{\rho}(t)} .
+\end{equation}
+\codeword{GAS_VOLUME_MIN} and \codeword{_MAX} are its extremes in the window. \codeword{P_MEAN}, \codeword{T_MEAN}, \codeword{RHO_MEAN} are the time averages of the volume averages.
+
+\paragraph{p--V work.}
+\begin{equation}
+\mathrm{PV\_WORK} = \frac{1}{N}\oint \bar{p}\, dV \approx \frac{1}{N}\sum_i \frac{\bar{p}_i + \bar{p}_{i+1}}{2}\,(V_{i+1} - V_i)
+\end{equation}
+over the window. A loop run clockwise in the p--V plot gives positive work (out of the gas). \codeword{PV_WORK} uses one mean pressure for the whole gas. The body work uses the pressure on each face, so the two differ by the pressure differences inside the engine (flow loss through the regenerator and the holes): $\mathrm{PV\_WORK} - \mathrm{AVG\_ENERGY}$ is roughly the work lost to flow friction per cycle. \codeword{pV.png} plots $\bar{p}$ against $V$ for the last \codeword{--pvCycles} cycles.
+
+\paragraph{Mass drift.}
+A closed volume must keep its mass:
+\begin{equation}
+\mathrm{MASS\_DRIFT} = \frac{m(t_{end})}{m(0)} - 1 .
+\end{equation}
+\codeword{cycleConvergence.png} shows $m(t_k)/m(0) - 1$ at the end of every cycle. A drift comes from the mesh motion (space conservation) or a loose pressure tolerance, not from the physics. Values around $10^{-6}$ are fine. A drift of $10^{-3}$ shifts the mean pressure by the same fraction.
+
+\subsubsection{Heat, Through-Flow and Porous Zones}
+\paragraph{Heat per BC group.}
+\codeword{wallHeatFlux} writes, per patch and time step, the integral of the heat flux over the patch, $\dot{Q}_{patch}$ (W, positive into the gas). For a group $g$ with the patches in \codeword{BC_GROUPS_RESOLVED}:
+\begin{equation}
+\mathrm{HEAT}_g = \frac{1}{t_1 - t_0}\int_{t_0}^{t_1}\sum_{patch \in g} \dot{Q}_{patch}\, dt \quad \textrm{(W)},
+\end{equation}
+and in \codeword{cycleConvergence.png} the heat per cycle $Q_{g,k} = \int_{t_{k-1}}^{t_k} \sum \dot{Q}\,dt$ (J). Energy balance of a closed engine at a periodic state, per cycle:
+\begin{equation}
+\sum_g Q_g \approx \mathrm{AVG\_ENERGY}
+\end{equation}
+(heat in = work out), and the mean gas temperature per cycle stops changing.
+
+\paragraph{Inlets and outlets.}
+\codeword{flow_<patch>} writes $\sum_f \phi_f$, with $\phi$ the face flux out of the domain (kg/s compressible, m$^3$/s incompressible). For a group:
+\begin{equation}
+\dot{m}_g = -\, s_\phi \sum_{patch \in g} \overline{\textstyle\sum_f \phi_f} ,
+\end{equation}
+positive into the domain, with $s_\phi = 1$ for compressible and $s_\phi = \rho_{ref}$ (\codeword{RHO_REF}, the gas density at the charge state) for incompressible runs. The pressure and temperature of a group are area weighted over its patches, with the patch areas $A$ from the header of the \codeword{avg_<patch>} files:
+\begin{equation}
+P_g = \frac{\sum A\,(p_0 + s_p\,\overline{p})}{\sum A}, \qquad T_g = \frac{\sum A\,\overline{T}}{\sum A} ,
+\end{equation}
+$s_p = 1$, $p_0 = 0$ for compressible, $s_p = \rho_{ref}$, $p_0$ = \codeword{CHARGE_PRESSURE} for incompressible (kinematic p to Pa). Then
+\begin{equation}
+\mathrm{MDOT\_IMBALANCE} = \frac{\sum_g \dot{m}_g}{\sum_g \max(\dot{m}_g, 0)}, \qquad
+\mathrm{P\_DROP} = \mathrm{mean}_{inlets}\, P_g - \mathrm{mean}_{outlets}\, P_g .
+\end{equation}
+The imbalance is zero for a converged steady run, and small (the change of gas mass inside) for a transient one. Without \codeword{RHO_REF} an incompressible run reports \codeword{VOLUME_FLOW_<group>} in m$^3$/s and the kinematic pressure.
+
+\paragraph{Porous zones.}
+\codeword{porHeat_<zone>} writes $\int_{zone} Q_s\,dV$ with $Q_s = h a\,(T_s - T)$ (Section~\ref{sec:regenModel}); its time average is \codeword{HEAT_<zone>} (W, from the matrix into the gas). \codeword{por_<zone>} writes the volume averages over the zone; their time averages are \codeword{P_MEAN_<zone>}, \codeword{T_MEAN_<zone>} and \codeword{TS_MEAN_<zone>} (matrix temperature).
+
+\paragraph{Steady runs.}
+The time is the iteration number. The averages above are taken over the last \codeword{avgIters} = 50 iterations (fewer if the run is shorter): $t_0 = \max(t_{first}, t_{end} - 50)$, $t_1 = t_{end}$. There are no cycles, work or p--V values. \codeword{flowConvergence.png} shows the initial residuals and the flow, pressure and temperature of each inlet/outlet group per iteration.
+
+\subsubsection{Mesh Motion Numbers (Setup Report)}
+These are computed by the setup before meshing, from the STL PIDs and the motion CSV.
+
+\paragraph{Zone positions.}
+Each motion zone is a flat face at height $z_{ref}$ (as in the STL). A zone of body $b$ is at
+\begin{equation}
+z(\theta) = z_{ref} + x_b(\theta) - x_b(\theta_{ref}) + \delta z_b ,
+\end{equation}
+with $x_b(\theta)$ the CSV column (periodic linear interpolation, any datum), $\theta_{ref}$ = \codeword{REF_ANGLE} (the angle the STL was exported at) and $\delta z_b$ the clearance offset (\codeword{CLEARANCE_MODE = shift}, else 0). Anchor zones stay at $z_{ref}$. The gap between two neighbouring zones (sorted by their mean height over the cycle) is $g(\theta) = z_{upper}(\theta) - z_{lower}(\theta)$, checked on a grid of 1° or finer. Any $g \le 0$ is an error (the zones cross).
+
+\paragraph{Motion tables.}
+For a run starting at $\theta_s$ (\codeword{START_ANGLE}, the meshing angle):
+\begin{equation}
+\theta(t) = \theta_s + 360 f t, \qquad \Delta z_b(t) = x_b(\theta(t)) - x_b(\theta_s) ,
+\end{equation}
+so every table starts at zero. Crank tables store $\Delta z_b(\theta)$ over 0 to 360° instead.
+
+\paragraph{Clearance.}
+A body with \codeword{TDC_CLEARANCE} $\delta$ must keep $g \ge \delta$ to each neighbouring anchor. The shortfall at the low end of the profile is $r = \delta - \min g$ (and the same at the high end, $l$).
+\begin{itemize}
+    \item \codeword{shift}: the whole path moves by $r$, $\delta z_b = r$. Added dead volume $r A$, with $A$ the projected zone area.
+    \item \codeword{scale}: the stroke is shrunk to fit, keeping the shape exactly. With $x_{lo}$, $x_{hi}$ the profile ends,
+    \begin{equation}
+    x' = x_{lo} + r + (x - x_{lo})\,\frac{(x_{hi} - l) - (x_{lo} + r)}{x_{hi} - x_{lo}} .
+    \end{equation}
+    \item \codeword{soft} (default): only the part of the stroke near the closing end changes. With $s = x - x_{lo}$ and the stroke $S = x_{hi} - x_{lo}$,
+    \begin{equation}
+    x' = x_{lo} + \left(s^4 + r^4\right)^{1/4} - \epsilon\left(\frac{s}{S}\right)^4, \qquad \epsilon = \left(S^4 + r^4\right)^{1/4} - S .
+    \end{equation}
+    At $s = 0$ the end is raised by exactly $r$. Away from the end the change dies out as $r^4/(4s^3)$, and the small correction $\epsilon$ keeps the other end of the stroke exactly where it was. The profile stays monotonic and dwells stay flat. The peak acceleration near the adjusted end is about twice the original. The high end uses the mirror image. The report gives the largest change and over how many degrees the profile moved by more than 0.02 mm.
+\end{itemize}
+The added dead volume is $(r + l) A$ for the soft and scale modes too.
+
+\paragraph{Squash and stretch.}
+Between two zones the cells only scale along z, by $g(\theta)/g_0$ with $g_0 = g(\theta_s)$, the gap at the meshing angle. The worst ratio over the cycle and all gaps that change:
+\begin{equation}
+R = \max_{gaps}\, \max_\theta\, \max\!\left(\frac{g(\theta)}{g_0}, \frac{g_0}{g(\theta)}\right) .
+\end{equation}
+\codeword{START_ANGLE = auto} picks the grid angle with the smallest $R$, and \codeword{MAX_DEFORMATION} is the upper limit for $R$. For one gap that runs from $g_{min}$ to $g_{max}$, $R$ is smallest when the mesh is built at the geometric mean, where squash and stretch are equal:
+\begin{equation}
+g_0 = \sqrt{g_{min}\, g_{max}}, \qquad R = \sqrt{\frac{g_{max}}{g_{min}}} .
+\end{equation}
+For a piston with clearance $\delta$ and stroke $S$: $g_{min} = \delta$, $g_{max} = \delta + S$.
+
+\paragraph{Body kinematics.}
+On the angle grid, with $\omega_{deg} = 360 f$:
+\begin{equation}
+v = \frac{dz}{d\theta}\,\omega_{deg}, \qquad a = \frac{dv}{d\theta}\,\omega_{deg}
+\end{equation}
+(central differences). The report gives the stroke, $\max|v|$ and $\max|a|$, and warns when the velocity jumps by more than 20\,\% of $\max|v|$ between two samples (a sharp corner in the profile, which gives pressure spikes).
+
+\paragraph{Gap refinement.}
+For a side gap of width $w$ (smallest distance between the \codeword{GAP_PIDS} faces), base cell size $\Delta_0$ and \codeword{GAP_CELLS} $n$:
+\begin{equation}
+L = \left\lceil \log_2 \frac{n\,\Delta_0}{w} \right\rceil, \qquad \Delta = \frac{\Delta_0}{2^L} ,
+\end{equation}
+refined within a distance $1.25\,w$ of the gap faces.
+
+\paragraph{Motion check frames.}
+The dry run writes \codeword{MOTION_FRAMES} $n_f$ meshes per cycle (a multiple of 8) and runs $n_f\lceil 72/n_f\rceil$ steps per cycle, $\Delta t = 1/(f \cdot \textrm{steps})$. \codeword{checkMesh} runs at $t = k/(8f)$, $k = 1 \ldots 8$, every 45°.
+
+\subsubsection{Worked Example}
+A synthetic case that can be checked by hand. Piston with crown area $A = 0.01$\,m$^2$, gas below it, stroke $S = 0.05$\,m, $f = 10$\,Hz, position $z = \frac{S}{2}(1 - \cos\theta)$, so $V = V_c + A z$. The crown pressure peaks $\varphi$ after the smallest volume ($\theta = 0$), so it is high while the gas expands:
+\begin{equation}
+p = p_m + p_a \cos(\theta - \varphi), \qquad p_a = 20\,\textrm{kPa}, \quad \varphi = 60^\circ .
+\end{equation}
+\begin{itemize}
+    \item Force on the crown $F_z = p A$, velocity $v = \frac{S}{2}\omega\sin\theta$. Work per cycle:
+    \begin{equation}
+    W = \int_0^{2\pi} p A \frac{S}{2}\sin\theta\, d\theta = \frac{\pi}{2} A S p_a \sin\varphi = \frac{\pi}{2}\cdot 0.01 \cdot 0.05 \cdot 20000 \cdot 0.866 = 13.6\,\textrm{J}.
+    \end{equation}
+    $p_m$ drops out, as said above. \codeword{AVG_ENERGY} = 13.6\,J, \codeword{AVG_POWER} = $13.6 \cdot 10 = 136$\,W. With the peak before the smallest volume ($\varphi < 0$, high pressure while the gas is compressed) the work is negative.
+    \item p--V: with $\bar{p} = p$ the loop integral $\oint p\,dV = A\oint p\,dz$ is the same integral, so \codeword{PV_WORK} = 13.6\,J. In a real engine the face pressure and $\bar{p}$ differ and so do the two values.
+    \item \codeword{FORCE_Z_AMP} $= p_a A = 200$\,N, \codeword{P_<crown>_AMP} = 20\,kPa.
+    \item Crank drive: $T = F\,dz/d\theta = p A \frac{S}{2}\sin\theta$, $\oint T\,d\theta = 13.6$\,J, \codeword{TORQUE_GAS_MEAN} $= 13.6/(2\pi) = 2.165$\,N\,m.
+    \item Generator $k = 1$\,V\,s/rad, $R_{load} = 10\,\Omega$, no friction. At 10\,Hz ($\omega = 62.8$\,rad/s): $I_e = 6.28$\,A, load torque 6.28\,N\,m, $P_{elec} = 395$\,W, more than the 136\,W the gas gives, so the crank slows down. If the loop stayed the same, the speed settles where the mean torques match, $2.165 = k^2\omega/R_{load}$: $\omega = 21.7$\,rad/s (3.45\,Hz), $P_{elec} = 2.165 \cdot 21.7 = 47$\,W = $W \cdot f$ at 3.45\,Hz.
+    \item Gas volume: \codeword{gasMass} $m = 7.897\cdot10^{-3}$\,kg and \codeword{gasAvg} $\bar{\rho} = 1.1640$\,kg/m$^3$ give $V = 6.785\cdot10^{-3}$\,m$^3$ (6.8\,L).
+    \item Motion: clearance $\delta = 2$\,mm, stroke 152\,mm: $g_0 = \sqrt{2 \cdot 154} = 17.5$\,mm, $R = \sqrt{154/2} = 8.8$. Soft clearance $r = 2$\,mm: at 10\,mm from the end the profile moves by $(10^4 + 2^4)^{1/4} - 10 = 0.004$\,mm, and $\epsilon = 1.1\cdot10^{-9}$\,m.
+    \item Gap: $w = 2$\,mm, $\Delta_0 = 10.67$\,mm, $n = 6$: $\log_2(6 \cdot 10.67/2) = 5.0$, so $L = 5$, $\Delta = 0.33$\,mm.
+\end{itemize}
 
 \subsection{Demo Cases}
 \codeword{internalDemoCase/CASES} has two cases (geometry in \codeword{internalDemoCase/02_reference/MSH}):
