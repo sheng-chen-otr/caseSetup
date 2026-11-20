@@ -353,7 +353,7 @@ ZONE_PIDS = crown
 - `displacementInterpolation` along z between flat face zones: anchors (`ANCHOR_PIDS`) stay put, each body's `ZONE_PIDS` follow its motion table, points between two zones of one body move rigidly, end spaces stretch. bodies must be in line along z (gamma/beta engines, not alpha).
 - one CSV for the whole engine: `theta` (deg, 0 to 360) plus one position column (m) per body, so the phase between bodies is fixed by the file.
 - the setup moves each body from `REF_ANGLE` to the start angle (`START_ANGLE = auto` picks the least squash/stretch), keeps `TDC_CLEARANCE`, checks zone order, flatness and deformation over the whole cycle, and prints stroke, peak velocity and acceleration per body.
-- dry run before the flow run: `./runScript --meshOnly` then `./motionCheckScript` (cluster: `./submitScript --check`). it moves the mesh over one cycle and runs checkMesh every 45 deg.
+- dry run before the flow run: `./runScript --meshOnly`, `./motionCheckScript`, then `./postScript --mesh` (cluster: `./submitScript --check` chains all three). it moves the mesh over one cycle, runs checkMesh every 45 deg, exports the moved meshes (`MESH_MOTION MOTION_FRAMES`, default 24 per cycle = every 15 deg) to `EnSightMotion`, and draws the `pvPostInternalSetup` slices and body surfaces as grey surface-with-edges in `postProcessing/meshImages`, one video per panel in `postProcessing/meshMovies`. `EnSightMotion` holds the whole mesh for every frame: delete it once you have looked at the videos.
 - v2412 zone-order bug: the scripts reorder the face zones after topoSet (`meshUtilities/reorderFaceZones.py`).
 
 ### Crank drive

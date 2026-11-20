@@ -219,6 +219,7 @@ Both bodies are driven by one CSV file with the shared crank angle, so the phase
     STEP_DEG = 1
     MAX_DEFORMATION = 15
     ZONE_FLAT_TOL = 1e-4
+    MOTION_FRAMES = 24
     DRIVE = prescribed
 \end{lstlisting}
 \begin{itemize}
@@ -237,8 +238,13 @@ Check the moving mesh before the flow run:
 \begin{lstlisting}
     ./runScript --meshOnly
     ./motionCheckScript
+    ./postScript --mesh
 \end{lstlisting}
-or on the cluster \codeword{./submitScript --check}. The motion check runs \codeword{moveDynamicMesh} over one cycle and \codeword{checkMesh} on the moved meshes every 45 degrees, prints the quality summary and removes the moved meshes again. It stops only if \codeword{moveDynamicMesh} fails. Mesh quality failures are printed for the user to judge.
+or on the cluster \codeword{./submitScript --check}, which chains all three. The motion check runs \codeword{moveDynamicMesh} over one cycle and \codeword{checkMesh} on the moved meshes every 45 degrees, and prints the quality summary. It stops only if \codeword{moveDynamicMesh} fails. Mesh quality failures are printed for the user to judge.
+
+Before removing the moved meshes, it exports them to \codeword{EnSightMotion}, \codeword{MOTION_FRAMES} times per cycle (\codeword{[MESH_MOTION]}, a multiple of 8, default 24 = every 15 degrees; the motion itself still steps 5 degrees or less). \codeword{./postScript --mesh} then draws the slices of \codeword{pvPostInternalSetup} (\codeword{[SLICE]}, including \codeword{FOLLOW}) and the body surfaces (\codeword{[SURFACE] PATCHES} and \codeword{VIEWS}) as grey surface-with-edges at every exported crank angle, in \codeword{postProcessing/meshImages}, and makes one video per panel in \codeword{postProcessing/meshMovies}. Watch the end spaces squash and stretch, the displacer band move without deforming, and the cells next to the anchors.
+
+\textbf{NOTE:} \codeword{EnSightMotion} holds the whole mesh for every frame, so its size grows with the cell count times \codeword{MOTION_FRAMES}. Delete it once the videos have been checked.
 
 \subsection{Crank Drive}\label{sec:crankDrive}
 With \codeword{DRIVE = crank} the gas forces turn the crank instead of a prescribed speed. The bodies stay tied to the crank angle $\theta$ through the motion CSV; only $\theta(t)$ is solved. A custom motion solver, \codeword{crankDisplacementInterpolation} in \codeword{foamLibs/stirlingMotion}, does this. The run scripts compile it with \codeword{wmake libso} into \codeword{$FOAM_USER_LIBBIN} (this does nothing when it is up to date), so a compiler must be available where the job runs.

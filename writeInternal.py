@@ -1499,12 +1499,13 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
         f.write('FoamFile { version 2.0; format ascii; class dictionary; object topoSetDict; }\n\n')
         f.write('//motion zones from the zone patches (written by internalSetup)\nactions\n(\n%s\n);\n' % ('\n'.join(actions)))
     copyTemplate(templateLoc, 'system/pointDisplacement', 'system/pointDisplacement', {})
-    #one cycle of mesh motion only for the dry run, fixed 5 deg steps
+    #one cycle of mesh motion only for the dry run: written MOTION_FRAMES times (mesh images), steps of 5 deg or less
     freq = motionInfo['freq']
+    frames, steps = getMotionFrames(fullCaseSetupDict)
     with open('%s/defaultDicts/system/controlDict' % (templateLoc)) as f:
         text = f.read()
     replaceDict = {'<SOLVER>': 'moveDynamicMesh', '<STARTFROM>': 'startTime', '<ENDTIME>': '%.9g' % (1.0/freq),
-                   '<INIT_DT>': '%.9g' % (1.0/(72.0*freq)), '<WRITE_INTERVAL>': '%.9g' % (1.0/(8.0*freq)),
+                   '<INIT_DT>': '%.9g' % (1.0/(steps*freq)), '<WRITE_INTERVAL>': '%.9g' % (1.0/(frames*freq)),
                    '<MAX_CO>': '1e6', '<MAX_DT>': '1', '<ADJUST_DT>': 'no',
                    '#include "internalFunctionObjects"': ''}
     for key, val in replaceDict.items():
@@ -1519,6 +1520,24 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
     return [zone.name for zone in zones]
 
 
+def getMotionFrames(fullCaseSetupDict):
+    #moved meshes written per cycle in the dry run (MOTION_FRAMES, a multiple of 8 so checkMesh can run every 45 deg)
+    #and the time steps per cycle (a multiple of the frames, at least 72 = 5 deg)
+    try:
+        frames = int(fullCaseSetupDict['MESH_MOTION'].get('MOTION_FRAMES', ['24'])[0])
+    except ValueError:
+        frames = 0
+    if frames <= 0 or frames % 8:
+        sys.exit('ERROR! MESH_MOTION MOTION_FRAMES must be a positive multiple of 8 (24 = every 15 deg, 72 = every 5 deg)')
+    return frames, frames*int(np.ceil(72.0/frames))
+
+
+def motionCheckTimes(fullCaseSetupDict):
+    #dry run times every 45 deg (checkMesh -time)
+    freq = float(getVal(fullCaseSetupDict, 'GLOBAL_CONTROL', 'FREQ'))
+    return ','.join('%.9g' % (k/(8.0*freq)) for k in range(1, 9))
+
+
 #----- scripts
 
 def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None, fanNames=None):
@@ -1527,7 +1546,7 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     with open('%s/defaultCluster/slurm/clusterDict' % (templateLoc)) as f:
         clusterDict = json.load(f)
     solver = getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER')
-    motionSteps = ['topoSet', 'reorderFaceZones', 'pointDisplacement', 'motionCheck']
+    motionSteps = ['topoSet', 'reorderFaceZones', 'pointDisplacement', 'motionCheck', 'meshImages']
     skipSteps = list(motionSteps) if not motionZones else []
     #the crank drive library is compiled in the job (wmake skips it when up to date)
     if not motionZones or getCrank(fullCaseSetupDict) is None:
@@ -1561,7 +1580,7 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
                      "if [ $? != 0 ]; then exit 1; fi;" % (' %d %d %d' % decomp if decomp else ''))
     else:
         setDecomp = 'foamDictionary system/decomposeParDict -entry numberOfSubdomains -set $NP > /dev/null;'
-    replaceDict = {'<SET_DECOMP>': setDecomp,
+    replaceDict = {'<SET_DECOMP>': setDecomp, '<CHECK_TIMES>': motionCheckTimes(fullCaseSetupDict) if motionZones else '',
                    '<ZERO_TEMPLATES>': os.path.join(execDir, 'zeroTemplates'), '<EXEC_DIR>': execDir,
                    '<SOLVER>': solver, '<MOTION_ZONES>': ' '.join(motionZones or [])}
     #slurm header from GLOBAL_COMPUTE_SETUP, job name defaults to the case directory name

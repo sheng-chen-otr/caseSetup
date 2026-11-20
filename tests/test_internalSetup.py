@@ -301,13 +301,21 @@ def test_post_script_and_chaining(tmp_path, monkeypatch, repo_root):
     assert 'module load StdEnv/2023 python scipy-stack paraview/5.13.1 ffmpeg' in post
     #summary, gsheet, images, videos in order, from the repo
     assert (post.index("/opt/caseSetup/postUtilities/postInternal.py'") < post.index("/opt/caseSetup/postUtilities/gsheetInternal.py'")
-            < post.index("pvbatch --force-offscreen-rendering '/opt/caseSetup/postUtilities/pvPostInternal.py'")
-            < post.index("/opt/caseSetup/postUtilities/imagesToMovies.py'"))
+            < post.index("pvbatch --force-offscreen-rendering '/opt/caseSetup/postUtilities/pvPostInternal.py' > log.pvPostInternal")
+            < post.index("/opt/caseSetup/postUtilities/imagesToMovies.py' > log.imagesToMovies"))
+    #motion cases: postScript --mesh makes the mesh images and videos of the dry run, submitScript --check chains it
+    assert "pvPostInternal.py' --mesh > log.pvPostMesh" in post and '--imageDir postProcessing/meshImages' in post
+    assert post.index('"--mesh"') < post.index('log.postInternal')
+    submit = (case / 'submitScript').read_text()
+    assert submit.index('motionCheckScript)') < submit.index('postScript --mesh)') < submit.index('"--post"')
+    motion = (case / 'motionCheckScript').read_text()
+    assert "-name EnSightMotion -fields '(none)'" in motion and motion.index('EnSightMotion') < motion.index('motion check done')
+    assert "checkMesh -parallel -time '0.0125,0.025,0.0375,0.05,0.0625,0.075,0.0875,0.1'" in motion
     submit = (case / 'submitScript').read_text()
     #runScript then postScript after it, --post alone, --noPost without
     assert 'jid=$(sbatch --parsable --dependency=afterok:$jid postScript)' in submit
     assert '"--post"' in submit and '"--noPost"' in submit
-    assert submit.index('sbatch --parsable runScript)') < submit.index('afterok:$jid postScript')
+    assert submit.index('sbatch --parsable runScript)') < submit.index('afterok:$jid postScript)')
     #no gsheet push, no EnSight export: no gsheet / image / video steps
     templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
     full = setupCore.getGlobalDefaults(templateLoc)
@@ -317,7 +325,8 @@ def test_post_script_and_chaining(tmp_path, monkeypatch, repo_root):
     writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
     post = (case / 'postScript').read_text()
     assert "postUtilities/postInternal.py'" in post and "postUtilities/gsheetInternal.py'" not in post
-    assert '--force-offscreen-rendering' not in post and "postUtilities/imagesToMovies.py'" not in post
+    assert '"--mesh"' not in post and 'postScript --mesh' not in (case / 'submitScript').read_text()
+    assert '--force-offscreen-rendering' not in post and "postUtilities/imagesToMovies.py' > log.imagesToMovies" not in post
     full['GLOBAL_COMPUTE_SETUP']['GSHEET'] = ['maybe']
     with pytest.raises(SystemExit):
         writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
@@ -835,3 +844,17 @@ def test_fan_baffles(tmp_path, monkeypatch, repo_root):
         in (tmp_path / 'system/createBafflesDict').read_text()
     assert writeInternal.writeFanBaffles({'WALL-pipe.stl': {}}, full) == []
     assert not (tmp_path / 'system/createBafflesDict').exists()
+
+
+def test_motion_frames(repo_root):
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    full['MESH_MOTION']['MOTION_FRAMES'] = ['72']
+    assert writeInternal.getMotionFrames(full) == (72, 72)
+    full['MESH_MOTION']['MOTION_FRAMES'] = ['24']
+    assert writeInternal.getMotionFrames(full) == (24, 72)
+    full['MESH_MOTION']['MOTION_FRAMES'] = ['144']
+    assert writeInternal.getMotionFrames(full) == (144, 144)
+    for bad in ['30', '0', 'many']:
+        full['MESH_MOTION']['MOTION_FRAMES'] = [bad]
+        with pytest.raises(SystemExit):
+            writeInternal.getMotionFrames(full)

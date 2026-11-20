@@ -44,6 +44,8 @@ def parseArgs(argv=None):
     parser = argparse.ArgumentParser(prog='pvPostInternal', description='Images of an internalSetup case (pvbatch)')
     parser.add_argument('--every', type=int, default=None, help='use every N-th written time (overrides EVERY)')
     parser.add_argument('--lastCycles', default=None, help='only the last N cycles, or all (overrides LAST_CYCLES)')
+    parser.add_argument('--mesh', action='store_true',
+                        help='mesh images of the motion dry run (EnSightMotion -> postProcessing/meshImages)')
     return parser.parse_args(argv)
 
 
@@ -148,6 +150,8 @@ class Motion:
         self.crank = None
         self.tables = {}
         drive = config['MESH_MOTION'].get('DRIVE', 'prescribed') if config.has_section('MESH_MOTION') else 'prescribed'
+        #crank tables are against the crank angle: without a crank log (motion dry run) the crank turns at FREQ
+        self.crankTables = bool(self.bodies) and drive == 'crank'
         tableDir = os.path.join(caseDir, 'constant', 'tables')
         if self.bodies and drive == 'crank':
             names, crank, theta0 = postInternal.readCrank(caseDir, os.path.join(caseDir, 'postProcessing'))
@@ -176,8 +180,10 @@ class Motion:
         if body not in self.tables:
             sys.exit('ERROR! FOLLOW %s: no motion table for this body (bodies: %s)' % (body, self.bodies))
         x, z = self.tables[body]
-        if self.crank is not None:
-            theta = np.mod(np.interp(t, self.crank[0], self.crank[1]), 360.0)
+        if self.crankTables:
+            theta = self.angle(t)
+            if theta is None:
+                sys.exit('ERROR! FOLLOW %s: no crank log and no START_ANGLE, the crank angle is unknown' % (body))
             return float(np.interp(theta, x, z))
         return float(np.interp(t, x, z))
 
@@ -232,6 +238,100 @@ def surfaceCamera(view, bounds, size):
 
 #----- paraview
 
+def meshImages(pvs, caseDir, caseName, setup, motion, locInMesh, size, every=None):
+    #mesh motion dry run: the moved meshes in EnSightMotion (exported by motionCheckScript) as grey
+    #surface-with-edges slices ([SLICE] NAMES / NORMALS / ORIGINS / FOLLOW) and body surfaces ([SURFACE] PATCHES / VIEWS),
+    #one image per written crank angle in postProcessing/meshImages/<panel>/<case>_<panel>_NNNNN.png
+    begin = time.time()
+    cases = glob.glob(os.path.join(caseDir, 'EnSightMotion', '*.case'))
+    if not cases:
+        sys.exit('ERROR! no EnSightMotion/*.case: run motionCheckScript first (it exports the moved meshes)')
+    print('\n\tLoading %s...' % (cases[0]))
+    reader = pvs.EnSightReader(CaseFileName=cases[0])
+    times = list(reader.TimestepValues)
+    if every:
+        times = times[::-1][::max(int(every), 1)][::-1]
+    if not times:
+        sys.exit('ERROR! no moved meshes in EnSightMotion')
+    print('\t\t%d meshes from %.6g to %.6g s' % (len(times), times[0], times[-1]))
+    reader.UpdatePipeline(times[0])
+    blocks = getBlocks(reader)
+    volume = pvs.ExtractBlock(Input=reader)
+    volume.Selectors = ['/Root/internalMesh']
+    volume.UpdatePipeline(times[0])
+    bounds = volume.GetDataInformation().GetBounds()
+
+    #panels: (name, source, camera, follow, origin, label)
+    panels = []
+    for s in getSlices(setup['SLICE']):
+        origin = sliceOrigin(s['origin'], bounds, locInMesh)
+        cut = pvs.Slice(Input=volume)
+        cut.SliceType = 'Plane'
+        cut.SliceType.Origin = origin
+        cut.SliceType.Normal = normalVectors[s['normal']]
+        cut.Triangulatetheslice = 0
+        if s['follow']:
+            motion.dz(s['follow'], times[0])
+        panels.append({'name': s['name'], 'source': cut, 'camera': sliceCamera(s['normal'], origin, bounds, size, 0.0),
+                       'follow': s['follow'], 'origin': origin, 'label': s['name']})
+    keywords = setup['SURFACE']['PATCHES'].split()
+    selectors = ['/Root/%s' % (b) for b in blocks
+                 if b != 'internalMesh' and any(k.replace('-', '').lower() in b.lower() for k in keywords)]
+    if selectors:
+        surface = pvs.ExtractBlock(Input=reader)
+        surface.Selectors = selectors
+        for view in setup['SURFACE']['VIEWS'].split():
+            panels.append({'name': 'surface%s' % (view), 'source': surface, 'camera': surfaceCamera(view, bounds, size),
+                           'follow': None, 'origin': None, 'label': 'surface %s' % (view)})
+
+    #one render view per panel, grey cells with dark edges
+    for panel in panels:
+        view = pvs.CreateRenderView()
+        view.ViewSize = size
+        view.OrientationAxesVisibility = 0
+        try:
+            view.UseColorPaletteForBackground = 0
+        except AttributeError:
+            pass
+        view.Background = [1, 1, 1]
+        view.CameraParallelProjection = 1
+        view.CameraPosition = panel['camera']['position']
+        view.CameraFocalPoint = panel['camera']['focal']
+        view.CameraViewUp = panel['camera']['up']
+        view.CameraParallelScale = panel['camera']['scale']
+        display = pvs.Show(panel['source'], view)
+        display.ColorArrayName = ['POINTS', '']
+        display.SetRepresentationType('Surface With Edges')
+        display.AmbientColor = [0.85, 0.85, 0.85]
+        display.DiffuseColor = [0.85, 0.85, 0.85]
+        display.EdgeColor = [0.15, 0.15, 0.3]
+        title = pvs.Text()
+        titleDisplay = pvs.Show(title, view)
+        titleDisplay.Color = [0, 0, 0]
+        titleDisplay.FontSize = 24
+        titleDisplay.WindowLocation = 'Upper Left Corner'
+        panel['view'], panel['title'] = view, title
+        os.makedirs(os.path.join('postProcessing', 'meshImages', panel['name']), exist_ok=True)
+
+    #all panels at each crank angle
+    print('\n\tWriting %d mesh images (%d panels x %d meshes)...' % (len(panels)*len(times), len(panels), len(times)))
+    for i, t in enumerate(times):
+        angle = motion.angle(t)
+        stamp = 't = %.5f s' % (t) + ('   crank %.1f deg' % (angle) if angle is not None else '')
+        for panel in panels:
+            if panel['follow']:
+                origin = list(panel['origin'])
+                origin[2] += motion.dz(panel['follow'], t)
+                panel['source'].SliceType.Origin = origin
+            panel['view'].ViewTime = t
+            panel['title'].Text = '%s   mesh   %s   %s' % (caseName, panel['label'], stamp)
+            pvs.SaveScreenshot(os.path.join('postProcessing', 'meshImages', panel['name'],
+                                            '%s_%s_%05d.png' % (caseName, panel['name'], i)),
+                               panel['view'], ImageResolution=size)
+        print('\t\t%d/%d  %s' % (i + 1, len(times), stamp))
+    print('\n\tMesh images in postProcessing/meshImages (%d panels), total time %.1f s' % (len(panels), time.time() - begin))
+
+
 def main(argv=None):
     args = parseArgs(argv)
     begin = time.time()
@@ -243,7 +343,10 @@ def main(argv=None):
     #case settings
     print('\n\tReading fullCaseSetupDict...')
     config = readConfig(os.path.join(caseDir, 'fullCaseSetupDict'))
-    compressible = config['GLOBAL_SIM_CONTROL']['SOLVER'] == 'rhoPimpleFoam'
+    if config.has_section('SETUP_INFO') and config['SETUP_INFO'].get('FLOW', ''):
+        compressible = config['SETUP_INFO']['FLOW'] == 'compressible'
+    else:
+        compressible = config['GLOBAL_SIM_CONTROL']['SOLVER'] in ('rhoPimpleFoam', 'rhoSimpleFoam', 'buoyantSimpleFoam')
     pRef = float(config['GLOBAL_MATERIAL']['CHARGE_PRESSURE']) if compressible else 0.0
     locInMesh = [float(v) for v in config['GLOBAL_REFINEMENT']['LOC_IN_MESH'].split()]
     motion = Motion(caseDir, config)
@@ -264,6 +367,9 @@ def main(argv=None):
 
     import paraview.simple as pvs
     pvs._DisableFirstRenderCameraReset()
+    if args.mesh:
+        meshImages(pvs, caseDir, caseName, setup, motion, locInMesh, size, args.every)
+        return
 
     #loading the data
     cases = glob.glob(os.path.join(caseDir, 'EnSight', '*.case'))

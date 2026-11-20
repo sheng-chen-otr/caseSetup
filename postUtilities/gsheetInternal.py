@@ -20,13 +20,13 @@ and limitations.
 #JOB + NAME (added at the bottom if missing). header names in row 1; a summary key without a column gets a
 #new column at the end. empty values never overwrite what is in the sheet, COMMENTS is only written with
 #--comment. reads summary.csv in the case (run postInternal.py first)
-#usage: python3 gsheetInternal.py [case ...] [--comment "text"] [--dryRun]
+#usage: python3 gsheetInternal.py [case ...] [--comment "text"] [--dryRun] [--config file] [--sheetId id] [--worksheet name]
 #
-#settings (environment variables override the file):
-#  ~/.config/caseSetup/gsheet.ini     [gsheet] sheetID = ..., worksheet = ... (optional, default first sheet),
-#                                   credentials = ... (optional)
+#settings (arguments override environment variables, which override the file):
+#  ~/.config/caseSetup/gsheet.ini (or --config)   [gsheet] sheetID = ..., worksheet = ... (optional, default first
+#                                                 sheet), credentials = ... (optional)
 #  INTERNAL_GSHEET_ID, INTERNAL_GSHEET_WORKSHEET, INTERNAL_GSHEET_CREDENTIALS
-#  credentials default: ~/.config/caseSetup/credentials.json (do not upload this to git!)
+#  credentials default: ~/.config/caseSetup/internal_cfd_credentials.json (do not upload this to git!)
 
 import argparse
 import configparser
@@ -42,10 +42,13 @@ HEADER_ROW = 1
 KEY_COLUMNS = ['JOB', 'NAME']
 
 
-def getSettings(sheetId=None, worksheet=None):
+def getSettings(sheetId=None, worksheet=None, configFile=None):
     #sheet id, worksheet name and credentials path from the arguments, environment or config file
+    #configFile: --config path, else ~/.config/caseSetup/gsheet.ini (a given file has to exist)
+    configPath = os.path.expanduser(os.path.expandvars(configFile or CONFIG_FILE))
+    if configFile and not os.path.isfile(configPath):
+        sys.exit('ERROR! Config file %s not found' % (configPath))
     config = configparser.ConfigParser()
-    configPath = os.path.expanduser(CONFIG_FILE)
     if os.path.isfile(configPath):
         config.read(configPath)
     fromFile = config['gsheet'] if config.has_section('gsheet') else {}
@@ -53,9 +56,9 @@ def getSettings(sheetId=None, worksheet=None):
         'sheetID': sheetId or os.getenv('INTERNAL_GSHEET_ID') or fromFile.get('sheetID', ''),
         'worksheet': worksheet or os.getenv('INTERNAL_GSHEET_WORKSHEET') or fromFile.get('worksheet', ''),
         'credentials': os.path.expanduser(os.path.expandvars(
-            os.getenv('INTERNAL_GSHEET_CREDENTIALS') or fromFile.get('credentials', DEFAULT_CREDENTIALS )))}
+            os.getenv('INTERNAL_GSHEET_CREDENTIALS') or fromFile.get('credentials', DEFAULT_CREDENTIALS)))}
     if not settings['sheetID']:
-        sys.exit('ERROR! No sheet id: set INTERNAL_GSHEET_ID or sheetID in %s' % (CONFIG_FILE))
+        sys.exit('ERROR! No sheet id: set INTERNAL_GSHEET_ID, --sheetId or sheetID in %s' % (configPath))
     return settings
 
 
@@ -167,16 +170,15 @@ def pushSummary(worksheet, summary, comment=None, dryRun=False):
 
 
 def main(argv=None):
-    global args
     parser = argparse.ArgumentParser(description='Push internal run summaries to the database gsheet')
     parser.add_argument('cases', nargs='*', default=['.'], help='case directories (default: current directory)')
     parser.add_argument('--comment', default=None, help='text for the COMMENTS column (otherwise left as it is)')
     parser.add_argument('--sheetId', default=None, help='sheet id (overrides INTERNAL_GSHEET_ID / gsheet.ini)')
     parser.add_argument('--worksheet', default=None, help='worksheet name (default: first sheet)')
-    parser.add_argument('--config', default=None, help='path to the config file (default: gsheet.ini)')
+    parser.add_argument('--config', default=None, help='path to the config file (default: ~/.config/caseSetup/gsheet.ini)')
     parser.add_argument('--dryRun', action='store_true', help='show what would be written, change nothing')
     args = parser.parse_args(argv)
-    settings = getSettings(args.sheetId, args.worksheet)
+    settings = getSettings(args.sheetId, args.worksheet, args.config)
     worksheet = openWorksheet(settings)
     print('\n\tPushing to "%s"...' % (worksheet.title))
     for case in args.cases:

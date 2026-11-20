@@ -427,3 +427,23 @@ def test_flow_units_incompressible():
     assert postInternal.flowUnits(config, True) == ('MDOT', 1.0, 1.0, 0.0)
     config.remove_option('SETUP_INFO', 'RHO_REF')
     assert postInternal.flowUnits(config, False)[0] == 'VOLUME_FLOW'
+
+
+def test_gsheet_settings_order(tmp_path, monkeypatch):
+    #arguments > environment > config file, --config must exist
+    for key in ['INTERNAL_GSHEET_ID', 'INTERNAL_GSHEET_WORKSHEET', 'INTERNAL_GSHEET_CREDENTIALS']:
+        monkeypatch.delenv(key, raising=False)
+    config = tmp_path / 'my.ini'
+    config.write_text('[gsheet]\nsheetID = fromFile\nworksheet = runs\ncredentials = %s\n' % (tmp_path / 'key.json'))
+    s = gsheetInternal.getSettings(configFile=str(config))
+    assert s['sheetID'] == 'fromFile' and s['worksheet'] == 'runs' and s['credentials'] == str(tmp_path / 'key.json')
+    monkeypatch.setenv('INTERNAL_GSHEET_ID', 'fromEnv')
+    assert gsheetInternal.getSettings(configFile=str(config))['sheetID'] == 'fromEnv'
+    assert gsheetInternal.getSettings('fromArg', configFile=str(config))['sheetID'] == 'fromArg'
+    with pytest.raises(SystemExit):
+        gsheetInternal.getSettings(configFile=str(tmp_path / 'missing.ini'))
+    monkeypatch.delenv('INTERNAL_GSHEET_ID')
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('USERPROFILE', str(tmp_path))
+    with pytest.raises(SystemExit):
+        gsheetInternal.getSettings()
