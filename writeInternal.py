@@ -1266,7 +1266,13 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
     step = float(meshMotion['STEP_DEG'][0])
     if step <= 0 or step > 1:
         sys.exit('ERROR! MESH_MOTION STEP_DEG must be > 0 and <= 1 deg')
-    maxDeformation = float(meshMotion['MAX_DEFORMATION'][0])
+    #MAX_DEFORMATION blank or 0: no limit (the ratio is still reported)
+    try:
+        maxDeformation = float(''.join(meshMotion.get('MAX_DEFORMATION', ['']))) or np.inf
+    except ValueError:
+        if ''.join(meshMotion.get('MAX_DEFORMATION', [''])).strip() != '':
+            sys.exit('ERROR! MESH_MOTION MAX_DEFORMATION must be a number, 0 or blank (no limit)!')
+        maxDeformation = np.inf
     flatTol = float(meshMotion['ZONE_FLAT_TOL'][0])
     control = fullCaseSetupDict['GLOBAL_CONTROL']
     freq, nCycles = float(control['FREQ'][0]), float(control['N_CYCLES'][0])
@@ -1313,7 +1319,11 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
             sys.exit('ERROR! [%s] MOTION_COLUMN %s not in %s (columns: %s)'
                      % (section, column, setup['MOTION_FILE'][0], list(columns.keys())))
         thetaC, pos = motionUtilities.periodicProfile(theta, columns[column], column)
-        body = motionUtilities.Body(name, thetaC, pos, float(setup['REF_ANGLE'][0]), float(setup['TDC_CLEARANCE'][0]))
+        mode = setup.get('CLEARANCE_MODE', ['soft'])[0]
+        if mode not in ('soft', 'scale', 'shift'):
+            sys.exit('ERROR! [%s] CLEARANCE_MODE must be soft, scale or shift!' % (section))
+        body = motionUtilities.Body(name, thetaC, pos, float(setup['REF_ANGLE'][0]), float(setup['TDC_CLEARANCE'][0]),
+                                    mode)
         body.source = source
         keywords = [k for k in setup['ZONE_PIDS'] if k != '']
         if len(keywords) == 0:
@@ -1337,6 +1347,16 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
             sys.exit('ERROR! %s are both anchors and part of the moving body %s' % (clash, body.name))
 
     #clearance, order, start angle, deformation
+    #soft / scale: the profile ends that come too close to an anchor are adjusted, shift: the whole path is offset
+    adjusted = motionUtilities.adjustProfiles(zones, bodies, step)
+    zoneArea = dict((body.name, max([zone.area for zone in zones if zone.body is body] or [0.0])) for body in bodies)
+    for bodyName, info in adjusted.items():
+        ends = ' and '.join(text for text, value in [('low end +%.4g m' % (info['raise']), info['raise']),
+                                                     ('high end -%.4g m' % (info['lower']), info['lower'])] if value > 0)
+        print('\t\t%s profile adjusted for TDC_CLEARANCE (%s): %s, stroke %.4g -> %.4g m, max change %.4g m at %.1f deg, '
+              'more than 0.02 mm over %.0f deg of the cycle, dead volume +%.4g cm3'
+              % (bodyName, info['mode'], ends, info['strokeBefore'], info['strokeAfter'], info['maxDev'],
+                 info['devAngle'], info['changedDeg'], (info['raise'] + info['lower'])*zoneArea[bodyName]*1e6))
     offsets = motionUtilities.applyClearance(zones, bodies, step)
     for bodyName, (offset, addedVolume) in offsets.items():
         print('\t\t%s moved %+.4g m to keep its TDC clearance: dead volume +%.4g m3 (%.4g cm3)'
@@ -1362,6 +1382,20 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
         if kin['vJump'] > 0.2*kin['vMax']:
             print('\t\tWARNING: %s velocity jumps by %.4g m/s between samples: a sharp change in the profile '
                   'gives pressure spikes' % (body.name, kin['vJump']))
+
+    #a body made of PIDs in a wall file (piston crown, FROM) must seal against its liner at the meshing angle: inside
+    #the liner along z and covering the bore (after meshing the liner boundary stretches with the mesh)
+    for body in bodies:
+        if body.source.startswith('MOVE'):
+            continue
+        walls = dict((pid, t) for pid, t in tris[body.source].items() if pid not in body.movedPids)
+        for zone in [z for z in zones if z.body is body]:
+            pid = zone.patch[len(body.source) + 1:]
+            problems = motionUtilities.sealProblems(tris[body.source][pid], float(motionUtilities.zoneZ(zone, startAngle)),
+                                                    walls, flatTol)
+            if problems:
+                sys.exit('ERROR! %s does not seal at the meshing angle %.1f deg: %s'
+                         % (zone.patch, startAngle, '; '.join(problems)))
 
     #static wall faces dragged by the mesh (horizontal faces inside a stretching band)
     zonePatches = [zone.patch for zone in zones]

@@ -340,3 +340,113 @@ def test_reorderFaceZones_binary(tmp_path, repo_root):
     #reordering back gives the zones in the original order again
     tool.main(['REGN', 'coldAnchor', 'hotAnchor', '--case', str(tmp_path)])
     assert path.read_bytes().endswith(body + b'\n)\n')
+
+
+#----- clearance by profile and sealing
+
+def _gap(zones, lower, upper):
+    return dict(((lo.name, up.name), g) for lo, up, g in mu.zoneGaps(zones, 1.0))[(lower, upper)]
+
+
+def test_soft_clearance_keeps_the_far_end():
+    zones, bodies = _engine(0.002)
+    piston = bodies[1]
+    piston.mode = 'soft'
+    before = piston.pos.copy()
+    report = mu.adjustProfiles(zones, bodies, 1.0)['piston']
+    #crown stops 2 mm from the cold face, the other end of the stroke is where the profile puts it
+    assert _gap(zones, 'cold', 'crown').min() == pytest.approx(0.002, abs=1e-8)
+    assert piston.pos.max() == pytest.approx(before.max(), abs=1e-12)
+    assert report['raise'] == pytest.approx(0.002, abs=1e-8) and report['lower'] == 0.0
+    assert report['strokeAfter'] == pytest.approx(report['strokeBefore'] - 0.002, abs=1e-8)
+    #smooth: the local floor at most about doubles the peak acceleration (no velocity jump)
+    assert np.abs(np.diff(np.diff(piston.pos))).max() < 2.5*np.abs(np.diff(np.diff(before))).max()
+    assert np.abs(np.diff(piston.pos)).max() <= np.abs(np.diff(before)).max() + 1e-12
+    #nothing left for the shift step
+    assert mu.applyClearance(zones, bodies, 1.0) == {}
+    #shift mode is unchanged: the whole path moves
+    zones, bodies = _engine(0.002)
+    assert mu.adjustProfiles(zones, bodies, 1.0) == {}
+    assert mu.applyClearance(zones, bodies, 1.0)['piston'][0] == pytest.approx(0.002)
+
+
+def test_soft_clearance_both_ends_and_scale():
+    for mode in ('soft', 'scale'):
+        disp = _body('displacer', 0.0125)
+        disp.mode = mode
+        disp.clearance = 0.002
+        zones = [mu.Zone('hot', 'h', 0.0, 1.0), mu.Zone('cold', 'c', 0.06, 1.0),
+                 mu.Zone('dBot', 'b', 0.013, 1.0, disp), mu.Zone('dTop', 't', 0.047, 1.0, disp)]
+        before = disp.pos.copy()
+        report = mu.adjustProfiles(zones, [disp], 1.0)['displacer']
+        assert _gap(zones, 'hot', 'dBot').min() == pytest.approx(0.002, abs=1e-8)
+        assert _gap(zones, 'dTop', 'cold').min() == pytest.approx(0.002, abs=1e-8)
+        assert report['strokeAfter'] == pytest.approx(report['strokeBefore'] - 0.003, abs=1e-8)
+        if mode == 'scale':
+            #shape kept exactly
+            shape = (disp.pos - disp.pos.min())/(disp.pos.max() - disp.pos.min())
+            assert shape == pytest.approx((before - before.min())/(before.max() - before.min()), abs=1e-12)
+    #a displacer that leaves no room for the clearance on both sides
+    disp = _body('displacer', 0.0005)
+    disp.mode, disp.clearance = 'soft', 0.002
+    zones = [mu.Zone('hot', 'h', 0.0, 1.0), mu.Zone('cold', 'c', 0.06, 1.0),
+             mu.Zone('dBot', 'b', 0.001, 1.0, disp), mu.Zone('dTop', 't', 0.059, 1.0, disp)]
+    with pytest.raises(SystemExit):
+        mu.adjustProfiles(zones, [disp], 1.0)
+
+
+def test_soft_clearance_on_a_dwell_profile():
+    #displacer holds at the hot face (gap 0) for 120 deg, smooth transitions: the dwell stays flat at the clearance
+    theta = np.arange(0.0, 360.0, 0.5)
+    x = np.clip((theta - 60.0)/60.0, 0, 1) - np.clip((theta - 240.0)/60.0, 0, 1)
+    smooth = x*x*(3 - 2*x)
+    t, p = mu.periodicProfile(theta, 0.01*smooth, 'displacer')
+    disp = mu.Body('displacer', t, p, 0.0, 0.002, 'soft')
+    zones = [mu.Zone('hot', 'h', 0.0, 1.0), mu.Zone('cold', 'c', 0.06, 1.0),
+             mu.Zone('dBot', 'b', 0.0, 1.0, disp), mu.Zone('dTop', 't', 0.034, 1.0, disp)]
+    mu.adjustProfiles(zones, [disp], 1.0)
+    dwell = (t <= 60.0) | (t >= 300.0)
+    assert np.ptp(disp.pos[dwell]) < 1e-9 and disp.pos[dwell].mean() == pytest.approx(0.002, abs=1e-8)
+    #top dwell (gap to the cold face 16 mm) untouched apart from the tiny far-end correction
+    top = (t >= 120.0) & (t <= 240.0)
+    assert disp.pos[top] == pytest.approx(0.01, abs=1e-9)
+
+
+def test_seal_check_crown_in_liner():
+    n = 24
+    ang = np.linspace(0, 2*np.pi, n + 1)
+    ring = np.column_stack([0.05*np.cos(ang), 0.05*np.sin(ang)])
+
+    def disc(r, z):
+        return np.array([[[0, 0, z], [r*ring[i, 0]/0.05, r*ring[i, 1]/0.05, z],
+                          [r*ring[i + 1, 0]/0.05, r*ring[i + 1, 1]/0.05, z]] for i in range(n)])
+    liner = np.array([[[ring[i, 0], ring[i, 1], 0.03], [ring[i + 1, 0], ring[i + 1, 1], 0.03], [ring[i, 0], ring[i, 1], 0.18]]
+                      for i in range(n)])
+    #the chamber side wall encloses the crown but is not its liner
+    chamber = np.array([[[-0.2, -0.2, -0.03], [0.2, -0.2, -0.03], [0.2, -0.2, 0.03]],
+                        [[-0.2, 0.2, -0.03], [0.2, 0.2, -0.03], [0.2, 0.2, 0.03]]])
+    walls = {'liner': liner, 'chamber': chamber,
+             'cold': np.array([[[-0.2, -0.2, 0.03], [0.2, -0.2, 0.03], [0.2, 0.2, 0.03]]])}
+    assert mu.sideWallRange(disc(0.0502, 0.18), walls, 1e-6)[2] == ['liner']
+    crown = disc(0.0502, 0.18)
+    assert mu.sealProblems(crown, 0.1, walls, 1e-6) == []
+    assert mu.sealProblems(crown, 0.18, walls, 1e-6) == []
+    #2 mm past the liner end
+    problems = mu.sealProblems(crown, 0.182, walls, 1e-6)
+    assert len(problems) == 1 and 'outside its liner' in problems[0] and '0.002' in problems[0]
+    #crown smaller than the bore
+    problems = mu.sealProblems(disc(0.048, 0.18), 0.1, walls, 1e-6)
+    assert len(problems) == 1 and 'does not cover the bore' in problems[0]
+    #no liner around it: nothing to check
+    assert mu.sealProblems(crown, 0.5, {'cold': walls['cold']}, 1e-6) == []
+
+
+def test_soft_floor_is_local():
+    #2 mm raise on a 152 mm stroke: exact at both ends, below 0.05 mm from 5 mm on, monotonic
+    x = np.linspace(0.0, 0.152, 15201)
+    y = mu.softFloor(x, 0.0, 0.002, 0.152)
+    assert y[0] == pytest.approx(0.002, abs=1e-15) and y[-1] == pytest.approx(0.152, abs=1e-15)
+    assert np.abs(y - x)[x >= 0.005].max() < 5e-5
+    assert np.all(np.diff(y) >= -1e-15) and y.min() >= 0.002 - 1e-15
+    z = mu.softCeiling(x, 0.152, 0.002, 0.0)
+    assert z[-1] == pytest.approx(0.150, abs=1e-15) and z[0] == pytest.approx(0.0, abs=1e-15)

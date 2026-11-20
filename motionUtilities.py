@@ -80,17 +80,21 @@ class Zone:
 
 class Body:
     #rigid body moving along z with a crank-angle position profile
-    def __init__(self, name, theta, pos, refAngle, clearance):
+    #mode: how TDC_CLEARANCE is kept (soft / scale: the profile ends are adjusted, shift: the whole path is offset)
+    def __init__(self, name, theta, pos, refAngle, clearance, mode='shift'):
         self.name = name
         self.theta = theta
-        self.pos = pos
+        self.pos = np.array(pos, dtype=float)
         self.refAngle = refAngle
         self.clearance = clearance
+        self.mode = mode
         self.offset = 0.0
+        #the STL is drawn at the original profile value at REF_ANGLE, also after the profile is adjusted
+        self.refPos = float(positionAt(refAngle, theta, self.pos))
 
     def shift(self, angle):
         #z shift of the body relative to its STL position (incl. clearance offset)
-        return positionAt(angle, self.theta, self.pos) - positionAt(self.refAngle, self.theta, self.pos) + self.offset
+        return positionAt(angle, self.theta, self.pos) - self.refPos + self.offset
 
 
 def zoneZ(zone, angle):
@@ -173,6 +177,150 @@ def applyClearance(zones, bodies, step, maxIter=10):
         if not changed:
             return report
     sys.exit('ERROR! Clearance offsets did not settle (bodies pushed both ways?)')
+
+
+#----- clearance by profile (CLEARANCE_MODE soft / scale)
+
+def clearanceBounds(zones, body, step):
+    #lowest and highest allowed shift of a body so every gap to a neighbouring anchor stays >= its TDC_CLEARANCE
+    #returns (lower bound, upper bound), -inf / +inf where no anchor limits it
+    lower, upper = -np.inf, np.inf
+    for lo, up, gap in zoneGaps(zones, step):
+        if up.body is body and lo.body is None:
+            lower = max(lower, lo.zRef + body.clearance - up.zRef - body.offset)
+        if lo.body is body and up.body is None:
+            upper = min(upper, up.zRef - body.clearance - lo.zRef - body.offset)
+    return lower, upper
+
+
+def softFloor(p, low, raise_, high):
+    #raises the lowest value low by raise_ with a smooth floor (x^4 + d^4)^(1/4), high stays where it is
+    #the change dies out fast away from the end (d^4/(4 x^3)), the quartic correction keeps the far end exact and
+    #the profile monotonic while the stroke is longer than raise_
+    span = high - low
+    corr = (span**4 + raise_**4)**0.25 - span
+    return low + ((p - low)**4 + raise_**4)**0.25 - corr*((p - low)/span)**4
+
+
+def softCeiling(p, high, lower_, low):
+    #lowers the highest value high by lower_ with a smooth ceiling, low stays where it is
+    span = high - low
+    corr = (span**4 + lower_**4)**0.25 - span
+    return high - ((high - p)**4 + lower_**4)**0.25 + corr*((high - p)/span)**4
+
+
+def adjustProfiles(zones, bodies, step, margin=1e-9):
+    #soft / scale bodies: the profile ends that come closer than TDC_CLEARANCE to an anchor are moved back, the
+    #rest of the stroke is kept (soft: smooth floor/ceiling, only near that end; scale: the whole stroke scaled)
+    #returns {body: report dict} for the bodies that were changed
+    report = {}
+    for body in bodies:
+        if body.mode not in ('soft', 'scale'):
+            continue
+        lower, upper = clearanceBounds(zones, body, step)
+        p = body.pos.copy()
+        low, high = p.min(), p.max()
+        lowTarget = lower + body.refPos + margin
+        highTarget = upper + body.refPos - margin
+        raise_ = lowTarget - low if lowTarget > low else 0.0
+        lower_ = high - highTarget if highTarget < high else 0.0
+        if raise_ == 0.0 and lower_ == 0.0:
+            continue
+        if high - lower_ <= low + raise_:
+            sys.exit('ERROR! %s: its stroke does not fit between the anchors with TDC_CLEARANCE %g m on both sides'
+                     % (body.name, body.clearance))
+        if body.mode == 'scale':
+            newLow, newHigh = low + raise_, high - lower_
+            q = newLow + (p - low)*(newHigh - newLow)/(high - low)
+        else:
+            q = softFloor(p, low, raise_, high) if raise_ > 0 else p
+            if lower_ > 0:
+                q = softCeiling(q, high, lower_, q.min())
+        dev = q - p
+        k = int(np.argmax(np.abs(dev)))
+        widths = np.gradient(body.theta)
+        report[body.name] = {'mode': body.mode, 'raise': raise_, 'lower': lower_, 'strokeBefore': high - low,
+                             'strokeAfter': q.max() - q.min(), 'maxDev': float(np.abs(dev).max()),
+                             'devAngle': float(body.theta[k]),
+                             'changedDeg': float(widths[np.abs(dev) > 2e-5].sum())}
+        body.pos = q
+    return report
+
+
+#----- sealing of moving faces in a wall file (piston crown)
+
+def sideWallRange(faceTris, wallTris, tol):
+    #z range of the static walls around a moving face (the liner around a piston crown): walls that are not flat in
+    #z and whose xy box covers most of the face's xy box. returns (zmin, zmax, names, wall points) or None
+    fx, fy = faceTris[:, :, 0], faceTris[:, :, 1]
+    faceBox = (fx.min(), fx.max(), fy.min(), fy.max())
+    faceArea = max((faceBox[1] - faceBox[0])*(faceBox[3] - faceBox[2]), 1e-30)
+    zmin, zmax, names, points = None, None, [], []
+    for name, t in wallTris.items():
+        z = t[:, :, 2]
+        if z.max() - z.min() <= tol:
+            continue
+        box = (t[:, :, 0].min(), t[:, :, 0].max(), t[:, :, 1].min(), t[:, :, 1].max())
+        dx = min(faceBox[1], box[1]) - max(faceBox[0], box[0])
+        dy = min(faceBox[3], box[3]) - max(faceBox[2], box[2])
+        #a liner has about the face's footprint (not a chamber wall that only encloses it)
+        grow = 0.1*max(faceBox[1] - faceBox[0], faceBox[3] - faceBox[2])
+        inside = (box[0] >= faceBox[0] - grow and box[1] <= faceBox[1] + grow and
+                  box[2] >= faceBox[2] - grow and box[3] <= faceBox[3] + grow)
+        if not inside or dx <= 0 or dy <= 0 or dx*dy < 0.5*faceArea:
+            continue
+        zmin = z.min() if zmin is None else min(zmin, z.min())
+        zmax = z.max() if zmax is None else max(zmax, z.max())
+        names.append(name)
+        points.append(t.reshape(-1, 3))
+    if not names:
+        return None
+    return zmin, zmax, names, np.vstack(points)
+
+
+def pointsOutside2D(points, tris, tol):
+    #xy points that lie outside every triangle (projected on xy) by more than tol
+    a, b, c = tris[:, 0, :2], tris[:, 1, :2], tris[:, 2, :2]
+    outside = []
+    for point in points[:, :2]:
+        #barycentric inside test for all triangles at once
+        v0, v1, v2 = c - a, b - a, point - a
+        d00, d01, d11 = (v0*v0).sum(1), (v0*v1).sum(1), (v1*v1).sum(1)
+        d20, d21 = (v2*v0).sum(1), (v2*v1).sum(1)
+        den = d00*d11 - d01*d01
+        good = np.abs(den) > 1e-30
+        u = np.where(good, (d11*d20 - d01*d21)/np.where(good, den, 1.0), -1.0)
+        v = np.where(good, (d00*d21 - d01*d20)/np.where(good, den, 1.0), -1.0)
+        if np.any((u >= -1e-12) & (v >= -1e-12) & (u + v <= 1.0 + 1e-12)):
+            continue
+        #distance to the triangle edges
+        best = np.inf
+        for e0, e1 in ((a, b), (b, c), (c, a)):
+            ed = e1 - e0
+            s = np.clip(((point - e0)*ed).sum(1)/np.maximum((ed*ed).sum(1), 1e-30), 0.0, 1.0)
+            best = min(best, float(np.sqrt((((e0 + s[:, None]*ed) - point)**2).sum(1)).min()))
+        if best > tol:
+            outside.append(point)
+    return outside
+
+
+def sealProblems(faceTris, zFace, wallTris, tol):
+    #a moving face in a wall file (piston crown) at height zFace must lie within its liner along z and cover the
+    #bore across it, else snappy sees an open gap. returns a list of problem texts (empty = sealed, or no liner)
+    liner = sideWallRange(faceTris, wallTris, tol)
+    if liner is None:
+        return []
+    zmin, zmax, names, points = liner
+    problems = []
+    if zFace > zmax + tol or zFace < zmin - tol:
+        problems.append('it sits at z %.6g m, outside its liner %s (z %.6g to %.6g m): extend the liner by at least '
+                        '%.4g m, or mesh at an angle away from that end of the stroke'
+                        % (zFace, ' '.join(names), zmin, zmax, max(zFace - zmax, zmin - zFace)))
+    outside = pointsOutside2D(points, faceTris, tol)
+    if outside:
+        problems.append('it does not cover the bore of %s (%d liner points outside its outline): draw it slightly '
+                        'larger than the bore' % (' '.join(names), len(outside)))
+    return problems
 
 
 def deformationRatio(zones, startAngle, step):
