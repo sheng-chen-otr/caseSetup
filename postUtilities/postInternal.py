@@ -859,7 +859,7 @@ def writeSummary(summary, caseDir):
 
 
 def readSummary(caseDir):
-    #summary.csv back as {key: value}, numbers as float/int
+    #summary.csv back as {key: value}, numbers as float/int (the identity columns stay text: case 003 is not 3)
     path = os.path.join(caseDir, 'summary.csv')
     if not os.path.isfile(path):
         sys.exit('ERROR! %s not found: run postInternal.py in the case first' % (path))
@@ -869,6 +869,9 @@ def readSummary(caseDir):
             if not row:
                 continue
             value = row[1] if len(row) > 1 else ''
+            if row[0] in ('JOB', 'NAME', 'DESCRIPTION', 'COMMENTS'):
+                summary[row[0]] = value
+                continue
             try:
                 value = int(value) if re.match(r'^-?\d+$', value) else float(value)
             except ValueError:

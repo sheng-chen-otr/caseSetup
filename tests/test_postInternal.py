@@ -291,7 +291,10 @@ def test_plan_existing_row_new_column_and_blanks():
                'P_crown_AMP': 1200.0, 'COMMENTS': 'ignored'}
     new, row, updates, added = gsheetInternal.planUpdate(headers, rows, summary)
     assert row == 3 and added == ['P_crown_AMP']
-    #trailing-space header still matches, empty and nan values are not written, COMMENTS untouched
+    #existing run overwritten: trailing-space header still matches, empty and nan clear the old cells, COMMENTS untouched
+    assert updates == {1: 'b', 0: 'J', 2: '', 4: 3.5, 5: '', 6: 1200.0}
+    #--keepEmpty: old values stay where the new one is empty
+    new, row, updates, added = gsheetInternal.planUpdate(headers, rows, summary, keepEmpty=True)
     assert updates == {1: 'b', 0: 'J', 4: 3.5, 6: 1200.0}
     new, row, updates, added = gsheetInternal.planUpdate(headers, rows, summary, comment='rerun')
     assert updates[3] == 'rerun'
@@ -579,3 +582,19 @@ def test_copy_back_settings(tmp_path, monkeypatch):
     assert copyBackInternal.getSettings('ARG1', str(config))['folderID'] == 'ARG1'
     with pytest.raises(SystemExit):
         copyBackInternal.getSettings(configFile=str(tmp_path / 'missing.ini'))
+
+
+def test_plan_matches_run_written_as_number():
+    #the sheet stored case 003 as 3 (or with spaces / other case): still the same run, names written as text
+    headers = ['JOB', 'NAME', 'AVG_POWER']
+    rows = [['jobA ', '3', '1.0'], ['JobA', '004', '2.0']]
+    new, row, updates, added = gsheetInternal.planUpdate(headers, rows, {'JOB': 'JobA', 'NAME': '003', 'AVG_POWER': 5.0})
+    assert row == 2 and updates == {0: 'JobA', 1: '003', 2: 5.0}
+    new, row, updates, added = gsheetInternal.planUpdate(headers, rows, {'JOB': 'JobA', 'NAME': '005', 'AVG_POWER': 5.0})
+    assert row is None
+
+
+def test_read_summary_keeps_names_as_text(tmp_path):
+    (tmp_path / 'summary.csv').write_text('JOB,0042\nNAME,003\nCELL_COUNT,123\nAVG_POWER,1.5\n')
+    s = postInternal.readSummary(str(tmp_path))
+    assert s['JOB'] == '0042' and s['NAME'] == '003' and s['CELL_COUNT'] == 123 and s['AVG_POWER'] == 1.5

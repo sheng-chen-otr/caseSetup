@@ -18,8 +18,8 @@ and limitations.
 
 #pushes internal (Stirling) run summaries to one database gsheet: one row per run, found by
 #JOB + NAME (added at the bottom if missing). header names in row 1; a summary key without a column gets a
-#new column at the end. empty values never overwrite what is in the sheet, COMMENTS is only written with
-#--comment. reads summary.csv in the case (run postInternal.py first)
+#new column at the end. a run already in the sheet is overwritten (empty values clear old ones, unless
+#--keepEmpty); COMMENTS is only written with --comment, columns not in the summary are left alone. reads summary.csv in the case (run postInternal.py first)
 #usage: python3 gsheetInternal.py [case ...] [--comment "text"] [--dryRun] [--config file] [--sheetId id] [--worksheet name]
 #
 #settings (arguments override environment variables, which override the file):
@@ -133,9 +133,22 @@ def cellValue(value):
     return value
 
 
-def planUpdate(headers, rows, summary, comment=None):
+def sameKey(a, b):
+    #JOB / NAME match: spaces and case ignored, and 003 = 3 (a number the sheet stored without its leading zeros)
+    a, b = str(a).strip(), str(b).strip()
+    if a.lower() == b.lower():
+        return True
+    try:
+        return float(a) == float(b)
+    except ValueError:
+        return False
+
+
+def planUpdate(headers, rows, summary, comment=None, keepEmpty=False):
     #pure logic, no API: (new headers, row number or None for a new row, {column index: value}, added columns)
     #headers: header row values, rows: sheet rows below the header (lists of strings)
+    #an existing run is overwritten: every summary column gets the new value, empty/nan clears the old one
+    #(keepEmpty: leave old values where the new one is empty); COMMENTS and columns not in the summary are kept
     headers = list(headers)
     while headers and str(headers[-1]).strip() == '':
         headers.pop()
@@ -158,36 +171,41 @@ def planUpdate(headers, rows, summary, comment=None):
             index[normalise(key)] = len(headers)
             headers.append(key)
 
-    #row of this run: JOB and NAME match
+    #row of this run: JOB and NAME match (the first one if the sheet has duplicates)
     jobCol, nameCol = index['JOB'], index['NAME']
     rowNumber = None
     for k, row in enumerate(rows):
         cells = list(row) + [''] * (len(headers) - len(row))
-        if str(cells[jobCol]).strip() == str(values.get('JOB', '')).strip() and \
-                str(cells[nameCol]).strip() == str(values.get('NAME', '')).strip():
+        if sameKey(cells[jobCol], values.get('JOB', '')) and sameKey(cells[nameCol], values.get('NAME', '')):
             rowNumber = HEADER_ROW + 1 + k
             break
     updates = {}
     for key, value in values.items():
         value = cellValue(value)
-        if value == '' or value is None:
+        if value is None:
+            value = ''
+        if value == '' and (rowNumber is None or keepEmpty or normalise(key) not in index):
             continue
         updates[index[normalise(key)]] = value
+    #identity columns as text, so 003 stays 003
+    for key in KEY_COLUMNS:
+        if values.get(key, '') != '':
+            updates[index[key]] = str(values[key])
     return headers, rowNumber, updates, headers[nOld:]
 
 
-def pushSummary(worksheet, summary, comment=None, dryRun=False):
+def pushSummary(worksheet, summary, comment=None, dryRun=False, keepEmpty=False):
     allValues = worksheet.get_all_values()
     headers = allValues[HEADER_ROW - 1] if len(allValues) >= HEADER_ROW else []
     rows = allValues[HEADER_ROW:]
-    newHeaders, rowNumber, updates, added = planUpdate(headers, rows, summary, comment)
+    newHeaders, rowNumber, updates, added = planUpdate(headers, rows, summary, comment, keepEmpty)
     if rowNumber is None:
         #first row below the last non-empty row
         used = [k for k, row in enumerate(rows) if any(str(c).strip() for c in row)]
         rowNumber = HEADER_ROW + 1 + (used[-1] + 1 if used else 0)
         action = 'new row %d' % (rowNumber)
     else:
-        action = 'row %d' % (rowNumber)
+        action = 'row %d (overwritten)' % (rowNumber)
     print('\t%s / %s -> %s, %d values%s' % (summary.get('JOB', ''), summary.get('NAME', ''), action, len(updates),
                                            ', new columns: %s' % (' '.join(added)) if added else ''))
     if dryRun:
@@ -215,12 +233,14 @@ def main(argv=None):
     parser.add_argument('--worksheet', default=None, help='worksheet name (default: first sheet)')
     parser.add_argument('--config', default=None, help='path to the config file (default: ~/.config/caseSetup/gsheet.ini)')
     parser.add_argument('--dryRun', action='store_true', help='show what would be written, change nothing')
+    parser.add_argument('--keepEmpty', action='store_true',
+                        help='for a run already in the sheet, keep old values where the new summary is empty')
     args = parser.parse_args(argv)
     settings = getSettings(args.sheetId, args.worksheet, args.config)
     worksheet = openWorksheet(settings)
     print('\n\tPushing to "%s"...' % (worksheet.title))
     for case in args.cases:
-        pushSummary(worksheet, postInternal.readSummary(case), args.comment, args.dryRun)
+        pushSummary(worksheet, postInternal.readSummary(case), args.comment, args.dryRun, args.keepEmpty)
 
 
 if __name__ == '__main__':
