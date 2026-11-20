@@ -36,7 +36,7 @@
     "post": {
         "shebang": "#!/bin/bash",
         "header": "#SBATCH --account=<ACCOUNT>\n#SBATCH --job-name=<JOB_NAME>_post\n#SBATCH --nodes=1\n#SBATCH --ntasks=1\n#SBATCH --cpus-per-task=<POST_CPUS>\n#SBATCH --mem=<POST_MEM>\n#SBATCH --time=<POST_TIME>\n#SBATCH --output=03_%x_%j.out",
-        "usage": "#post-processing after runScript, as a Slurm job (sbatch postScript) or locally (./postScript):\n#  summary (postInternal.py -> postInternal/summary.csv), gsheet row, images (pvbatch pvPostInternal.py,\n#  settings in pvPostInternalSetup) and one video per image panel (imagesToMovies.py, ffmpeg)\n#  a failed step is reported and the next one still runs",
+        "usage": "#post-processing after runScript, as a Slurm job (sbatch postScript) or locally (./postScript):\n#  summary and plots (postInternal.py -> summary.csv, pV.png, cycleConvergence.png), gsheet row, images (pvbatch pvPostInternal.py,\n#  settings in pvPostInternalSetup) and one video per image panel (imagesToMovies.py, ffmpeg)\n#  a failed step is reported and the next one still runs",
         "environment": "cd \"${SLURM_SUBMIT_DIR:-$(dirname \"$0\")}\" || exit 1;\nif [ -n \"$SLURM_JOB_ID\" ]; then module --force purge; module load <POST_MODULES>; fi;\nSTATUS=0;",
         "summary": "echo 'running postInternal (summary)...'; python3 '<EXEC_DIR>/postUtilities/postInternal.py' > log.postInternal 2>&1; if [ $? != 0 ]; then echo 'postInternal failed, see log.postInternal'; STATUS=1; fi;",
         "gsheet": "echo 'pushing the summary to the gsheet...'; python3 '<EXEC_DIR>/postUtilities/gsheetInternal.py' > log.gsheetInternal 2>&1; if [ $? != 0 ]; then echo 'gsheet push failed, see log.gsheetInternal'; STATUS=1; fi;",

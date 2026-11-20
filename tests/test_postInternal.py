@@ -185,13 +185,16 @@ def test_summary_csv_round_trip(tmp_path):
     assert back['NAME'] == 'run01' and list(back)[:3] == ['JOB', 'NAME', 'DESCRIPTION']
 
 
-def test_summary_crank_drive(tmp_path):
-    #crank drive: speeding up from 10 Hz, piston torque B + A sin(theta), generator c*omega
+#crank drive: speeding up from 10 Hz, piston torque B + A sin(theta), generator c*omega
+CRANK = {'theta0': 30.0, 'w0': 2*math.pi*FREQ, 'alpha': 2*math.pi*5.0, 'A': 3.0, 'B': 0.5, 'c': 0.01}
+
+
+def makeCrankCase(tmp_path):
     case = tmp_path / 'JOB01' / 'CASES' / 'crank01'
     (case / 'constant').mkdir(parents=True)
     (case / 'fullCaseSetupDict').write_text(SETUP + '\n[MESH_MOTION]\nDRIVE = crank\nLOAD = generator\nINERTIA = 0.02\n')
     (case / 'constant' / 'dynamicMeshDict').write_text('crank\n{\n        theta0          30;   //deg\n}\n')
-    theta0, w0, alpha, A, B, c = 30.0, 2*math.pi*FREQ, 2*math.pi*5.0, 3.0, 0.5, 0.01
+    theta0, w0, alpha, A, B, c = (CRANK[k] for k in ['theta0', 'w0', 'alpha', 'A', 'B', 'c'])
     t = np.linspace(0.0, 0.33, 20001)[1:]
     theta = theta0 + np.degrees(w0*t + 0.5*alpha*t**2)
     omega = w0 + alpha*t
@@ -202,7 +205,12 @@ def test_summary_crank_drive(tmp_path):
     post = case / 'postProcessing' / 'crank'
     _dat(post / '0' / 'crank.dat', header, rows[:half + 3], '# crank')
     _dat(post / ('%.12g' % t[half]) / 'crank.dat', header, rows[half:], '# crank')
+    return case
 
+
+def test_summary_crank_drive(tmp_path):
+    case = makeCrankCase(tmp_path)
+    w0, alpha, A, B, c = CRANK['w0'], CRANK['alpha'], CRANK['A'], CRANK['B'], CRANK['c']
     s = postInternal.buildSummary(str(case), avgCycles=1)
     #revolutions in 0.33 s: (w0 t + alpha t^2/2)/(2 pi) = 3.57
     assert s['DRIVE'] == 'crank' and s['LOAD'] == 'generator' and s['CYCLES_DONE'] == 3
@@ -220,6 +228,45 @@ def test_summary_crank_drive(tmp_path):
     wMeanSq = (((w0 + alpha*tc[1])**3 - (w0 + alpha*tc[0])**3)/(3*alpha))/(tc[1] - tc[0])
     assert s['POWER_ELEC'] == pytest.approx(0.9*c*wMeanSq, rel=1e-4)
     assert s['POWER_LOAD'] == pytest.approx(c*wMeanSq, rel=1e-4)
+
+
+#----- plots
+
+def test_cycle_series_and_plots(tmp_path):
+    case = makeCase(tmp_path)
+    series = postInternal.cycleSeries(str(case))
+    #every cycle of the damper does the same work, as WORK_piston in the summary
+    w = 2*math.pi*FREQ
+    work = -DAMP*AMP**2*w**2/(2*FREQ)
+    assert list(series['cycle']) == [1, 2]
+    assert series['work']['piston'] == pytest.approx([work, work], rel=2e-3)
+    assert series['T'] == pytest.approx([300.0, 300.0])
+    assert series['massDrift'] == pytest.approx([0.0, 0.0], abs=1e-12)
+    #heat per cycle = mean heat rate / FREQ
+    assert series['heat']['hotEnd'] == pytest.approx([15.0, 15.0], rel=1e-3)
+    assert series['heat']['WALL-chamber_default'] == pytest.approx([-2.0, -2.0], rel=1e-3)
+    assert 'freq' not in series
+    #p-V: one closed loop per cycle, area pi*P_AMP*V_AMP
+    loops = postInternal.pvLoops(str(case), nLoops=3)
+    assert [loop[0] for loop in loops] == [1, 2]
+    assert postInternal.integrate(loops[-1][1], loops[-1][2]) == pytest.approx(math.pi*P_AMP*V_AMP, rel=2e-3)
+    written = postInternal.writePlots(str(case))
+    assert sorted(os.path.basename(p) for p in written) == ['cycleConvergence.png', 'pV.png']
+    assert (case / 'pV.png').stat().st_size > 1000 and (case / 'cycleConvergence.png').stat().st_size > 1000
+
+
+def test_cycle_series_crank_drive(tmp_path):
+    case = makeCrankCase(tmp_path)
+    series = postInternal.cycleSeries(str(case))
+    w0, alpha = CRANK['w0'], CRANK['alpha']
+    #work per cycle = integral of the torque over one turn = 2 pi B, speed per cycle from the cycle times
+    assert series['work']['piston'] == pytest.approx([2*math.pi*CRANK['B']]*3, rel=1e-4)
+    tc = [(-w0 + math.sqrt(w0**2 + 2*alpha*a))/alpha for a in (0.0, 2*math.pi, 4*math.pi, 6*math.pi)]
+    assert series['freq'] == pytest.approx(1/np.diff(tc), rel=1e-4)
+    #no gas output in this log: only the convergence plot, with work and speed
+    assert postInternal.pvLoops(str(case)) == []
+    written = postInternal.writePlots(str(case))
+    assert [os.path.basename(p) for p in written] == ['cycleConvergence.png']
 
 
 def test_not_internal_case(tmp_path):

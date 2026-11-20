@@ -404,7 +404,7 @@ python3 /path/to/caseSetup/postUtilities/imagesToMovies.py [--fps N]
 
 images are set up like pvPost: `pvPostInternalSetup` in the case (copied there by the setup, kept if it exists) lists the slices (`NAMES`, `NORMALS`, `ORIGINS` = center | loc | x,y,z, `FOLLOW` = a body so a z slice moves with the displacer), the surface patches and views, the variables and `[MOVIES] FPS`. variables (equation, label, range auto | symmetric | [min, max], colour map) are in `postUtilities/default/defaultInternalVariables`; ranges are fixed over the run. output: `postProcessing/images/<panel>/` (one png per written time) and `postProcessing/movies/<case>_<panel>.mp4`.
 
-`postInternal/summary.csv` per case: run info and times, cycles done, work per body and `AVG_ENERGY`/`AVG_POWER` over the last N cycles, gas p/T/rho, face pressures, and for compressible runs mass drift, p-V work and heat per BC group; for the crank drive also speed, load and generator power. `gsheetInternal.py` pushes the summary to the database sheet (settings in `~/.config/caseSetup/gsheet.ini` or `INTERNAL_GSHEET_*`; keep the service account key out of git).
+`summary.csv`, `pV.png` (last cycles overlaid, compressible) and `cycleConvergence.png` (work per body, mean gas T, mass drift, heat per BC group and crank speed per cycle) in the case folder: run info and times, cycles done, work per body and `AVG_ENERGY`/`AVG_POWER` over the last N cycles, gas p/T/rho, face pressures, and for compressible runs mass drift, p-V work and heat per BC group; for the crank drive also speed, load and generator power. `gsheetInternal.py` pushes the summary to the database sheet (settings in `~/.config/caseSetup/gsheet.ini` or `INTERNAL_GSHEET_*`; keep the service account key out of git).
 
 ### Demo cases
 

@@ -19,7 +19,7 @@ and limitations.
 #pushes internal (Stirling) run summaries to one database gsheet: one row per run, found by
 #JOB + NAME (added at the bottom if missing). header names in row 1; a summary key without a column gets a
 #new column at the end. empty values never overwrite what is in the sheet, COMMENTS is only written with
-#--comment. reads postInternal/summary.csv (run postInternal.py first)
+#--comment. reads summary.csv in the case (run postInternal.py first)
 #usage: python3 gsheetInternal.py [case ...] [--comment "text"] [--dryRun]
 #
 #settings (environment variables override the file):

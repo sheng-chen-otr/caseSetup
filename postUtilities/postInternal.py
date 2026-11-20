@@ -16,7 +16,7 @@ implied. See the License for the specific language governing permissions
 and limitations.
 """
 
-#post-processing of an internal (internalSetup) case: one summary per run in postInternal/summary.csv
+#post-processing of an internal (internalSetup) case: summary.csv, pV.png and cycleConvergence.png in the case
 #(key,value rows), the database row pushed to the database gsheet by gsheetInternal.py
 #usage (in the case directory): python3 postInternal.py [--avgCycles N] [--gsheet]
 #
@@ -358,12 +358,12 @@ def buildSummary(caseDir, avgCycles=1):
         t0, t1 = (cyclesDone - nAvg)/freq, cyclesDone/freq
     print('\taveraging over cycles %d to %d (t = %.6g to %.6g s)' % (cyclesDone - nAvg + 1, cyclesDone, t0, t1))
 
-    #gas averages over the window
+    #gas averages over the window (time-weighted, the time step varies)
     if gasAvg is not None:
         sel = window(gasAvg[:, 0], t0, t1)
         for k, name in enumerate(names[1:], start=1):
             field = re.sub(r'^volAverage\((.*)\)$', r'\1', name).upper()
-            summary['%s_MEAN' % (field)] = float(gasAvg[sel, k].mean())
+            summary['%s_MEAN' % (field)] = timeMean(gasAvg[:, 0], gasAvg[:, k], t0, t1)
             if field == 'P':
                 summary['P_MAX'] = float(gasAvg[sel, k].max())
                 summary['P_MIN'] = float(gasAvg[sel, k].min())
@@ -430,7 +430,7 @@ def buildSummary(caseDir, avgCycles=1):
             continue
         sel = window(pFace[:, 0], t0, t1)
         patch = os.path.basename(foDir)[2:]
-        summary['P_%s_MEAN' % (patch)] = float(pFace[sel, 1].mean())
+        summary['P_%s_MEAN' % (patch)] = timeMean(pFace[:, 0], pFace[:, 1], t0, t1)
         summary['P_%s_AMP' % (patch)] = float(0.5*(pFace[sel, 1].max() - pFace[sel, 1].min()))
 
     #compressible: mass drift, p-V work, heat per BC group (positive = into the gas)
@@ -464,6 +464,178 @@ def buildSummary(caseDir, avgCycles=1):
     return summary
 
 
+#----- plots
+
+def cycleEdges(freq, cyclesDone, crank, theta0):
+    #start and end time of every complete cycle (by crank angle for the crank drive)
+    if crank is not None:
+        return np.interp(theta0 + 360.0*np.arange(cyclesDone + 1), crank[:, 1], crank[:, 0])
+    return np.arange(cyclesDone + 1)/freq
+
+
+def timeMean(t, y, t0, t1):
+    #time average of y(t) between t0 and t1
+    tc, yc = clipped(t, y, t0, t1)
+    return integrate(tc, yc)/(t1 - t0)
+
+
+def cycleSeries(caseDir):
+    #values per complete cycle for the convergence plot: work per body (J), mean gas T, mass drift,
+    #heat per BC group (J, + into the gas) and mean speed (crank drive)
+    caseDir = os.path.abspath(caseDir)
+    config = readCaseSetup(caseDir)
+    post = os.path.join(caseDir, 'postProcessing')
+    freq = float(getSetting(config, 'GLOBAL_CONTROL', 'FREQ'))
+    bodies = getBodies(config)
+    names, gasAvg = readDat(os.path.join(post, 'gasAvg'), 'volFieldValue')
+    crankNames, crank, theta0 = readCrank(caseDir, post)
+    if crank is not None:
+        cyclesDone = int(np.floor((crank[-1, 1] - theta0)/360.0 + 1e-9))
+    elif gasAvg is not None:
+        cyclesDone = int(np.floor(gasAvg[-1, 0]*freq + 1e-6))
+    else:
+        return None
+    if cyclesDone == 0:
+        return None
+    edges = cycleEdges(freq, cyclesDone, crank, theta0)
+    series = {'cycle': np.arange(1, cyclesDone + 1), 'work': {}, 'heat': {}}
+
+    #work per body and cycle, as in the summary
+    if crank is not None:
+        col = dict((name, k) for k, name in enumerate(crankNames))
+        for body in bodies:
+            if 'T_%s' % (body) not in col:
+                continue
+            work = []
+            for k in range(cyclesDone):
+                theta, torque = clipped(crank[:, 1], crank[:, col['T_%s' % (body)]],
+                                        theta0 + 360.0*k, theta0 + 360.0*(k + 1))
+                work.append(integrate(np.radians(theta), torque))
+            series['work'][body] = np.array(work)
+        series['freq'] = 1.0/np.diff(edges)
+    else:
+        for body in bodies:
+            fNames, force = readDat(os.path.join(post, 'force_%s' % (body)), 'force')
+            table = os.path.join(caseDir, 'constant', 'tables', '%sTable' % (body))
+            if force is None or not os.path.isfile(table):
+                continue
+            tTable, dz = readTable(table)
+            power = force[:, fNames.index('total_z')]*tableVelocity(tTable, dz, force[:, 0])
+            work = []
+            for k in range(cyclesDone):
+                t, p = clipped(force[:, 0], power, edges[k], edges[k + 1])
+                work.append(integrate(t, p))
+            series['work'][body] = np.array(work)
+
+    #gas state per cycle
+    if gasAvg is not None and 'volAverage(T)' in names:
+        series['T'] = np.array([timeMean(gasAvg[:, 0], gasAvg[:, names.index('volAverage(T)')], edges[k], edges[k + 1])
+                                for k in range(cyclesDone)])
+    mNames, mass = readDat(os.path.join(post, 'gasMass'), 'volFieldValue')
+    if mass is not None:
+        series['massDrift'] = np.interp(edges[1:], mass[:, 0], mass[:, 1])/mass[0, 1] - 1.0
+
+    #heat per BC group and cycle
+    heat = readWallHeatFlux(os.path.join(post, 'wallHeatFlux'))
+    groupPatches = dict(config.items('BC_GROUPS_RESOLVED')) if config.has_section('BC_GROUPS_RESOLVED') else {}
+    for group, patches in groupPatches.items():
+        rows = [heat[patch] for patch in patches.split() if patch in heat]
+        if not rows:
+            continue
+        series['heat'][group] = np.array([sum(integrate(*clipped(r[:, 0], r[:, 1], edges[k], edges[k + 1])) for r in rows)
+                                          for k in range(cyclesDone)])
+    return series
+
+
+def pvLoops(caseDir, nLoops=3):
+    #p and gas volume V = mass/rho of the last nLoops complete cycles (compressible runs)
+    caseDir = os.path.abspath(caseDir)
+    config = readCaseSetup(caseDir)
+    post = os.path.join(caseDir, 'postProcessing')
+    freq = float(getSetting(config, 'GLOBAL_CONTROL', 'FREQ'))
+    names, gasAvg = readDat(os.path.join(post, 'gasAvg'), 'volFieldValue')
+    mNames, mass = readDat(os.path.join(post, 'gasMass'), 'volFieldValue')
+    if gasAvg is None or mass is None or 'volAverage(rho)' not in names:
+        return []
+    crankNames, crank, theta0 = readCrank(caseDir, post)
+    if crank is not None:
+        cyclesDone = int(np.floor((crank[-1, 1] - theta0)/360.0 + 1e-9))
+    else:
+        cyclesDone = int(np.floor(gasAvg[-1, 0]*freq + 1e-6))
+    edges = cycleEdges(freq, cyclesDone, crank, theta0)
+    p = np.interp(mass[:, 0], gasAvg[:, 0], gasAvg[:, names.index('volAverage(p)')])
+    volume = mass[:, 1]/np.interp(mass[:, 0], gasAvg[:, 0], gasAvg[:, names.index('volAverage(rho)')])
+    loops = []
+    for k in range(max(cyclesDone - nLoops, 0), cyclesDone):
+        sel = window(mass[:, 0], edges[k], edges[k + 1])
+        loops.append((k + 1, volume[sel], p[sel]))
+    return loops
+
+
+def writePlots(caseDir, nLoops=3):
+    #pV.png (last cycles overlaid) and cycleConvergence.png in the case directory
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print('\tWARNING: no matplotlib, no plots')
+        return []
+    caseDir = os.path.abspath(caseDir)
+    caseName = os.path.basename(caseDir)
+    written = []
+
+    loops = pvLoops(caseDir, nLoops)
+    if loops:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for cycle, volume, p in loops:
+            ax.plot(volume*1e6, p/1e5, label='cycle %d' % (cycle))
+        ax.set_xlabel('gas volume [cm$^3$]')
+        ax.set_ylabel('volume-averaged p [bar]')
+        ax.set_title('%s p-V' % (caseName))
+        ax.grid(True)
+        ax.legend()
+        path = os.path.join(caseDir, 'pV.png')
+        fig.savefig(path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+        written.append(path)
+
+    series = cycleSeries(caseDir)
+    if series is not None:
+        panels = [('work', 'work per cycle [J]')]
+        if 'T' in series:
+            panels.append(('T', 'mean gas T [K]'))
+        if 'massDrift' in series:
+            panels.append(('massDrift', 'gas mass drift [-]'))
+        if series['heat']:
+            panels.append(('heat', 'heat per cycle [J], + into gas'))
+        if 'freq' in series:
+            panels.append(('freq', 'mean speed [Hz]'))
+        fig, axes = plt.subplots(len(panels), 1, figsize=(8, 2.8*len(panels)), sharex=True, squeeze=False)
+        cycle = series['cycle']
+        for ax, (key, label) in zip(axes[:, 0], panels):
+            if key in ('work', 'heat'):
+                for name, values in series[key].items():
+                    ax.plot(cycle, values, marker='o', label=name)
+                if key == 'work' and len(series['work']) > 1:
+                    ax.plot(cycle, sum(series['work'].values()), marker='o', color='k', label='total')
+                if series[key]:
+                    ax.legend(fontsize=8)
+            else:
+                ax.plot(cycle, series[key], marker='o')
+            ax.set_ylabel(label, fontsize=9)
+            ax.ticklabel_format(axis='y', useOffset=False)
+            ax.grid(True)
+        axes[-1, 0].set_xlabel('cycle')
+        axes[-1, 0].xaxis.get_major_locator().set_params(integer=True)
+        axes[0, 0].set_title('%s cycle convergence' % (caseName))
+        path = os.path.join(caseDir, 'cycleConvergence.png')
+        fig.savefig(path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+        written.append(path)
+    return written
+
+
 def writeSummary(summary, caseDir):
     outDir = os.path.join(caseDir)
     os.makedirs(outDir, exist_ok=True)
@@ -495,9 +667,11 @@ def readSummary(caseDir):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Summary of an internalSetup case (postInternal/summary.csv)')
+    parser = argparse.ArgumentParser(description='Summary and plots of an internalSetup case (summary.csv, pV.png, cycleConvergence.png)')
     parser.add_argument('cases', nargs='*', default=['.'], help='case directories (default: current directory)')
     parser.add_argument('--avgCycles', type=int, default=1, help='average results over the last N complete cycles (default 1)')
+    parser.add_argument('--pvCycles', type=int, default=3, help='number of last cycles overlaid in pV.png (default 3)')
+    parser.add_argument('--noPlots', action='store_true', help='summary only')
     parser.add_argument('--gsheet', action='store_true', help='push the summary to the database gsheet (gsheetInternal.py)')
     args = parser.parse_args(argv)
     for case in args.cases:
@@ -508,6 +682,9 @@ def main(argv=None):
         for key in ['CYCLES_DONE', 'AVG_ENERGY', 'AVG_POWER', 'MASS_DRIFT']:
             if summary.get(key, '') != '':
                 print('\t\t%-12s %s' % (key, summary[key]))
+        if not args.noPlots:
+            for path in writePlots(case, args.pvCycles):
+                print('\twritten %s' % (path))
     if args.gsheet:
         sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
         import gsheetInternal
