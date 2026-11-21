@@ -1,0 +1,3 @@
+".*fine.*" {level (2 2);patchInfo{type wall;}}
+".*extra-?fine.*" {level (3 3);patchInfo{type wall;}}
+			

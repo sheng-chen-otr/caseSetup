@@ -1,0 +1,46 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \    /   O peration     | Version:  v2412                                 |
+|   \  /    A nd           | Website:  www.openfoam.com                      |
+|    \/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      dynamicMeshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dynamicFvMesh   dynamicMotionSolverFvMesh;
+motionSolver    crankDisplacementInterpolation;
+motionSolverLibs (stirlingMotion);
+
+//crank-driven motion (foamLibs/stirlingMotion): the gas force on each body gives a crank torque
+//F dz/dtheta, the flywheel is stepped every time step and the zones follow the crank angle
+//tables in constant/tables: (crank angle in deg, displacement in m) over one cycle, zero at theta0
+//crank state in <time>/uniform/crankState (restart), log in postProcessing/crank
+crankDisplacementInterpolationCoeffs
+{
+    axis    (0 0 1);
+
+    bodies
+    {
+<BODIES>
+    }
+
+    //zone, body (none = fixed anchor)
+    zones
+    (
+<ZONES>
+    );
+
+    crank
+    {
+<CRANK>
+    }
+}
+
+// ************************************************************************* //

@@ -17,8 +17,8 @@ FoamFile
 solvers
 {
     "rho.*"     { solver diagonal; }
-    "(p|p_rgh)" { solver GAMG; smoother DICGaussSeidel; tolerance 1e-8; relTol <P_RELTOL>; maxIter 100; }
-    "(p|p_rgh)Final" { solver GAMG; smoother DICGaussSeidel; tolerance 1e-8; relTol 0; maxIter 100; }
+    "(p|p_rgh)" { solver GAMG; smoother GaussSeidel; tolerance 1e-8; relTol <P_RELTOL>; }
+    "(p|p_rgh)Final" { solver GAMG; smoother GaussSeidel; tolerance 1e-8; relTol 0; }
     "(U|e|k|omega|epsilon).*" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-8; relTol <U_RELTOL>; }
 }
 

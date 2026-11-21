@@ -1,0 +1,12 @@
+[GLOBAL_MATERIAL]
+GAS = air
+CHARGE_PRESSURE = 1e5
+INIT_T = 300
+TRANSPORT = const
+MOL_WEIGHT = default
+CP = default
+MU = default
+NU = default
+PR = default
+SUTHERLAND_AS = default
+SUTHERLAND_TS = default
