@@ -143,9 +143,12 @@ def nextStep():
     if not procDirs:
         sys.exit('ERROR! no processor directories: the case is not decomposed')
     procDir = procDirs[0]
-    endTime = float(readEntry(os.path.join('system', 'controlDict'), 'endTime'))
+    controlDict = os.path.join('system', 'controlDict')
+    endTime = float(readEntry(controlDict, 'endTime'))
     tValue, tName = timeDirs(procDir)[-1]
-    if tValue >= endTime*(1.0 - 1e-9) - 1e-12:
+    #the solver writes its last step and stops within one step of endTime (crank solver, remeshing)
+    lastStep = float(readEntry(controlDict, 'maxDeltaT') or readEntry(controlDict, 'deltaT') or 0.0)
+    if tValue >= endTime - lastStep - 1e-12:
         return 'done'
     theta = crankAngle(procDir, tName)
     if theta is None:

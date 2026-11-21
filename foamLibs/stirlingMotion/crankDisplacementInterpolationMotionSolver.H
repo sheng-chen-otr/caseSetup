@@ -70,6 +70,9 @@ class crankDisplacementInterpolationMotionSolver
     scalar stopTheta_;
     label stopIndex_;
 
+    // remeshing: the last step of the run is written (restarts are not on the write grid)
+    bool endRequested_;
+
     // flywheel and load
     scalar inertia_;
     word load_;

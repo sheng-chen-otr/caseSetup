@@ -164,6 +164,7 @@ void Foam::crankDisplacementInterpolationMotionSolver::readCoeffs()
     // remeshing: the next time the crank reaches stopAngle, at least a millidegree ahead
     stopTheta_ = VGREAT;
     stopIndex_ = labelMax;
+    endRequested_ = false;
     if (crankDict.found("stopAngle"))
     {
         const scalar stopDeg = crankDict.get<scalar>("stopAngle");
@@ -499,6 +500,20 @@ void Foam::crankDisplacementInterpolationMotionSolver::solve()
             runTime.stopAt(Time::stopAtControls::saWriteNow);
             Info<< "crankDisplacementInterpolation: next step reaches the stop angle "
                 << radToDeg(stopTheta_) << " deg, writing and stopping after it" << endl;
+        }
+
+        // end of the run: written too, the write grid starts at each restart time so endTime is rarely on it
+        const scalar dtNow = runTime.deltaTValue();
+        if
+        (
+            !endRequested_ && stopIndex_ == labelMax
+         && runTime.value() + 1.2*dtNow >= runTime.endTime().value() - 0.5*dtNow
+        )
+        {
+            endRequested_ = true;
+            runTime.stopAt(Time::stopAtControls::saWriteNow);
+            Info<< "crankDisplacementInterpolation: next step reaches endTime, writing and stopping after it"
+                << endl;
         }
     }
 

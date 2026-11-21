@@ -185,3 +185,16 @@ def test_prepare_keeps_all_digits_of_the_map_time(tmp_path, repo_root, monkeypat
     text = (tmp_path / 'meshes' / 'seg02' / 'system' / 'controlDict').read_text()
     assert 'startFrom       startTime;' in text and 'startTime       0.003053740817;' in text
     assert 'timePrecision 15;' in text and 'endTime 0.1;' in text
+
+
+def test_done_within_one_step_of_end_time(tmp_path, repo_root, monkeypatch):
+    #the crank solver writes its last step within one step of endTime: that counts as done, earlier does not
+    rr = _remeshRun(repo_root)
+    _fakeCase(tmp_path)
+    with open(tmp_path / 'system' / 'controlDict', 'a') as f:
+        f.write('maxDeltaT 0.0001;\n')
+    monkeypatch.chdir(tmp_path)
+    _writeTime(tmp_path, '0.0998', '98.0')
+    assert rr.nextStep() == 'solve seg01 0.0998'
+    _writeTime(tmp_path, '0.09995', '98.5')
+    assert rr.nextStep() == 'done'
