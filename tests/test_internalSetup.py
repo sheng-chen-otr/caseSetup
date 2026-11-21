@@ -298,7 +298,7 @@ def test_post_script_and_chaining(tmp_path, monkeypatch, repo_root):
     post = (case / 'postScript').read_text()
     assert '#SBATCH --job-name=engineRun01_post' in post and '#SBATCH --ntasks=1' in post
     assert '#SBATCH --cpus-per-task=4' in post and '#SBATCH --mem=32G' in post and '#SBATCH --time=0-03:00' in post
-    assert 'module load StdEnv/2023 python scipy-stack paraview/5.13.1 ffmpeg' in post
+    assert 'module load StdEnv/2023 python/3.11 scipy-stack paraview/5.13.1 ffmpeg' in post
     #summary, gsheet, images, videos in order, from the repo
     assert (post.index("/opt/caseSetup/postUtilities/postInternal.py'") < post.index("/opt/caseSetup/postUtilities/gsheetInternal.py'")
             < post.index("pvbatch --force-offscreen-rendering '/opt/caseSetup/postUtilities/pvPostInternal.py' > log.pvPostInternal")

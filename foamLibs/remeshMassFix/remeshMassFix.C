@@ -18,13 +18,18 @@ and limitations.
 
 // remeshing helper: map fix and mass fix after mapping onto a new mesh
 //   remeshMassFix -time <t>                prints "gasMass <m>" (when rho exists)
-//   remeshMassFix -time <t> -writeCover    writes remeshCover = 1 on the old mesh before mapping
-//   remeshMassFix -time <t> -combine       after the two maps (volume weighted, nearest as <field>_nearest):
-//                                          field = mapped/remeshCover where the old mesh covered more than
-//                                          -minCover (default 0.5) of the cell, else the nearest value; wall
-//                                          values from the nearest map. The volume-weighted map (weights
-//                                          normalised over the overlap) leaves new cells with no overlap at all
-//                                          at zero (snapped walls never match exactly): T = 0 crashed the thermo
+//   remeshMassFix -time <t> -writeCover    writes remeshCover = 1 on the old mesh before mapping, and fills the
+//                                          matrix temperature Ts_<zone> of each porous zone outside the zone with
+//                                          the zone values (a few cell layers): outside the zone Ts stays at its
+//                                          start value, the map would mix it into the zone's edge cells
+//   remeshMassFix -time <t> -combine       after the volume-weighted map (mapFieldsPar, cellVolumeWeight, weights
+//                                          normalised over the overlap): new cells with no overlap at all are left
+//                                          at zero (snapped walls never match exactly, T = 0 crashes the thermo).
+//                                          They are found from remeshCover (< -minCover, default 0.5) and filled
+//                                          from their covered neighbours, layer by layer (across processor
+//                                          patches); processor patch values are then evaluated from the cells.
+//                                          The fill replaces a second, nearest-cell map: v2412 mapNearest crashes
+//                                          in parallel (cell walk over a disconnected piece of the old mesh)
 //   remeshMassFix -time <t> -mass <m>      scales p and rho by m/gasMass (T kept, rho ~ p for a perfect gas)
 // setExprFields would do the scaling, but v2412 aborts on any expression that reads a field
 
@@ -37,16 +42,75 @@ and limitations.
 #include "calculatedFvPatchFields.H"
 #include "OSspecific.H"
 #include "IOmanip.H"
+#include "syncTools.H"
 
 using namespace Foam;
 
 static const word coverName("remeshCover");
-static const word nearSuffix("_nearest");
 
 
-bool isNearest(const word& name)
+// cells not set yet = average of their set neighbours, one layer per pass (across processor patches too), until
+// every cell is set or maxLayers passes are done. returns the number of cells filled
+template<class Type>
+label fillFromNeighbours
+(
+    const fvMesh& mesh,
+    Field<Type>& values,
+    scalarField& isSet,
+    const label maxLayers
+)
 {
-    return name.size() > nearSuffix.size() && name.substr(name.size() - nearSuffix.size()) == nearSuffix;
+    const labelUList& own = mesh.owner();
+    const labelUList& nei = mesh.neighbour();
+    const label nInternal = mesh.nInternalFaces();
+    label nFilled = 0;
+
+    for (label layer = 0; layer < maxLayers; ++layer)
+    {
+        Field<Type> sum(mesh.nCells(), Zero);
+        scalarField count(mesh.nCells(), 0);
+        for (label facei = 0; facei < nInternal; ++facei)
+        {
+            const label o = own[facei];
+            const label n = nei[facei];
+            if (isSet[n] > 0.5 && isSet[o] < 0.5) { sum[o] += values[n]; count[o] += 1; }
+            if (isSet[o] > 0.5 && isSet[n] < 0.5) { sum[n] += values[o]; count[n] += 1; }
+        }
+        // neighbours on the other side of processor patches
+        scalarField nbrSet(mesh.nBoundaryFaces());
+        Field<Type> nbrValue(mesh.nBoundaryFaces());
+        syncTools::swapBoundaryCellList(mesh, isSet, nbrSet);
+        syncTools::swapBoundaryCellList(mesh, values, nbrValue);
+        for (const polyPatch& pp : mesh.boundaryMesh())
+        {
+            if (!pp.coupled())
+            {
+                continue;
+            }
+            forAll(pp, i)
+            {
+                const label bFacei = pp.start() + i - nInternal;
+                const label o = own[pp.start() + i];
+                if (nbrSet[bFacei] > 0.5 && isSet[o] < 0.5) { sum[o] += nbrValue[bFacei]; count[o] += 1; }
+            }
+        }
+        label nLayer = 0;
+        forAll(values, celli)
+        {
+            if (count[celli] > 0)
+            {
+                values[celli] = sum[celli]/count[celli];
+                isSet[celli] = 1;
+                ++nLayer;
+            }
+        }
+        nFilled += nLayer;
+        if (returnReduce(nLayer, sumOp<label>()) == 0)
+        {
+            break;
+        }
+    }
+    return nFilled;
 }
 
 
@@ -57,7 +121,8 @@ label combineFields
     const IOobjectList& objects,
     const volScalarField& cover,
     const scalar minCover,
-    label& nNearest
+    label& nUncovered,
+    label& nUnfilled
 )
 {
     typedef GeometricField<Type, fvPatchField, volMesh> fieldType;
@@ -65,58 +130,103 @@ label combineFields
 
     for (const word& name : objects.sortedNames(fieldType::typeName))
     {
-        if (isNearest(name) || name == coverName || !objects.found(name + nearSuffix))
+        if (name == coverName)
         {
             continue;
         }
-        const word timeName(mesh.time().timeName());
         fieldType fld
         (
-            IOobject(name, timeName, mesh, IOobject::MUST_READ, IOobject::NO_WRITE),
-            mesh
-        );
-        const fieldType nearFld
-        (
-            IOobject(name + nearSuffix, timeName, mesh, IOobject::MUST_READ, IOobject::NO_WRITE),
+            IOobject(name, mesh.time().timeName(), mesh, IOobject::MUST_READ, IOobject::NO_WRITE),
             mesh
         );
 
-        // cells: volume-weighted average over the covered part, nearest where the old mesh hardly reaches
+        // covered cells: volume-weighted average over the overlap, the others from their neighbours
         Field<Type>& values = fld.primitiveFieldRef();
+        scalarField isSet(mesh.nCells(), 0);
+        label nLocal = 0;
         forAll(values, celli)
         {
-            const scalar c = cover[celli];
-            if (c > minCover)
+            if (cover[celli] >= minCover)
             {
-                values[celli] /= c;
+                values[celli] /= cover[celli];
+                isSet[celli] = 1;
             }
             else
             {
-                values[celli] = nearFld[celli];
-                ++nNearest;
+                ++nLocal;
             }
         }
-
-        // walls: nearest face (the area-weighted patch map has the same coverage problem)
-        forAll(fld.boundaryField(), patchi)
+        fillFromNeighbours(mesh, values, isSet, 20);
+        label nLeft = 0;
+        forAll(isSet, celli)
         {
-            if (!fld.boundaryField()[patchi].coupled())
+            if (isSet[celli] < 0.5)
             {
-                fld.boundaryFieldRef()[patchi] == nearFld.boundaryField()[patchi];
+                ++nLeft;
             }
         }
-        // processor (coupled) patches from the combined cells: the mapped values next to uncovered cells are zero,
-        // and the thermo is built from them before the solver updates anything (T = 0 -> FPE)
+        nUncovered = returnReduce(nLocal, sumOp<label>());
+        nUnfilled = returnReduce(nLeft, sumOp<label>());
+
+        // processor (coupled) patches from the filled cells: the mapped values next to uncovered cells are zero,
+        // and the thermo is built from them before the solver updates anything (T = 0 -> FPE). Wall values come
+        // from the patch map (nearest face)
         fld.boundaryFieldRef().evaluate_if
         (
             [](const fvPatchField<Type>& pfld) { return pfld.coupled(); }
         );
 
         fld.write();
-        rm(nearFld.objectPath());
         ++nFields;
     }
     return nFields;
+}
+
+
+// porous zones with a matrix temperature: Ts_<zone> fields whose cellZone exists
+wordList matrixFields(const fvMesh& mesh, const IOobjectList& objects)
+{
+    wordList names;
+    for (const word& name : objects.sortedNames(volScalarField::typeName))
+    {
+        if (name.size() > 3 && name.substr(0, 3) == "Ts_" && mesh.cellZones().findZoneID(name.substr(3)) != -1)
+        {
+            names.append(name);
+        }
+    }
+    return names;
+}
+
+
+// zone volume and volume-averaged matrix temperature
+void matrixReport(const fvMesh& mesh, const volScalarField& Ts, const word& when)
+{
+    const labelList& cells = mesh.cellZones()[mesh.cellZones().findZoneID(Ts.name().substr(3))];
+    scalar vol = 0;
+    scalar sumTV = 0;
+    for (const label celli : cells)
+    {
+        vol += mesh.V()[celli];
+        sumTV += Ts[celli]*mesh.V()[celli];
+    }
+    reduce(vol, sumOp<scalar>());
+    reduce(sumTV, sumOp<scalar>());
+    Info<< "matrix " << Ts.name() << " " << when << ": zone volume " << setprecision(10) << vol
+        << " m3, mean Ts " << sumTV/max(vol, VSMALL) << " K" << endl;
+}
+
+
+// Ts outside its zone from the zone values, nLayers cell layers deep
+void extendMatrixField(const fvMesh& mesh, volScalarField& Ts, const label nLayers)
+{
+    scalarField isSet(mesh.nCells(), 0);
+    for (const label celli : mesh.cellZones()[mesh.cellZones().findZoneID(Ts.name().substr(3))])
+    {
+        isSet[celli] = 1;
+    }
+    const label nFilled = returnReduce(fillFromNeighbours(mesh, Ts.primitiveFieldRef(), isSet, nLayers), sumOp<label>());
+    Info<< "matrix " << Ts.name() << ": " << nFilled << " cells around the zone set from the zone (" << nLayers
+        << " layers)" << endl;
 }
 
 
@@ -125,8 +235,8 @@ int main(int argc, char *argv[])
     argList::addNote("remeshing: gas mass, coverage field, combined map, mass fix");
     argList::addOption("mass", "kg", "gas mass to restore: p and rho are scaled by mass/gasMass");
     argList::addBoolOption("writeCover", "write remeshCover = 1 (old mesh, before mapping)");
-    argList::addBoolOption("combine", "combine the volume-weighted and the nearest map");
-    argList::addOption("minCover", "frac", "below this covered fraction a cell takes the nearest value (0.5)");
+    argList::addBoolOption("combine", "fill the cells the volume-weighted map left without overlap");
+    argList::addOption("minCover", "frac", "below this covered fraction a cell is filled from its neighbours (0.5)");
     timeSelector::addOptions(false, false);
 
     #include "setRootCase.H"
@@ -163,37 +273,56 @@ int main(int argc, char *argv[])
         );
         cover.write();
         Info<< "wrote " << coverName << endl;
+
+        const IOobjectList objects(mesh, runTime.timeName());
+        for (const word& name : matrixFields(mesh, objects))
+        {
+            volScalarField Ts
+            (
+                IOobject(name, runTime.timeName(), mesh, IOobject::MUST_READ, IOobject::NO_WRITE),
+                mesh
+            );
+            matrixReport(mesh, Ts, "before the map");
+            extendMatrixField(mesh, Ts, 4);
+            Ts.write();
+        }
     }
 
     if (args.found("combine"))
     {
         const scalar minCover = args.getOrDefault<scalar>("minCover", 0.5);
         const IOobjectList objects(mesh, runTime.timeName());
-        label nNearest = 0;
         label nFields = 0;
+        label nUncovered = 0;
+        label nUnfilled = 0;
         {
             const volScalarField cover
             (
                 IOobject(coverName, runTime.timeName(), mesh, IOobject::MUST_READ, IOobject::NO_WRITE),
                 mesh
             );
-            nFields += combineFields<scalar>(mesh, objects, cover, minCover, nNearest);
-            nFields += combineFields<vector>(mesh, objects, cover, minCover, nNearest);
+            nFields += combineFields<scalar>(mesh, objects, cover, minCover, nUncovered, nUnfilled);
+            nFields += combineFields<vector>(mesh, objects, cover, minCover, nUncovered, nUnfilled);
             Info<< "coverage of the new cells by the old mesh: min " << gMin(cover.primitiveField())
                 << ", max " << gMax(cover.primitiveField()) << endl;
             rm(cover.objectPath());
         }
-        // leftovers of the nearest map (the coverage field itself, fields without a volume-weighted twin)
-        for (const word& name : objects.sortedNames())
+        for (const word& name : matrixFields(mesh, IOobjectList(mesh, runTime.timeName())))
         {
-            if (isNearest(name))
-            {
-                rm(objects[name]->objectPath());
-            }
+            const volScalarField Ts
+            (
+                IOobject(name, runTime.timeName(), mesh, IOobject::MUST_READ, IOobject::NO_WRITE),
+                mesh
+            );
+            matrixReport(mesh, Ts, "after the map");
         }
-        reduce(nNearest, sumOp<label>());
-        Info<< "combined " << nFields << " fields, " << nNearest/max(nFields, label(1))
-            << " cells took the nearest value (covered below " << minCover << ")" << endl;
+        Info<< "combined " << nFields << " fields, " << nUncovered << " cells without overlap filled from their "
+            << "neighbours (covered below " << minCover << ")" << endl;
+        if (nUnfilled)
+        {
+            FatalErrorInFunction
+                << nUnfilled << " cells without overlap have no filled neighbour within 20 layers" << exit(FatalError);
+        }
     }
 
     // gas mass (compressible only)

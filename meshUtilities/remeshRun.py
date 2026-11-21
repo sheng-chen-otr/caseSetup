@@ -23,8 +23,6 @@ and limitations.
 #usage, from the case directory:
 #  python3 remeshRun.py next               prints "solve <seg> <time>", "map <seg> <time>" or "done"
 #  python3 remeshRun.py prepare <seg> <time> sets meshes/<seg>/system/controlDict to start at <time> (mapFieldsPar target)
-#  python3 remeshRun.py nearest <seg> <time> renames the fields of the nearest-cell map to <field>_nearest, so the
-#                                          volume-weighted map can be written next to them (remeshMassFix -combine)
 #  python3 remeshRun.py graft <seg> <time> moves the fields mapped onto meshes/<seg> (mapFieldsPar) and the mesh
 #                                          into processor*/<time>, ready for the restart
 #stdlib only so it runs on cluster nodes
@@ -170,33 +168,6 @@ def nextStep():
     return 'solve %s %s' % (seg, tName)
 
 
-def renameField(path, newName):
-    #field file under a new name: the header object entry has to match the file name
-    with open(path, 'rb') as f:
-        data = f.read()
-    head = re.sub(rb'(object\s+)[^;\s]+;', b'\g<1>' + newName.encode() + b';', data[:2000], count=1)
-    with open(os.path.join(os.path.dirname(path), newName), 'wb') as f:
-        f.write(head + data[2000:])
-    os.remove(path)
-
-
-def stashNearest(seg, timeName):
-    #fields of the nearest-cell map -> <field>_nearest
-    segDir = os.path.join('meshes', seg)
-    count = 0
-    for procDir in sorted(glob.glob(os.path.join(segDir, 'processor[0-9]*'))):
-        name = findTime(procDir, float(timeName))
-        if name is None:
-            sys.exit('ERROR! %s has no mapped time %s (mapFieldsPar failed?)' % (procDir, timeName))
-        timeDir = os.path.join(procDir, name)
-        for entry in os.listdir(timeDir):
-            path = os.path.join(timeDir, entry)
-            if os.path.isfile(path) and not entry.endswith('_nearest'):
-                renameField(path, entry + '_nearest')
-                count += 1
-    print('%d nearest-map fields renamed in %s' % (count, segDir))
-
-
 def writePoints0(meshDir):
     #points0 of the new mesh = its points (the motion solver reads points0 from the latest time that has one)
     for name, opener in (('points', open), ('points.gz', gzip.open)):
@@ -268,12 +239,10 @@ def main(argv):
         print(nextStep())
     elif len(argv) == 3 and argv[0] == 'prepare':
         prepare(argv[1], argv[2])
-    elif len(argv) == 3 and argv[0] == 'nearest':
-        stashNearest(argv[1], argv[2])
     elif len(argv) == 3 and argv[0] == 'graft':
         graft(argv[1], argv[2])
     else:
-        sys.exit('usage: remeshRun.py next | prepare <seg> <time> | nearest <seg> <time> | graft <seg> <time>')
+        sys.exit('usage: remeshRun.py next | prepare <seg> <time> | graft <seg> <time>')
 
 
 if __name__ == '__main__':

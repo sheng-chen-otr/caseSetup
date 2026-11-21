@@ -788,9 +788,12 @@ def porousHeatSource(zone, cv):
             const word QsName("Qs_%s");
             if (!m.foundObject<volScalarField>(TsName))
             {
+                //first call is already in the first new time step: read the matrix temperature from the start
+                //(restart) time, not the current one, else every restart begins again from the initial value
+                const word startName(m.time().timeName(m.time().startTime().value()));
                 volScalarField* TsPtr = new volScalarField
                 (
-                    IOobject(TsName, m.time().timeName(), m, IOobject::READ_IF_PRESENT, IOobject::AUTO_WRITE),
+                    IOobject(TsName, startName, m, IOobject::READ_IF_PRESENT, IOobject::AUTO_WRITE),
                     m,
                     dimensionedScalar(dimTemperature, Tinit)
                 );
