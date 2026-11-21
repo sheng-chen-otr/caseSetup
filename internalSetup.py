@@ -196,6 +196,7 @@ def main(argv=None):
     setupCore.linkGeomFiles(geomDict, caseDir, jobPath)
     if motionInfo:
         writeInternal.writeMotionGeometry(motionInfo, mshDir)
+        writeInternal.writeRemeshMeshes(motionInfo, mshDir)
     writeInternal.writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict)
     writeInternal.writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict,
                                       motionInfo['gapRefs'] if motionInfo else None)
@@ -209,7 +210,7 @@ def main(argv=None):
     writeInternal.writeNumericsInternal(templateLoc, fullCaseSetupDict, writeInternal.hasPressureBC(wallGroups))
     writeInternal.writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo, porous)
     motionZones = writeInternal.writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict) if motionInfo else None
-    writeInternal.makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones, fanNames)
+    writeInternal.makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones, fanNames, motionInfo)
 
     copyPostSetup(execDir, caseDir)
     fullCaseSetupDict = writeInternal.addSetupInfo(fullCaseSetupDict, wallGroups, motionInfo)
@@ -217,6 +218,9 @@ def main(argv=None):
     print('\nCase setup completed successfully! runScript does mesh + solve + export in one job')
     if motionInfo:
         print('Mesh motion dry run first: ./runScript --meshOnly then ./motionCheckScript (cluster: ./submitScript --check)')
+        if motionInfo.get('segments'):
+            print('Remeshing: runScript also makes the meshes in meshes/seg*, the solve maps onto the next one at each '
+                  'segment end (system/remeshSegments)')
     print('Run: ./runScript then ./postScript locally, or ./submitScript on the cluster (from the case directory in $SCRATCH, chains postScript)')
 
 

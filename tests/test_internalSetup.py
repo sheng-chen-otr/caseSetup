@@ -510,8 +510,12 @@ def test_crank_option(repo_root):
 
 
 def test_crank_scripts_compile_the_library(tmp_path, monkeypatch, repo_root):
-    case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a'])
+    #moving meshes always compile it (slidingWallVelocity on the static walls), static cases do not
+    os.makedirs(tmp_path / 'static')
+    case = _writeScripts(tmp_path / 'static', monkeypatch, repo_root, None)
     assert 'wmake' not in (case / 'runScript').read_text()
+    case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a'])
+    assert 'wmake libso' in (case / 'runScript').read_text()
     templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
     full = setupCore.getGlobalDefaults(templateLoc)
     full['MESH_MOTION']['DRIVE'] = ['crank']
@@ -921,3 +925,24 @@ def test_copy_back_step(tmp_path, monkeypatch, repo_root):
     full['GLOBAL_COMPUTE_SETUP']['COPY_BACK'] = ['sometimes']
     with pytest.raises(SystemExit):
         writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
+
+
+def test_static_walls_slide_in_a_moving_mesh(tmp_path, monkeypatch, repo_root):
+    #static noSlip walls of a moving-mesh case get slidingWallVelocity (no leak through walls whose points slide),
+    #the controlDict loads the library; without MOVE bodies they stay stationary
+    geomDict, wallGroups = _pipeCase(tmp_path, monkeypatch)
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, full, wallGroups)
+    wall = [l for l in (tmp_path / 'system/caseProperties').read_text().splitlines() if 'category wall;' in l][0]
+    assert 'motion stationary;' in wall
+    writeInternal.writeControlDictInternal(templateLoc, full)
+    assert 'stirlingMotion' not in (tmp_path / 'system/controlDict').read_text()
+    full['MOVE-displacer'] = {'FROM': ['self']}
+    writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, full, wallGroups)
+    wall = [l for l in (tmp_path / 'system/caseProperties').read_text().splitlines() if 'category wall;' in l][0]
+    assert 'motion slidingMesh;' in wall
+    writeInternal.writeControlDictInternal(templateLoc, full)
+    control = (tmp_path / 'system/controlDict').read_text()
+    assert 'libs            (stirlingMotion);' in control and control.index('libs') < control.index('functions')
+    options = open(os.path.join(repo_root, 'zeroTemplates', 'boundaryConditions', 'fluid', 'wallOptions')).read()
+    assert 'slidingMesh' in options and 'slidingWallVelocity' in options

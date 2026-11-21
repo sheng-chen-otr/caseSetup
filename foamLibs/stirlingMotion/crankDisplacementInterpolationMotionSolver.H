@@ -22,6 +22,8 @@ and limitations.
 // the flywheel (inertia, load, friction) is stepped and the zones are moved to the new angle.
 // points between zones are interpolated linearly along the axis (as displacementInterpolation,
 // but zones are matched by name, so the faceZone order in the mesh does not matter)
+// remeshing: with stopAngle the run ends with a write when the crank reaches that angle (deg, 0-360),
+// the last step lands on it exactly so the next mesh (made at that angle) has the same shape
 
 #ifndef crankDisplacementInterpolationMotionSolver_H
 #define crankDisplacementInterpolationMotionSolver_H
@@ -63,6 +65,10 @@ class crankDisplacementInterpolationMotionSolver
     scalar thetaOld_;
     scalar omegaOld_;
     label timeIndex_;
+
+    // remeshing: accumulated crank angle to stop at (rad, VGREAT = none) and the time index of the last step
+    scalar stopTheta_;
+    label stopIndex_;
 
     // flywheel and load
     scalar inertia_;

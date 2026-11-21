@@ -23,6 +23,8 @@ import os
 import sys
 import json
 import math
+import glob
+import shutil
 import hashlib
 
 import numpy as np
@@ -532,6 +534,9 @@ def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGr
         simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
         initArray += ['k uniform %s;' % (simControl['INIT_K'][0]), 'omega uniform %s;' % (simControl['INIT_OMEGA'][0]),
                       'epsilon uniform 1e-4;', 'nut uniform 0;', 'nuTilda uniform 0;', 'alphat uniform 0;']
+    #moving mesh: the points of static walls slide along them, slidingWallVelocity keeps the gas from leaking through
+    #(noSlip leaks, movingWallVelocity drags the gas with the points)
+    staticMotion = 'slidingMesh' if getMoveSections(fullCaseSetupDict) else 'stationary'
     bcArray = []
     for geom in geomDict:
         geomName = stripExt(geom)
@@ -546,7 +551,7 @@ def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGr
                 continue
             moving = group.get('moving', [])
             static = [pid for pid in group['pids'] if pid not in moving]
-            for pids, motion, suffix in ((static, 'stationary', ''), (moving, 'movingMesh', '_moving')):
+            for pids, motion, suffix in ((static, staticMotion, ''), (moving, 'movingMesh', '_moving')):
                 if len(pids) == 0:
                     continue
                 patches = ' '.join('"%s_%s"' % (geomName, pid) for pid in pids)
@@ -948,6 +953,14 @@ def writeControlDictInternal(templateLoc, fullCaseSetupDict):
                    'INIT_DT': initDt, 'WRITE_INTERVAL': '%.9g' % writeInterval,
                    'MAX_CO': maxCo, 'MAX_DT': maxDt, 'ADJUST_DT': adjustDt}
     copyTemplate(templateLoc, 'system/controlDict', 'system/controlDict', replaceDict)
+    #moving mesh: static walls use slidingWallVelocity (foamLibs/stirlingMotion, compiled by the run scripts)
+    if getMoveSections(fullCaseSetupDict):
+        with open('system/controlDict') as f:
+            text = f.read()
+        text = text.replace('\nfunctions\n', '\nlibs            (stirlingMotion);   //slidingWallVelocity on the static walls '
+                                              '(foamLibs/stirlingMotion)\n\nfunctions\n', 1)
+        with open('system/controlDict', 'w') as f:
+            f.write(text)
 
 
 def getRelaxation(fullCaseSetupDict):
@@ -1149,8 +1162,10 @@ def writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo=None,
             rho = [('rho', 'rhoInf;'), ('rhoInf', '%.6g;' % (getGasDensity(fullCaseSetupDict)))]
         else:
             rho = [('rho', 'rho;')]
+        #one regex per body: a PID that snappy left without faces (e.g. a nogap displacer side on the chamber wall)
+        #has no patch, separate names would each warn at run time
         for body in motionInfo['bodies']:
-            patches = ' '.join('"%s_%s"' % (body.source, pid) for pid in body.movedPids)
+            patches = '"%s_(%s)"' % (body.source, '|'.join(body.movedPids))
             fos.append(functionObject('force_%s' % (body.name), [('type', 'forces;'), ('libs', '(forces);'),
                                                                  ('patches', '(%s);' % (patches))] + rho
                                       + [('CofR', '(0 0 0);')]))
@@ -1195,15 +1210,36 @@ def getMotionFilePath(setup, section, caseDir):
     return path
 
 
+def getRemesh(fullCaseSetupDict):
+    #remeshing (MESH_MOTION REMESH auto): squash/stretch limit per mesh, None = one mesh for the whole run
+    meshMotion = fullCaseSetupDict.get('MESH_MOTION', {})
+    remesh = meshMotion.get('REMESH', ['no'])[0].lower()
+    if remesh in ('no', ''):
+        return None
+    if remesh != 'auto':
+        sys.exit('ERROR! MESH_MOTION REMESH must be no or auto!')
+    try:
+        limit = float(meshMotion.get('REMESH_DEFORMATION', ['3'])[0])
+    except ValueError:
+        limit = 0.0
+    if limit <= 1.0:
+        sys.exit('ERROR! MESH_MOTION REMESH_DEFORMATION must be a number above 1 (squash/stretch allowed per mesh, e.g. 3)')
+    return limit
+
+
 def getCrank(fullCaseSetupDict):
     #crank drive settings, None for prescribed motion
     meshMotion = fullCaseSetupDict['MESH_MOTION']
     drive = meshMotion.get('DRIVE', ['prescribed'])[0]
+    load = None
     if drive == 'prescribed':
-        return None
+        if getRemesh(fullCaseSetupDict) is None:
+            return None
+        #remeshing stops each run at a crank angle: prescribed motion runs as the crank drive at a fixed speed
+        drive, load = 'crank', 'speed'
     if drive != 'crank':
         sys.exit('ERROR! MESH_MOTION DRIVE must be prescribed or crank!')
-    crank = {'LOAD': meshMotion['LOAD'][0]}
+    crank = {'LOAD': load or meshMotion['LOAD'][0]}
     if crank['LOAD'] not in ('speed', 'torque', 'damper', 'generator'):
         sys.exit('ERROR! MESH_MOTION LOAD must be speed, torque, damper or generator!')
     for key in ['INERTIA', 'LOAD_TORQUE', 'LOAD_DAMPING', 'GEN_K', 'GEN_R_LOAD', 'GEN_R_INT',
@@ -1229,7 +1265,7 @@ def getCrank(fullCaseSetupDict):
     return crank
 
 
-def crankEntries(crank, startAngle):
+def crankEntries(crank, startAngle, stopAngle=None):
     #crank sub-dictionary of dynamicMeshDict
     lines = ['theta0          %.9g;   //crank angle at the start (meshing) angle, deg' % (startAngle),
              'omega0          %.9g;   //start speed, rad/s (FREQ)' % (crank['OMEGA0']),
@@ -1246,7 +1282,15 @@ def crankEntries(crank, startAngle):
               'frictionCoeff   %.9g;   //N m s' % (crank['FRICTION_COEFF']),
               'pRef            %.9g;   //pressure behind the bodies (units of p)' % (crank['P_REF']),
               'rhoInf          %.9g;   //density for kinematic p' % (crank['RHO_INF'])]
+    if stopAngle is not None:
+        lines.append('stopAngle       %.9g;   //remeshing: write and stop at this crank angle (deg), the next mesh '
+                     'is made there' % (np.mod(stopAngle, 360.0)))
     return '\n'.join('        %s' % (line) for line in lines)
+
+
+def segmentNames(segments):
+    #remeshing: one mesh per segment, seg01 is the case mesh (start angle)
+    return ['seg%02d' % (k + 1) for k in range(len(segments))]
 
 
 def getMoveSections(fullCaseSetupDict):
@@ -1367,9 +1411,28 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
     ratio, pair = motionUtilities.deformationRatio(zones, startAngle, step)
     print('\t\tstart (meshing) angle %.1f deg%s, worst squash/stretch %.2fx (%s - %s)'
           % (startAngle, ' (auto)' if startSetting == 'auto' else '', ratio, pair[0], pair[1]))
-    if ratio > maxDeformation:
+    #remeshing: a new mesh wherever a gap has been squashed or stretched REMESH_DEFORMATION times since the last one
+    segments = None
+    remesh = getRemesh(fullCaseSetupDict)
+    if remesh is not None:
+        segments = motionUtilities.remeshAngles(zones, startAngle, step, remesh)
+        if len(segments) == 1:
+            print('\t\tremeshing: squash/stretch stays below REMESH_DEFORMATION %g over the cycle, one mesh' % (remesh))
+            segments = None
+        else:
+            if any(geomName.startswith('FAN') for geomName in geomFiles):
+                sys.exit('ERROR! Remeshing with FAN baffles is not supported yet (the baffles are made on the case mesh only)')
+            print('\t\tremeshing: %d meshes per cycle (REMESH_DEFORMATION %g), each made at its start angle:'
+                  % (len(segments), remesh))
+            for name, (a0, a1) in zip(segmentNames(segments), segments):
+                worst = motionUtilities.segmentRatio(zones, a0, a1, step)
+                print('\t\t\t%s  %5.1f to %5.1f deg  worst squash/stretch %.2fx (%s - %s)'
+                      % (name, np.mod(a0, 360.0), np.mod(a1, 360.0), worst[0], worst[1][0] if worst[1] else '-',
+                         worst[1][1] if worst[1] else '-'))
+    if ratio > maxDeformation and segments is None:
         sys.exit('ERROR! Squash/stretch %.2fx exceeds MAX_DEFORMATION %.2f: increase TDC_CLEARANCE or the limit'
                  % (ratio, maxDeformation))
+    meshAngles = [startAngle] + ([a0 for a0, a1 in segments[1:]] if segments else [])
     print('\t\tzones in z order at the start angle:')
     order = motionUtilities.sortedZones(zones, step)
     for zone in order:
@@ -1383,7 +1446,7 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
             print('\t\tWARNING: %s velocity jumps by %.4g m/s between samples: a sharp change in the profile '
                   'gives pressure spikes' % (body.name, kin['vJump']))
 
-    #a body made of PIDs in a wall file (piston crown, FROM) must seal against its liner at the meshing angle: inside
+    #a body made of PIDs in a wall file (piston crown, FROM) must seal against its liner at every meshing angle: inside
     #the liner along z and covering the bore (after meshing the liner boundary stretches with the mesh)
     for body in bodies:
         if body.source.startswith('MOVE'):
@@ -1391,11 +1454,31 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
         walls = dict((pid, t) for pid, t in tris[body.source].items() if pid not in body.movedPids)
         for zone in [z for z in zones if z.body is body]:
             pid = zone.patch[len(body.source) + 1:]
-            problems = motionUtilities.sealProblems(tris[body.source][pid], float(motionUtilities.zoneZ(zone, startAngle)),
-                                                    walls, flatTol)
-            if problems:
-                sys.exit('ERROR! %s does not seal at the meshing angle %.1f deg: %s'
-                         % (zone.patch, startAngle, '; '.join(problems)))
+            for angle in meshAngles:
+                problems = motionUtilities.sealProblems(tris[body.source][pid], float(motionUtilities.zoneZ(zone, angle)),
+                                                        walls, flatTol)
+                if problems:
+                    sys.exit('ERROR! %s does not seal at the meshing angle %.1f deg: %s'
+                             % (zone.patch, np.mod(angle, 360.0), '; '.join(problems)))
+
+    #LOC_IN_MESH must stay in the gas at every meshing angle: warn when it falls inside the box of a body of its own
+    try:
+        loc = np.array([float(v) for v in fullCaseSetupDict['GLOBAL_REFINEMENT']['LOC_IN_MESH'] if v != ''])
+    except (KeyError, ValueError):
+        loc = None
+    if loc is not None and len(loc) == 3:
+        for body in bodies:
+            if not body.source.startswith('MOVE'):
+                continue
+            allTris = np.vstack([t.reshape(-1, 3) for t in tris[body.source].values()])
+            for angle in meshAngles:
+                dz = float(body.shift(angle))
+                lo, hi = allTris.min(axis=0) + [0.0, 0.0, dz], allTris.max(axis=0) + [0.0, 0.0, dz]
+                if np.all(loc > lo) and np.all(loc < hi):
+                    print('\t\tWARNING: LOC_IN_MESH %s is inside the bounding box of %s at the meshing angle %.1f deg: '
+                          'make sure it is in the gas (not in the body) at every meshing angle'
+                          % (' '.join('%g' % v for v in loc), body.name, np.mod(angle, 360.0)))
+                    break
 
     #static wall faces dragged by the mesh (horizontal faces inside a stretching band)
     zonePatches = [zone.patch for zone in zones]
@@ -1411,15 +1494,9 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
         print('\t\tWARNING: %s has horizontal faces at z %.6g..%.6g m inside a stretching band: they will move '
               'with the mesh. Add them to ANCHOR_PIDS if they are fixed steps or port ends' % (label, zLo, zHi))
 
-    #geometry shifts to the start angle (file units)
-    shifts = {}
-    for body in bodies:
-        dz = float(body.shift(startAngle))
-        scale = float(geomDict[geomFiles[body.source]]['scale'])
-        for pid in body.movedPids:
-            shifts.setdefault(body.source, {})[pid] = (0.0, 0.0, dz/scale)
     #porous zones inside a moving body (regenerator in the displacer) are moved with it (MOVES_WITH = <body>)
     bodyNames = dict((body.name, body) for body in bodies)
+    porOwners = {}
     for geomName in geomFiles:
         if not geomName.startswith('POR'):
             continue
@@ -1428,10 +1505,9 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
             continue
         if owner not in bodyNames:
             sys.exit('ERROR! [%s] MOVES_WITH %s is not a MOVE body (bodies: %s)' % (geomName, owner, list(bodyNames)))
-        dz = float(bodyNames[owner].shift(startAngle))
-        scale = float(geomDict[geomFiles[geomName]]['scale'])
-        shifts[geomName] = dict((pid, (0.0, 0.0, dz/scale)) for pid in pidDict[geomName])
-        print('\t\t%s moves with %s: shifted %+.4g m to the start angle' % (geomName, owner, dz))
+        porOwners[geomName] = bodyNames[owner]
+        print('\t\t%s moves with %s: shifted %+.4g m to the start angle' % (geomName, owner,
+                                                                           float(bodyNames[owner].shift(startAngle))))
 
     #gap refinement around the GAP_PIDS of each body
     wallGap = []
@@ -1449,35 +1525,97 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
         if len(wallGap) == 0:
             sys.exit('ERROR! [%s] GAP_PIDS set but no WALL section has GAP_PIDS (the wall side of the gap)' % (section))
         dz = float(body.shift(startAngle))
-        bodyGap = {pid: tris[body.source][pid] + np.array([0.0, 0.0, dz])
-                   for pid in matchPids(keywords, pidDict[body.source], '[%s] GAP_PIDS' % (section))}
-        gap = motionUtilities.gapWidth(np.vstack(list(bodyGap.values())), np.vstack(wallGap))
+        baseGap = {pid: tris[body.source][pid] for pid in matchPids(keywords, pidDict[body.source], '[%s] GAP_PIDS' % (section))}
+        gap = motionUtilities.gapWidth(np.vstack(list(baseGap.values())) + np.array([0.0, 0.0, dz]), np.vstack(wallGap))
         gapCells = float(setup['GAP_CELLS'][0])
         level, distance, cell = motionUtilities.gapRefinement(gap, baseCell, gapCells)
         print('\t\t%s gap %.4g m: refinement level %d (cell %.4g m, %.1f cells across) within %.4g m'
               % (body.name, gap, level, cell, gap/cell, distance))
         gapRefs.append({'name': 'GAPREF-%s' % (body.name), 'file': 'GAPREF-%s.stl' % (body.name),
-                        'distance': distance, 'level': level, 'tris': bodyGap})
+                        'distance': distance, 'level': level, 'baseTris': baseGap, 'body': body})
 
+    scales = dict((geomName, float(geomDict[geom]['scale'])) for geomName, geom in geomFiles.items())
     return {'zones': order, 'bodies': bodies, 'startAngle': startAngle, 'step': step, 'freq': freq,
-            'nCycles': nCycles, 'shifts': shifts, 'movingPids': movingPids, 'gapRefs': gapRefs,
-            'geomFiles': geomFiles}
+            'nCycles': nCycles, 'movingPids': movingPids, 'gapRefs': gapRefs, 'geomFiles': geomFiles,
+            'scales': scales, 'porOwners': porOwners, 'porPids': dict((g, list(pidDict[g])) for g in porOwners),
+            'segments': segments}
 
 
-def writeMotionGeometry(motionInfo, mshDir):
-    #moved bodies: shifted copies in constant/triSurface (never write through a symlink), gap STLs
-    os.makedirs(os.path.join('constant', 'triSurface'), exist_ok=True)
-    for geomName, pidShift in motionInfo['shifts'].items():
+def motionShifts(motionInfo, angle):
+    #z shift (file units) of every moved PID at a crank angle: {geometry: {pid: (0, 0, dz)}}
+    shifts = {}
+    for body in motionInfo['bodies']:
+        dz = float(body.shift(angle))/motionInfo['scales'][body.source]
+        for pid in body.movedPids:
+            shifts.setdefault(body.source, {})[pid] = (0.0, 0.0, dz)
+    for geomName, owner in motionInfo['porOwners'].items():
+        dz = float(owner.shift(angle))/motionInfo['scales'][geomName]
+        shifts[geomName] = dict((pid, (0.0, 0.0, dz)) for pid in motionInfo['porPids'][geomName])
+    return shifts
+
+
+def writeMotionGeometry(motionInfo, mshDir, angle=None, triDir=os.path.join('constant', 'triSurface'), verbose=True):
+    #moved bodies at a crank angle (default the start angle): shifted copies in triDir (never write through a
+    #symlink), gap STLs. returns the files written
+    angle = motionInfo['startAngle'] if angle is None else angle
+    os.makedirs(triDir, exist_ok=True)
+    written = []
+    for geomName, pidShift in motionShifts(motionInfo, angle).items():
         geom = motionInfo['geomFiles'][geomName]
-        dest = os.path.join('constant', 'triSurface', geom.replace('.gz', ''))
-        for path in (dest, os.path.join('constant', 'triSurface', geom)):
+        dest = os.path.join(triDir, geom.replace('.gz', ''))
+        for path in (dest, os.path.join(triDir, geom)):
             if os.path.islink(path) or os.path.isfile(path):
                 os.remove(path)
         geometryIO.translateSurfacePIDs(os.path.join(mshDir, geom), dest, pidShift)
-        print('\t\t%s shifted to the start angle: %s' % (geom, ', '.join('%s %+.4g' % (pid, s[2])
-                                                                          for pid, s in pidShift.items())))
+        written.append(os.path.basename(dest))
+        if verbose:
+            print('\t\t%s shifted to the start angle: %s' % (geom, ', '.join('%s %+.4g' % (pid, s[2])
+                                                                              for pid, s in pidShift.items())))
     for gapRef in motionInfo['gapRefs']:
-        motionUtilities.writeStlTriangles(os.path.join('constant', 'triSurface', gapRef['file']), gapRef['tris'])
+        dz = np.array([0.0, 0.0, float(gapRef['body'].shift(angle))])
+        motionUtilities.writeStlTriangles(os.path.join(triDir, gapRef['file']),
+                                          dict((pid, t + dz) for pid, t in gapRef['baseTris'].items()))
+        written.append(gapRef['file'])
+    return written
+
+
+def writeRemeshMeshes(motionInfo, mshDir):
+    #remeshing: system/remeshSegments (mesh name, start and end angle) and the geometry of each mesh at its start
+    #angle in meshes/<name>/constant/triSurface (the other surfaces are links to the case's), seg01 = the case mesh
+    listFile = os.path.join('system', 'remeshSegments')
+    segments = motionInfo.get('segments')
+    if not segments:
+        if os.path.isfile(listFile):
+            os.remove(listFile)
+        if os.path.isdir('meshes'):
+            print('\t\tWARNING: meshes/ is left over from an earlier remeshing setup (not used now)')
+        return
+    print('\n\tWriting the remeshing meshes...')
+    names = segmentNames(segments)
+    os.makedirs('system', exist_ok=True)
+    with open(listFile, 'w', newline='\n') as f:
+        f.write('#remeshing (written by internalSetup): mesh, start and end crank angle (deg, mod 360), each mesh is '
+                'made at its start angle\n')
+        for name, (a0, a1) in zip(names, segments):
+            f.write('%s %.9g %.9g\n' % (name, np.mod(a0, 360.0), np.mod(a1, 360.0)))
+    #meshes of an earlier setup with more segments
+    if os.path.isdir('meshes'):
+        for old in sorted(os.listdir('meshes')):
+            if old.startswith('seg') and old not in names:
+                shutil.rmtree(os.path.join('meshes', old))
+                print('\t\tremoved meshes/%s (not in the segments any more)' % (old))
+    caseTri = os.path.join('constant', 'triSurface')
+    for name, (a0, a1) in zip(names[1:], segments[1:]):
+        triDir = os.path.join('meshes', name, 'constant', 'triSurface')
+        if os.path.isdir(triDir):
+            shutil.rmtree(triDir)
+        written = writeMotionGeometry(motionInfo, mshDir, a0, triDir, verbose=False)
+        for entry in sorted(os.listdir(caseTri)):
+            path = os.path.join(caseTri, entry)
+            if entry in written or entry.endswith('.eMesh') or not os.path.isfile(path):
+                continue
+            os.symlink(os.path.relpath(path, triDir), os.path.join(triDir, entry))
+        print('\t\tmeshes/%s: geometry at %.1f deg' % (name, np.mod(a0, 360.0)))
 
 
 def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
@@ -1494,16 +1632,23 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
         #tables vs crank angle, the solver works out the crank angle from the gas forces
         motionUtilities.writeCrankTables(motionInfo['bodies'], motionInfo['startAngle'], motionInfo['step'],
                                          'constant/tables')
-        bodyLines = []
-        for body in motionInfo['bodies']:
-            patches = ' '.join('"%s_%s"' % (body.source, pid) for pid in body.movedPids)
-            bodyLines.append('        %s\n        {\n            patches (%s);\n            position { type tableFile; '
-                             'file "<constant>/tables/%sCrank"; outOfBounds repeat; }\n        }'
-                             % (body.name, patches, body.name))
-        zoneLines = ['        (%s %s)' % (zone.name, 'none' if zone.body is None else zone.body.name) for zone in zones]
-        copyTemplate(templateLoc, 'constant/dynamicMeshDictCrank', 'constant/dynamicMeshDict',
-                     {'BODIES': '\n'.join(bodyLines), 'ZONES': '\n'.join(zoneLines),
-                      'CRANK': crankEntries(crank, motionInfo['startAngle'])})
+        segments = motionInfo.get('segments')
+        #remeshing: one dynamicMeshDict per mesh (tables zero at its start angle, stops at its end angle), the run
+        #script copies the one of the current mesh to constant/dynamicMeshDict; seg01 is also the case's own
+        for old in glob.glob(os.path.join('constant', 'dynamicMeshDict.seg*')) + glob.glob(os.path.join('constant', 'tables', 'seg*')):
+            if os.path.isdir(old):
+                shutil.rmtree(old)
+            else:
+                os.remove(old)
+        if segments:
+            for name, (a0, a1) in zip(segmentNames(segments), segments):
+                motionUtilities.writeCrankTables(motionInfo['bodies'], a0, motionInfo['step'], 'constant/tables/%s' % (name))
+                writeCrankDict(templateLoc, motionInfo, crank, a0, 'constant/dynamicMeshDict.%s' % (name),
+                               '<constant>/tables/%s' % (name), a1)
+            shutil.copyfile('constant/dynamicMeshDict.seg01', 'constant/dynamicMeshDict')
+        else:
+            writeCrankDict(templateLoc, motionInfo, crank, motionInfo['startAngle'], 'constant/dynamicMeshDict',
+                           '<constant>/tables')
         omega = crank['OMEGA0']
         print('\t\tcrank drive: start %.4g Hz, inertia %.4g kg m2, load %s' % (motionInfo['freq'], crank['INERTIA'],
                                                                            crank['LOAD']))
@@ -1539,7 +1684,9 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
     frames, steps = getMotionFrames(fullCaseSetupDict)
     with open('%s/defaultDicts/system/controlDict' % (templateLoc)) as f:
         text = f.read()
-    replaceDict = {'<SOLVER>': 'moveDynamicMesh', '<STARTFROM>': 'startTime', '<ENDTIME>': '%.9g' % (1.0/freq),
+    #remeshing: the dry run covers the first mesh only (its dynamicMeshDict stops at the end of the segment)
+    span = motionCheckSpan(motionInfo)
+    replaceDict = {'<SOLVER>': 'moveDynamicMesh', '<STARTFROM>': 'startTime', '<ENDTIME>': '%.9g' % (span/(360.0*freq)),
                    '<INIT_DT>': '%.9g' % (1.0/(steps*freq)), '<WRITE_INTERVAL>': '%.9g' % (1.0/(frames*freq)),
                    '<MAX_CO>': '1e6', '<MAX_DT>': '1', '<ADJUST_DT>': 'no',
                    '#include "internalFunctionObjects"': ''}
@@ -1547,7 +1694,10 @@ def writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict):
         text = text.replace(key, val)
     with open('system/controlDictMotion', 'w') as f:
         f.write(text)
-    if crank:
+    if motionInfo.get('segments'):
+        print('\t\t%d motion zones, crank angle tables per mesh (constant/tables/seg*), motion dry run on seg01 only '
+              '(%.1f to %.1f deg)' % (len(zones), motionInfo['startAngle'], motionInfo['startAngle'] + span))
+    elif crank:
         print('\t\t%d motion zones, crank angle tables (one cycle) from %.1f deg' % (len(zones), motionInfo['startAngle']))
     else:
         print('\t\t%d motion zones, tables for %g cycles from %.1f deg' % (len(zones), motionInfo['nCycles'],
@@ -1567,10 +1717,32 @@ def getMotionFrames(fullCaseSetupDict):
     return frames, frames*int(np.ceil(72.0/frames))
 
 
-def motionCheckTimes(fullCaseSetupDict):
-    #dry run times every 45 deg (checkMesh -time)
+def motionCheckSpan(motionInfo):
+    #crank angle covered by the motion dry run: one cycle, or the first mesh when remeshing
+    segments = motionInfo.get('segments') if motionInfo else None
+    return segments[0][1] - segments[0][0] if segments else 360.0
+
+
+def motionCheckTimes(fullCaseSetupDict, span=360.0):
+    #dry run times every 45 deg and at the end (checkMesh -time)
     freq = float(getVal(fullCaseSetupDict, 'GLOBAL_CONTROL', 'FREQ'))
-    return ','.join('%.9g' % (k/(8.0*freq)) for k in range(1, 9))
+    angles = [45.0*k for k in range(1, 9) if 45.0*k < span - 1e-6] + [span]
+    return ','.join('%.9g' % (angle/(360.0*freq)) for angle in angles)
+
+
+def writeCrankDict(templateLoc, motionInfo, crank, angle, dest, tableDir, stopAngle=None):
+    #dynamicMeshDict for the crank drive, tables zero at angle (the meshing angle)
+    bodyLines = []
+    for body in motionInfo['bodies']:
+        patches = ' '.join('"%s_%s"' % (body.source, pid) for pid in body.movedPids)
+        bodyLines.append('        %s\n        {\n            patches (%s);\n            position { type tableFile; '
+                         'file "%s/%sCrank"; outOfBounds repeat; }\n        }'
+                         % (body.name, patches, tableDir, body.name))
+    zoneLines = ['        (%s %s)' % (zone.name, 'none' if zone.body is None else zone.body.name)
+                 for zone in motionInfo['zones']]
+    copyTemplate(templateLoc, 'constant/dynamicMeshDictCrank', dest,
+                 {'BODIES': '\n'.join(bodyLines), 'ZONES': '\n'.join(zoneLines),
+                  'CRANK': crankEntries(crank, angle, stopAngle)})
 
 
 #----- scripts
@@ -1579,7 +1751,7 @@ def writeMeshSignature():
     #system/meshSignature: md5 of everything the mesh is made from (meshing dicts, topoSetDict motion zones, the
     #geometry as meshed); the run scripts keep an existing mesh only while it matches the copy in .meshDone
     files = [os.path.join('system', name) for name in ['blockMeshDict', 'snappyHexMeshDict', 'snappyRefinementDict',
-                                                       'surfaceFeatureExtractDict', 'topoSetDict']]
+                                                       'surfaceFeatureExtractDict', 'topoSetDict', 'remeshSegments']]
     surfDir = os.path.join('constant', 'triSurface')
     if os.path.isdir(surfDir):
         files += [os.path.join(surfDir, name) for name in sorted(os.listdir(surfDir))
@@ -1597,7 +1769,7 @@ def writeMeshSignature():
         f.write('\n'.join(lines) + '\n')
 
 
-def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None, fanNames=None):
+def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None, fanNames=None, motionInfo=None):
     #writing runScript, postScript, motionCheckScript and submitScript from clusterDict
     print('\n\tWriting scripts...')
     os.makedirs('system', exist_ok=True)
@@ -1607,11 +1779,16 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     solver = getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER')
     motionSteps = ['topoSet', 'reorderFaceZones', 'pointDisplacement', 'motionCheck', 'meshImages']
     skipSteps = list(motionSteps) if not motionZones else []
-    #the crank drive library is compiled in the job (wmake skips it when up to date)
-    if not motionZones or getCrank(fullCaseSetupDict) is None:
+    #the library (crank drive, slidingWallVelocity) is compiled in the job for moving meshes (wmake skips it when up to date)
+    if not motionZones:
         skipSteps.append('compileLib')
     if not fanNames:
         skipSteps.append('createBaffles')
+    #remeshing: the segment meshes are made with the case mesh, the solve loops over them (remeshSolve)
+    if motionInfo and motionInfo.get('segments'):
+        skipSteps.append('solve')
+    else:
+        skipSteps += ['remeshMesh', 'remeshSolve', 'compileMassFix']
     export = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('EXPORT', ['ensight'])[0].lower()
     if export not in ('ensight', 'none'):
         sys.exit('ERROR! GLOBAL_COMPUTE_SETUP EXPORT must be ensight or none!')
@@ -1645,9 +1822,11 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
                      "if [ $? != 0 ]; then exit 1; fi;" % (' %d %d %d' % decomp if decomp else ''))
     else:
         setDecomp = 'foamDictionary system/decomposeParDict -entry numberOfSubdomains -set $NP > /dev/null;'
-    replaceDict = {'<SET_DECOMP>': setDecomp, '<CHECK_TIMES>': motionCheckTimes(fullCaseSetupDict) if motionZones else '',
+    checkTimes = motionCheckTimes(fullCaseSetupDict, motionCheckSpan(motionInfo)) if motionZones else ''
+    replaceDict = {'<SET_DECOMP>': setDecomp, '<CHECK_TIMES>': checkTimes,
                    '<ZERO_TEMPLATES>': os.path.join(execDir, 'zeroTemplates'), '<EXEC_DIR>': execDir,
-                   '<SOLVER>': solver, '<MOTION_ZONES>': ' '.join(motionZones or [])}
+                   '<SOLVER>': solver, '<MOTION_ZONES>': ' '.join(motionZones or []),
+                   '<MASS_FIX>': 'yes' if getFlow(fullCaseSetupDict) == 'compressible' else 'no'}
     #slurm header from GLOBAL_COMPUTE_SETUP, job name defaults to the case directory name
     compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
     for key in compute:
@@ -1684,6 +1863,10 @@ def addSetupInfo(fullCaseSetupDict, wallGroups, motionInfo=None):
                                         'RHO_REF': ['%.6g' % (getGasDensity(fullCaseSetupDict))]}
     if motionInfo:
         fullCaseSetupDict['SETUP_INFO']['START_ANGLE'] = ['%.6g' % (motionInfo['startAngle'])]
+        #remeshing: start angle of each mesh (deg, mod 360)
+        if motionInfo.get('segments'):
+            fullCaseSetupDict['SETUP_INFO']['REMESH_ANGLES'] = ['%.6g' % (np.mod(a0, 360.0))
+                                                               for a0, a1 in motionInfo['segments']]
     groupDict, kindDict = {}, {}
     for geomName in wallGroups:
         for group in wallGroups[geomName]:

@@ -160,6 +160,18 @@ void Foam::crankDisplacementInterpolationMotionSolver::readCoeffs()
     omegaOld_ = omega_;
     timeIndex_ = mesh().time().timeIndex();
     torqueGas_ = torqueLoad_ = powerElec_ = 0;
+
+    // remeshing: the next time the crank reaches stopAngle, at least a millidegree ahead
+    stopTheta_ = VGREAT;
+    stopIndex_ = labelMax;
+    if (crankDict.found("stopAngle"))
+    {
+        const scalar stopDeg = crankDict.get<scalar>("stopAngle");
+        const scalar thetaDeg = radToDeg(theta_);
+        stopTheta_ = degToRad(stopDeg + 360*std::ceil((thetaDeg + 1e-3 - stopDeg)/360));
+        Info<< "crankDisplacementInterpolation: stops at crank angle " << radToDeg(stopTheta_)
+            << " deg (remeshing)" << endl;
+    }
 }
 
 
@@ -472,6 +484,23 @@ void Foam::crankDisplacementInterpolationMotionSolver::solve()
         }
     }
     theta_ = thetaOld_ + 0.5*dt*(omegaOld_ + omega_);
+
+    // remeshing: the step after the stop is requested is the last one and lands exactly on the stop angle
+    // (it moves 0 to 1.2 normal steps), the stop is requested when the next step would reach it
+    if (stopTheta_ < 0.5*VGREAT)
+    {
+        if (runTime.timeIndex() >= stopIndex_ || theta_ >= stopTheta_)
+        {
+            theta_ = stopTheta_;
+        }
+        if (stopIndex_ == labelMax && theta_ + 1.2*(theta_ - thetaOld_) >= stopTheta_)
+        {
+            stopIndex_ = runTime.timeIndex() + 1;
+            runTime.stopAt(Time::stopAtControls::saWriteNow);
+            Info<< "crankDisplacementInterpolation: next step reaches the stop angle "
+                << radToDeg(stopTheta_) << " deg, writing and stopping after it" << endl;
+        }
+    }
 
     writeLog();
     if (runTime.writeTime())

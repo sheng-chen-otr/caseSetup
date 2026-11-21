@@ -139,6 +139,21 @@ motion
             value       ${:VALUE.U};
         }
     }
+    slidingMesh
+    {
+        //static wall in a moving mesh: velocity normal to the face from the mesh flux, no tangential velocity
+        //(slidingWallVelocity in foamLibs/stirlingMotion, the case loads the library in controlDict)
+        Urel
+        {
+            type        slidingWallVelocity;
+            value       uniform (0 0 0);
+        }
+        U
+        {
+            type        slidingWallVelocity;
+            value       uniform (0 0 0);
+        }
+    }
     movingMesh
     {
         Urel

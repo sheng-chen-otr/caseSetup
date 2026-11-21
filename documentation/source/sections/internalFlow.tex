@@ -220,6 +220,8 @@ Both bodies are driven by one CSV file with the shared crank angle, so the phase
     START_ANGLE = auto
     STEP_DEG = 1
     MAX_DEFORMATION = 15
+    REMESH = no
+    REMESH_DEFORMATION = 3
     ZONE_FLAT_TOL = 1e-4
     MOTION_FRAMES = 24
     DRIVE = prescribed
@@ -227,10 +229,15 @@ Both bodies are driven by one CSV file with the shared crank angle, so the phase
 \begin{itemize}
     \item \codeword{START_ANGLE} [\codeword{float,deg}] - crank angle of the mesh and of the start of the run. \codeword{auto} picks the angle that gives the smallest worst squash/stretch of the gaps over the cycle.
     \item \codeword{STEP_DEG} [\codeword{float,deg}] - resampling of the profile ($\le$ 1).
-    \item \codeword{MAX_DEFORMATION} [\codeword{float}] - largest allowed ratio between a gap at the meshing angle and the same gap anywhere in the cycle (both ways). Larger: increase \codeword{TDC_CLEARANCE}.
+    \item \codeword{MAX_DEFORMATION} [\codeword{float}] - largest allowed ratio between a gap at the meshing angle and the same gap anywhere in the cycle (both ways). Larger: increase \codeword{TDC_CLEARANCE}, or remesh. Not used with remeshing.
+    \item \codeword{REMESH} - \codeword{no} (one mesh for the whole run) or \codeword{auto} (a new mesh whenever a gap has been squashed or stretched \codeword{REMESH_DEFORMATION} times, Section ef{sec:remesh}).
+    \item \codeword{REMESH_DEFORMATION} [\codeword{float}] - squash/stretch allowed per mesh with \codeword{REMESH = auto} (above 1).
     \item \codeword{ZONE_FLAT_TOL} [\codeword{float,m}] - how flat a zone face must be.
     \item \codeword{DRIVE} - \codeword{prescribed} (the crank turns at \codeword{FREQ}) or \codeword{crank} (Section \ref{sec:crankDrive}).
 \end{itemize}
+
+\subsubsection{Static Walls in a Moving Mesh}
+The points of static walls between the motion zones (side wall, liner) slide along the wall with the mesh. Snapped faces are not exactly parallel to the motion, so they sweep a little volume each step. With a plain no-slip wall that volume leaks through the wall (about 0.5--1\,\% of the gas mass per cycle in the motion demo). Static no-slip walls of a moving-mesh case therefore get \codeword{slidingWallVelocity} (\codeword{foamLibs/stirlingMotion}): the velocity normal to the face matches the mesh motion and the tangential velocity is zero, so no gas crosses the wall and the wall does not drag the gas. Faces that do not move (the anchors) get exactly zero. The case loads the library in \codeword{controlDict} and the run scripts compile it. Walls set to \codeword{slip} are not covered yet.
 
 \subsubsection{Setup Checks and Report}
 Before writing the case, the setup checks the zones over every angle of the cycle (not only the start): each zone is flat, the z order stays the same with a gap above zero, the clearances hold, and the deformation stays below \codeword{MAX_DEFORMATION}. It prints the zones in z order, the start angle, the worst squash/stretch, and for each body the stroke, peak velocity and peak acceleration. A sharp step in the profile is reported, since it gives pressure spikes. Use the peak velocity to choose \codeword{MAX_DT}.
@@ -288,6 +295,18 @@ The forces are pressure only, from the previous time step. Speed-proportional te
 The setup prints the load torque and power at the start speed. The crank angle and speed are stored in \codeword{<time>/uniform/crankState} at each write, so a restart continues from them. The log \codeword{postProcessing/crank/<start>/crank.dat} has the columns: time, crank angle (accumulated, deg), $\omega$, gas torque, load torque, electrical power, and the force and torque per body.
 
 \textbf{NOTE:} \codeword{endTime} is still \codeword{N_CYCLES/FREQ}. When the speed changes, the run covers about \codeword{N_CYCLES} cycles, not exactly. With \codeword{pimpleFoam} the crank drive only makes sense with \codeword{LOAD = speed} (the setup warns).
+
+\subsection{Remeshing}\label{sec:remesh}
+With \codeword{REMESH = auto} the cycle is split into segments. Each segment has its own mesh, made at the crank angle where the segment starts, and the mesh only squashes or stretches until a gap has changed \codeword{REMESH_DEFORMATION} times (one way). The setup walks the cycle from the start angle in \codeword{STEP_DEG} steps and starts a new segment at the last angle within the limit, so the segments are the same every cycle and each mesh is made once. It prints the segments and their worst squash/stretch, and checks the crown seal and \codeword{LOC_IN_MESH} at every meshing angle (\codeword{LOC_IN_MESH} must be in the gas at all of them).
+egin{itemize}
+    \item The case mesh is the first segment (\codeword{seg01}). The others are full cases in \codeword{meshes/seg02 ...} with the geometry moved to their start angle. \codeword{system/remeshSegments} lists the mesh names with their start and end angles.
+    \item \codeword{runScript} makes all meshes in the same job (snappy, topoSet, zone reordering and checkMesh for each), then loops: solve until the crank reaches the end of the segment, map the fields onto the next mesh with \codeword{mapFieldsPar}, restart. The crank motion solver stops the run itself (\codeword{stopAngle} in each \codeword{constant/dynamicMeshDict.seg*}); its last step lands exactly on the segment end. Prescribed motion runs as the crank drive with \codeword{LOAD = speed}.
+    \item The new mesh is written into the time directory of the map (\codeword{polyMesh} with \codeword{points0} and a \codeword{remeshSegment} marker), so the run stays one case and the post-processing works as before.
+    \item Mapping changes the gas mass slightly (about $2 	imes 10^{-4}$ in the test case). For \codeword{rhoPimpleFoam} the utility \codeword{remeshMassFix} (\codeword{foamLibs/remeshMassFix}, compiled by the run script) scales p and $ho$ back to the mass before the map, T is kept.
+    \item Surface fluxes cannot be mapped, so the restart rebuilds them from U. The first steps then start from \codeword{INIT_DT} and the adjustable time step ramps up again (needs \codeword{MAX_CO} above 0).
+    \item The motion dry run (\codeword{motionCheckScript}) only covers the first segment.
+\end{itemize}
+Not supported yet with remeshing: \codeword{FAN} baffles.
 
 \subsection{Decomposition and Cluster Scripts}
 \begin{lstlisting}

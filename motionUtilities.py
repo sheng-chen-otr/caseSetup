@@ -337,6 +337,40 @@ def deformationRatio(zones, startAngle, step):
     return worst, worstPair
 
 
+def segmentRatio(zones, angle0, angle1, step):
+    #worst squash/stretch of the gaps that change between angle0 (meshing angle) and angle1: max(g/g0, g0/g)
+    angles = np.append(np.arange(angle0, angle1, step), angle1)
+    worst, worstPair = 1.0, None
+    for lower, upper, gap in zoneGaps(zones, step):
+        if lower.body is upper.body:
+            continue
+        g = zoneZ(upper, angles) - zoneZ(lower, angles)
+        ratio = float(np.maximum(g/g[0], g[0]/g).max())
+        if ratio > worst:
+            worst, worstPair = ratio, (lower.name, upper.name)
+    return worst, worstPair
+
+
+def remeshAngles(zones, startAngle, step, limit):
+    #remeshing: segments of the cycle, each meshed at its start angle and moved until any gap has been
+    #squashed or stretched limit times. returns [(start, end)] in deg from startAngle to startAngle + 360
+    segments = []
+    angle0, cycleEnd = startAngle, startAngle + 360.0
+    while angle0 < cycleEnd - 1e-9:
+        angle1 = angle0
+        while angle1 < cycleEnd - 1e-9:
+            nxt = min(angle1 + step, cycleEnd)
+            if segmentRatio(zones, angle0, nxt, step)[0] > limit:
+                break
+            angle1 = nxt
+        if angle1 == angle0:
+            sys.exit('ERROR! Remeshing: a gap is squashed or stretched more than REMESH_DEFORMATION %g within one '
+                     'STEP_DEG step after %.1f deg: raise the limit or lower STEP_DEG' % (limit, angle0))
+        segments.append((float(angle0), float(angle1)))
+        angle0 = angle1
+    return segments
+
+
 def autoStartAngle(zones, step):
     #start (= meshing) angle that minimises the worst squash/stretch ratio
     best = (None, None)
