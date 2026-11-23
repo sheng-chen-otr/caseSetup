@@ -785,8 +785,22 @@ def getPorous(geomDict, fullCaseSetupDict):
                 sys.exit('ERROR! [%s] wireMesh needs 0 < POROSITY < 1, WIRE_DIA > 0 and REF_VELOCITY > 0!' % (name))
             d, f, ha, re = wireMeshCoeffs(porosity, wireDia, refVelocity, gas)
             zone['d'], zone['f'], zone['wireHA'] = [d]*3, [f]*3, ha
+            #COEFFS local (default): the Re-dependent Forchheimer term and h*a per cell and step from the velocity
+            #relative to the matrix (oscillating flow: h*a varies ~7x over a cycle), ref: constants at REF_VELOCITY
+            coeffs = setup.get('COEFFS', ['local'])[0].lower()
+            if coeffs not in ('local', 'ref'):
+                sys.exit('ERROR! [%s] COEFFS must be local or ref!' % (name))
+            zone['wire'] = {'eps': porosity, 'dw': wireDia, 'reRef': re, 'local': coeffs == 'local'}
             print('\t\t%s: wire mesh porosity %g, wire %g m, Re %.3g at %g m/s: d %.4g 1/m2, f %.4g 1/m, h*a %.4g W/m3/K'
                   % (name, porosity, wireDia, re, refVelocity, d, f, ha))
+            if coeffs == 'local':
+                print('\t\t\tf and h*a per cell from the local velocity relative to the matrix (COEFFS local):')
+                for u in (0.1, 1.0, 5.0, 20.0):
+                    dU, fU, haU, reU = wireMeshCoeffs(porosity, wireDia, u, gas)
+                    print('\t\t\t\t%5g m/s: Re %8.3g  f %.4g 1/m  h*a %.4g W/m3/K  dp/L %.4g Pa/m'
+                          % (u, reU, fU, haU, gas['MU']*dU*u + 0.5*gas['RHO']*fU*u*u))
+            else:
+                print('\t\t\tf and h*a fixed at REF_VELOCITY (COEFFS ref)')
         elif resistance == 'fit':
             data = number('DP_DATA', len([v for v in setup.get('DP_DATA', ['']) if v != '']))
             data = data if isinstance(data, list) else [data]
@@ -863,6 +877,8 @@ def getPorous(geomDict, fullCaseSetupDict):
                 if 'wireHA' not in zone:
                     sys.exit('ERROR! [%s] HA auto needs RESISTANCE wireMesh, else give HA (W/m3/K)' % (name))
                 zone['ha'] = zone['wireHA']
+                #per cell at run time with COEFFS local (zone['ha'] only for the printout)
+                zone['haLocal'] = zone['wire']['local']
             else:
                 zone['ha'] = number('HA')
             #SOLID_T: one value = uniform, two = linear from the -z to the +z end of the zone (start values only)
@@ -883,32 +899,66 @@ def getPorous(geomDict, fullCaseSetupDict):
                 print('\t\t%s: heat %s, h*a per cell (Gedeon-Wood random fibres), matrix T %s%s'
                       % (name, heat, matrixT, ', cs %g J/kg/K' % (zone['fiber']['cs']) if heat == 'solved' else ' (fixed)'))
             else:
-                print('\t\t%s: heat %s, h*a %.4g W/m3/K, matrix T %s%s'
-                      % (name, heat, zone['ha'], matrixT,
+                print('\t\t%s: heat %s, h*a %s, matrix T %s%s'
+                      % (name, heat, 'per cell (Gedeon-Wood screens, local velocity)' if zone.get('haLocal')
+                         else '%.4g W/m3/K' % (zone['ha']), matrixT,
                          ', (1-eps)*rhos*cs %.4g J/m3/K' % (zone['Cs']) if heat == 'solved' else ' (fixed)'))
         porous.append(zone)
     return porous
 
 
-def porousHeatSource(zone, cv):
+def porousHeatSource(zone, cv, props=None):
     #scalarCodedSource on e: gas-matrix heat exchange, gas and matrix implicit together (backward Euler), so the heat
     #the gas gets each step is exactly the heat the matrix gives (Cs 0: fixed matrix temperature):
     #  Cs*(Ts1 - Ts0)/dt = h*a*(T1 - Ts1)  ->  gas source h*a*(Ts1 - T1) = hEff*(Ts0 - T1), hEff = h*a*Cs/(Cs + h*a*dt)
     #addSup puts hEff*(Ts0 - T1) into the e equation (implicit in e, cv constant); correct (after the e solve) sets
     #Qs = hEff*(Ts0 - T1) (W/m3 into the gas) and Ts1 from the solved e; Ts0 moves on once per time step
     #Ts_<zone> is written (restarts), TsOld/Qs/eLin/TLin_<zone> are working fields
+    #wire mesh with COEFFS local and HA auto: h*a per cell and step from the velocity relative to the matrix
+    #(Gedeon-Wood screens, Nu = (1 + 0.99 (Re Pr)^0.66) eps^1.79), hEff_<zone> keeps it for the correct hook
     name = zone['name'].replace('-', '_')
-    constants = '\n'.join([
-        '            const fvMesh& m = mesh_;',
-        '            const scalar ha = %.9g;' % (zone['ha']),
-        '            const scalar Cv = %.9g;' % (cv),
-        '            const scalar Cs = %.9g;' % (zone['Cs']),
-        '            const scalar dt = m.time().deltaTValue();',
-        '            const scalar hEff = (Cs > 0 ? ha*Cs/(Cs + ha*dt) : ha);',
-        '            const word zoneName("%s");' % (zone['name']),
-        '            const labelList& zoneCells = this->cells();'])
+    local = bool(zone.get('haLocal'))
+    base = ['            const fvMesh& m = mesh_;',
+            '            const scalar Cv = %.9g;' % (cv),
+            '            const scalar Cs = %.9g;' % (zone['Cs']),
+            '            const scalar dt = m.time().deltaTValue();',
+            '            const word zoneName("%s");' % (zone['name']),
+            '            const labelList& zoneCells = this->cells();']
+    fields = ['Ts', 'TsOld', 'Qs', 'eLin', 'TLin'] + (['hEff'] if local else [])
     lookups = '\n'.join(['            volScalarField& %s = const_cast<volScalarField&>(m.lookupObject<volScalarField>'
-                         '("%s_" + zoneName));' % (f, f) for f in ('Ts', 'TsOld', 'Qs', 'eLin', 'TLin')])
+                         '("%s_" + zoneName));' % (f, f) for f in fields])
+    if local:
+        gasLines, gasCell = gasCellCode(props, False, 0.0)
+        wireConsts, wireCell = wireCellCode(zone)
+        constants = '\n'.join(base)
+        #ReRef is only used by the drag scaling
+        addConstants = '\n'.join(base + gasLines + [w for w in wireConsts if 'ReRef' not in w] + [
+            '            const scalar dwW = %.9g;' % (zone['wire']['dw']),
+            '            const scalar Pr = %.9g;' % (props['PR']),
+            '            const scalar cpGas = %.9g;' % (props['CP'])])
+        hEffInit = '''
+                (new volScalarField(IOobject("hEff_" + zoneName, now, m), m,
+                    dimensionedScalar(dimPower/dimVolume/dimTemperature, Zero)))->store();'''
+        kLine = ''
+        cellCode = '\n'.join([
+            '                const vector Ur(Ugas[c] - (Umat ? (*Umat)[c] : vector(Zero)));'] + gasCell + [wireCell[0],
+            '                const scalar kC = muC*cpGas/Pr;',
+            '                const scalar haC = (1 + 0.99*pow(ReC*Pr, 0.66))*pow(epsW, 1.79)*kC/dhW*4*(1 - epsW)/dwW;',
+            '                hEff[c] = (Cs > 0 ? haC*Cs/(Cs + haC*dt) : haC);',
+            '                const scalar k = hEff[c]/Cv;']) + '\n'
+        velocity = '''
+            const volVectorField& Ugas = m.lookupObject<volVectorField>("U");
+            const volVectorField* Umat = m.findObject<volVectorField>("Umat_" + zoneName);'''
+        hE = 'hEff[c]'
+    else:
+        constants = '\n'.join(base + ['            const scalar ha = %.9g;' % (zone['ha']),
+                                      '            const scalar hEff = (Cs > 0 ? ha*Cs/(Cs + ha*dt) : ha);'])
+        addConstants = constants
+        hEffInit = ''
+        kLine = '\n            const scalar k = hEff/Cv;'
+        cellCode = ''
+        velocity = ''
+        hE = 'hEff'
     addSup = '''        codeAddSupRho
         #{
 %s
@@ -952,9 +1002,9 @@ def porousHeatSource(zone, cv):
                 (new volScalarField(IOobject("eLin_" + zoneName, now, m), m,
                     dimensionedScalar(dimEnergy/dimMass, Zero)))->store();
                 (new volScalarField(IOobject("TLin_" + zoneName, now, m), m,
-                    dimensionedScalar(dimTemperature, Zero)))->store();
+                    dimensionedScalar(dimTemperature, Zero)))->store();%s
             }
-%s
+%s%s
             //new time step: the matrix temperature at the end of the last step is the old level
             static label lastIndex = -1;
             if (m.time().timeIndex() != lastIndex)
@@ -968,17 +1018,16 @@ def porousHeatSource(zone, cv):
             const scalarField& V = m.V();
             const scalarField& e = eqn.psi();
             scalarField& diag = eqn.diag();
-            scalarField& source = eqn.source();
-            const scalar k = hEff/Cv;
+            scalarField& source = eqn.source();%s
             forAll(zoneCells, i)
             {
                 const label c = zoneCells[i];
-                eLin[c] = e[c];
+%s                eLin[c] = e[c];
                 TLin[c] = T[c];
                 diag[c] -= k*V[c];
-                source[c] -= (hEff*(TsOld[c] - T[c]) + k*e[c])*V[c];
+                source[c] -= (%s*(TsOld[c] - T[c]) + k*e[c])*V[c];
             }
-        #};''' % (constants, zone['Ts'][0], zone['Ts'][1], lookups)
+        #};''' % (addConstants, zone['Ts'][0], zone['Ts'][1], hEffInit, lookups, velocity, kLine, cellCode, hE)
     correct = '''        codeCorrect
         #{
 %s
@@ -992,13 +1041,13 @@ def porousHeatSource(zone, cv):
             {
                 const label c = zoneCells[i];
                 const scalar T1 = TLin[c] + (fld[c] - eLin[c])/Cv;
-                Qs[c] = hEff*(TsOld[c] - T1);
+                Qs[c] = %s*(TsOld[c] - T1);
                 if (Cs > 0)
                 {
                     Ts[c] = TsOld[c] - Qs[c]*dt/Cs;
                 }
             }
-        #};''' % (constants, lookups)
+        #};''' % (constants, lookups, hE)
     lines = ['%sHeat' % (name), '{', '    type            scalarCodedSource;', '    name            %sHeat;' % (name),
              '    scalarCodedSourceCoeffs', '    {', '        selectionMode   cellZone;',
              '        cellZone        %s;' % (zone['name']), '        fields          (e);', '',
@@ -1034,29 +1083,56 @@ def porousTensors(zone):
     return tensors
 
 
+def gasCellCode(props, incompressible, nu):
+    #C++ lines: gas density rhoC and viscosity muC of cell c (incompressible: 1 and the kinematic viscosity)
+    if incompressible:
+        return [], ['                const scalar rhoC = 1;', '                const scalar muC = %.9g;' % (nu)]
+    lines = ['            const volScalarField& rhoF = m.lookupObject<volScalarField>("rho");']
+    cell = ['                const scalar rhoC = rhoF[c];']
+    if props['TRANSPORT'] == 'sutherland':
+        lines.append('            const volScalarField& TF = m.lookupObject<volScalarField>("T");')
+        cell.append('                const scalar muC = %.9g*sqrt(TF[c])/(1 + %.9g/TF[c]);' % (props['AS'], props['TS']))
+    else:
+        cell.append('                const scalar muC = %.9g;' % (props['MU']))
+    return lines, cell
+
+
+def wireCellCode(zone):
+    #C++ lines for a wire-mesh zone with COEFFS local: Reynolds number of cell c from |Ur| (pore velocity |Ur|/eps,
+    #hydraulic diameter dh), Gedeon-Wood Forchheimer scaling (Re/ReRef)^-0.103 of the REF_VELOCITY tensor Ft.
+    #Needs rhoC, muC, Ur in scope
+    wire = zone['wire']
+    dh = wire['eps']*wire['dw']/(1.0 - wire['eps'])
+    consts = ['            const scalar epsW = %.9g;' % (wire['eps']), '            const scalar dhW = %.9g;' % (dh),
+              '            const scalar ReRef = %.9g;' % (wire['reRef'])]
+    cell = ['                const scalar ReC = max(rhoC*mag(Ur)/epsW*dhW/muC, scalar(1e-6));',
+            '                const scalar fScale = pow(ReC/ReRef, -0.103);']
+    return consts, cell
+
+
 def porousDragCoeff(zone, props, incompressible, nu):
     #C++ lines: tensors Dt, Ft and the per-cell drag tensor C (force on the gas = -C & (U - Umat)) from rho, mu, |Ur|
+    #wire mesh with COEFFS local: Ft (taken at REF_VELOCITY) scaled per cell with the local Reynolds number
     dT, fT = porousTensors(zone)
     lines = ['            const tensor Dt(%s);' % (dT), '            const tensor Ft(%s);' % (fT)]
-    if incompressible:
-        cell = ['                const scalar rhoC = 1;', '                const scalar muC = %.9g;' % (nu)]
+    gasLines, cell = gasCellCode(props, incompressible, nu)
+    lines += gasLines
+    if zone.get('wire', {}).get('local'):
+        wireConsts, wireCell = wireCellCode(zone)
+        lines += wireConsts
+        cell += wireCell
+        cell.append('                const tensor C(muC*Dt + (0.5*rhoC*mag(Ur)*fScale)*Ft);')
     else:
-        lines.append('            const volScalarField& rhoF = m.lookupObject<volScalarField>("rho");')
-        cell = ['                const scalar rhoC = rhoF[c];']
-        if props['TRANSPORT'] == 'sutherland':
-            lines.append('            const volScalarField& TF = m.lookupObject<volScalarField>("T");')
-            cell.append('                const scalar muC = %.9g*sqrt(TF[c])/(1 + %.9g/TF[c]);' % (props['AS'], props['TS']))
-        else:
-            cell.append('                const scalar muC = %.9g;' % (props['MU']))
-    cell.append('                const tensor C(muC*Dt + (0.5*rhoC*mag(Ur))*Ft);')
+        cell.append('                const tensor C(muC*Dt + (0.5*rhoC*mag(Ur))*Ft);')
     return '\n'.join(lines), '\n'.join(cell)
 
 
-def porousDragSource(zone, props, incompressible, nu, rhoInf):
+def porousDragSource(zone, props, incompressible, nu, rhoInf, moving=True):
     #vectorCodedSource on U for a porous zone moving with a body (MOVES_WITH): Darcy-Forchheimer drag on the velocity
     #relative to the matrix (explicitPorositySource uses the absolute U), implicit part on the diagonal as ESI does.
     #Umat_<zone> = mean motion of the cell points over the step (the zone moves rigidly with the body),
     #porDrag_<zone> = force of the gas on the matrix (N/m3), added to the body force by the crank drive and logged
+    #static zones with per-cell coefficients (wire mesh, COEFFS local) use it too, with Umat_<zone> kept at zero
     name = zone['name'].replace('-', '_')
     constants, cell = porousDragCoeff(zone, props, incompressible, nu)
     head = '\n'.join([
@@ -1076,9 +1152,9 @@ def porousDragSource(zone, props, incompressible, nu, rhoInf):
                     dimensionedVector(dimForce/dimVolume, Zero)))->store();
             }
 %s
-            //new time step: matrix velocity from the motion of the cell points (rigid with the body)
+            //new time step: matrix velocity from the motion of the cell points (rigid with the body), static zone: zero
             static label lastIndex = -1;
-            if (m.time().timeIndex() != lastIndex)
+            if (%s && m.time().timeIndex() != lastIndex)
             {
                 lastIndex = m.time().timeIndex();
                 const scalar dt = m.time().deltaTValue();
@@ -1110,7 +1186,7 @@ def porousDragSource(zone, props, incompressible, nu, rhoInf):
                 diag[c] -= iso*V[c];
                 source[c] -= ((C & Umat[c]) - ((C - iso*I) & U[c]))*V[c];
             }
-        #};''' % (head, lookups.split('\n')[0], cell)
+        #};''' % (head, lookups.split('\n')[0], 'true' if moving else 'false', cell)
     correct = '''        codeCorrect
         #{
 %s
@@ -1717,10 +1793,15 @@ def writeFvOptionsInternal(porous, fullCaseSetupDict, porOwners=None):
                 entries.append(porousFiberHeatSource(zone, props, cv))
             coded = True
             continue
-        if moving:
-            entries.append(porousDragSource(zone, props, incompressible, nu, rhoInf))
-            print('\t\t%s: drag on the velocity relative to the matrix (moves with %s), force added to the body'
-                  % (zone['name'], porOwners[zone['name']].name))
+        local = zone.get('wire', {}).get('local', False)
+        if moving or local:
+            entries.append(porousDragSource(zone, props, incompressible, nu, rhoInf, moving))
+            if moving:
+                print('\t\t%s: drag on the velocity relative to the matrix (moves with %s), force added to the body'
+                      % (zone['name'], porOwners[zone['name']].name))
+            if local:
+                print('\t\t%s: wire-mesh Forchheimer term%s per cell from the local Reynolds number'
+                      % (zone['name'], ' and h*a' if zone.get('haLocal') and zone['heat'] != 'none' else ''))
             coded = True
         else:
             entries.append('\n'.join([
@@ -1736,10 +1817,10 @@ def writeFvOptionsInternal(porous, fullCaseSetupDict, porOwners=None):
                                                                               ' '.join('%g' % v for v in zone['e2'])),
                 '            }', '        }', '    }', '}']))
         if zone['heat'] != 'none':
-            entries.append(porousHeatSource(zone, cv))
+            entries.append(porousHeatSource(zone, cv, props))
             coded = True
         if dissipation:
-            entries.append(porousDragHeatSource(zone, props, moving))
+            entries.append(porousDragHeatSource(zone, props, moving or local))
             coded = True
     if dissipation:
         #ESI fvOption: -devRhoReff && grad(U) into the energy equation (he from the thermo), effective viscosity
@@ -1872,11 +1953,11 @@ def getRelaxation(fullCaseSetupDict):
     compressible = getFlow(fullCaseSetupDict) == 'compressible'
     if not steady:
         if all(relax[key] == 1 for key in relax):
-            print('		%d outer correctors, no under-relaxation' % (nOuter))
+            print('\t\t%d outer correctors, no under-relaxation' % (nOuter))
             return ''
         #p relaxed: the gas energy error per process is about the p lag left after the relaxed outer iterations
         if compressible and relax['RELAX_P'] < 1:
-            print('		WARNING: p relaxed in a transient compressible run: rho lags p in the relaxed outer iterations '
+            print('\t\tWARNING: p relaxed in a transient compressible run: rho lags p in the relaxed outer iterations '
                   'and the gas energy change (compression, heating) is off by about (1 - RELAX_P)^(N_OUTER_CORR - 1) '
                   '= %.1f %%; use RELAX_P auto (= 1), or more outer correctors' % (100*(1 - relax['RELAX_P'])**(nOuter - 1)))
     pName = 'p_rgh' if isBuoyant(fullCaseSetupDict) else 'p'
@@ -2752,7 +2833,7 @@ def clusterSettings(fullCaseSetupDict):
     compute = fullCaseSetupDict.get('GLOBAL_COMPUTE_SETUP', {})
     old = [key for key in CLUSTER_KEYS if key in compute]
     if old and 'CLUSTER_ENVIRONMENT' in fullCaseSetupDict:
-        print('		NOTE: %s set in GLOBAL_COMPUTE_SETUP (used); they belong in CLUSTER_ENVIRONMENT now' % (' '.join(old)))
+        print('\t\tNOTE: %s set in GLOBAL_COMPUTE_SETUP (used); they belong in CLUSTER_ENVIRONMENT now' % (' '.join(old)))
     settings.update(compute)
     return settings
 

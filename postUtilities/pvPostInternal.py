@@ -17,10 +17,12 @@ and limitations.
 """
 
 #makes images of an internal case from the foamToEnsight output, one image per written time per panel
-#panels are slices x variables and surface views x variables, set up like pvPost with pvPostInternalSetup
+#panels are slices x variables, surface views x variables, volume renderings (views x variables) and clipped
+#half volumes (clips x variables), set up like pvPost with pvPostInternalSetup
 #colour ranges are kept fixed over the run, slices can follow a moving body with FOLLOW
 #images go to postProcessing/images/<panel>, imagesToMovies.py makes the videos
 #usage (in the case directory): pvbatch --force-offscreen-rendering pvPostInternal.py [--every N] [--lastCycles N]
+#  [--panels slice,surface,volume,clip]
 
 import os
 import sys
@@ -46,7 +48,23 @@ def parseArgs(argv=None):
     parser.add_argument('--lastCycles', default=None, help='only the last N cycles, or all (overrides LAST_CYCLES)')
     parser.add_argument('--mesh', action='store_true',
                         help='mesh images of the motion dry run (EnSightMotion -> postProcessing/meshImages)')
+    parser.add_argument('--panels', default=None,
+                        help='panel types to make, e.g. volume,clip (overrides SLICE_IMG SURFACE_IMG VOLUME_IMG CLIP_IMG)')
     return parser.parse_args(argv)
+
+
+panelTypes = ('slice', 'surface', 'volume', 'clip')
+
+
+def getPanelTypes(mainSetup, panels=None):
+    #panel types switched on in PV_POST_MAIN (<TYPE>_IMG), or the --panels list
+    if panels:
+        chosen = [p.strip().lower() for p in panels.split(',') if p.strip()]
+        for p in chosen:
+            if p not in panelTypes:
+                sys.exit('ERROR! --panels %s unknown, use %s' % (p, ','.join(panelTypes)))
+        return chosen
+    return [p for p in panelTypes if mainSetup.get('%s_IMG' % (p.upper()), 'False').lower() == 'true']
 
 
 #----- settings
@@ -109,6 +127,30 @@ def getSlices(sliceSetup):
         slices.append({'name': name, 'normal': normal, 'origin': origin,
                        'follow': None if body.lower() == 'none' else body})
     return slices
+
+
+def getClips(clipSetup):
+    #reading the clip lists (NAMES NORMALS ORIGINS), the normal points to the removed half (the camera side)
+    names = clipSetup['NAMES'].split()
+    normals = [n.upper() for n in clipSetup['NORMALS'].split()]
+    origins = clipSetup['ORIGINS'].split()
+    if not len(names) == len(normals) == len(origins):
+        sys.exit('ERROR! pvPostInternalSetup [CLIP]: NAMES, NORMALS and ORIGINS need the same number of entries!')
+    clips = []
+    for name, normal, origin in zip(names, normals, origins):
+        sign = -1.0 if normal.startswith('-') else 1.0
+        axis = normal.lstrip('+-')
+        if axis not in normalVectors:
+            sys.exit('ERROR! pvPostInternalSetup [CLIP] %s: NORMAL must be X, Y, Z, -X, -Y or -Z!' % (name))
+        if origin.lower() not in ('center', 'loc'):
+            try:
+                origin = [float(v) for v in origin.split(',')]
+            except ValueError:
+                origin = []
+            if len(origin) != 3:
+                sys.exit('ERROR! pvPostInternalSetup [CLIP] %s: ORIGIN must be center, loc or x,y,z!' % (name))
+        clips.append({'name': name, 'normal': [sign*v for v in normalVectors[axis]], 'origin': origin})
+    return clips
 
 
 def sliceOrigin(origin, bounds, locInMesh):
@@ -234,6 +276,53 @@ def surfaceCamera(view, bounds, size):
     radius = 0.5*float(np.linalg.norm(lengths))
     return {'position': list(centre + 10.0*radius*direction), 'focal': list(centre), 'up': up,
             'scale': 1.1*radius*max(1.0, size[1]/size[0])}
+
+
+def fittedCamera(direction, up, bounds, size, barSpace=0.12, margin=1.08):
+    #parallel camera from a direction, fitted to the mesh box corners as seen on the screen
+    #barSpace leaves room for the colour bar at the bottom
+    direction = np.array(direction, dtype=float)
+    direction /= np.linalg.norm(direction)
+    upVec = np.array(up, dtype=float)
+    upVec -= np.dot(upVec, direction)*direction
+    upVec /= np.linalg.norm(upVec)
+    right = np.cross(upVec, direction)
+    corners = np.array([[x, y, z] for x in bounds[0:2] for y in bounds[2:4] for z in bounds[4:6]], dtype=float)
+    u, v = corners.dot(right), corners.dot(upVec)
+    halfWidth, halfHeight = 0.5*(u.max() - u.min()), 0.5*(v.max() - v.min())
+    scale = max(halfHeight*(1.0 + 2.0*barSpace), halfWidth*size[1]/size[0])*margin
+    centre = corners.mean(axis=0) - barSpace*halfHeight*2.0*upVec
+    radius = float(np.linalg.norm(corners.max(axis=0) - corners.min(axis=0)))
+    return {'position': list(centre + 10.0*radius*direction), 'focal': list(centre), 'up': list(upVec), 'scale': scale}
+
+
+def clipCamera(normal, bounds, size):
+    #looking at the cut face from the removed side, tilted so the depth of the half volume shows
+    normal = np.array(normal, dtype=float)
+    direction = normal + 0.6*(np.ones(3) - np.abs(normal))
+    up = [0, 1, 0] if abs(normal[2]) > 0.5 else [0, 0, 1]
+    return fittedCamera(direction, up, bounds, size)
+
+
+def volumeCamera(view, bounds, size):
+    #the surface views (Iso, Top, ...) fitted to the mesh box
+    directions = {'Iso': [1, -1, 1], 'Top': [0, 0, 1], 'Bottom': [0, 0, -1], 'Front': [0, -1, 0],
+                  'Back': [0, 1, 0], 'Left': [-1, 0, 0], 'Right': [1, 0, 0]}
+    if view not in directions:
+        sys.exit('ERROR! pvPostInternalSetup [VOLUME] VIEWS: %s unknown, use %s' % (view, list(directions.keys())))
+    return fittedCamera(directions[view], [0, 1, 0] if view in ('Top', 'Bottom') else [0, 0, 1], bounds, size)
+
+
+def resampleDims(bounds, points):
+    #regular grid for the volume rendering, about the same spacing along every axis
+    lengths = np.array([bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4]], dtype=float)
+    spacing = lengths.max()/max(points - 1, 1)
+    return [max(int(round(l/spacing)) + 1, 10) for l in lengths]
+
+
+def barLabels(lo, hi, n=5):
+    #evenly spaced colour bar labels (the automatic ticks overlap on long ranges)
+    return [float(v) for v in np.linspace(lo, hi, n)]
 
 
 #----- paraview
@@ -364,6 +453,7 @@ def main(argv=None):
     every = args.every if args.every is not None else int(mainSetup['EVERY'])
     lastCycles = args.lastCycles if args.lastCycles is not None else mainSetup['LAST_CYCLES']
     scalarBar = mainSetup['CREATE_SCALAR_BAR'].lower() == 'true'
+    kinds = getPanelTypes(mainSetup, args.panels)
 
     import paraview.simple as pvs
     pvs._DisableFirstRenderCameraReset()
@@ -396,7 +486,7 @@ def main(argv=None):
 
     #building the panels
     panels = []
-    if mainSetup['SLICE_IMG'].lower() == 'true':
+    if 'slice' in kinds:
         slices = getSlices(setup['SLICE'])
         sliceVars = setup['SLICE']['VARIABLES'].split()
         for s in slices:
@@ -417,9 +507,9 @@ def main(argv=None):
                     print('\t\t%s: field not in the case, skipping' % (variable))
                     continue
                 panels.append({'name': '%s_%s' % (s['name'], variable), 'source': cut, 'variable': variable,
-                               'spec': varDict['sliceVariables'][variable], 'camera': camera,
+                               'spec': varDict['sliceVariables'][variable], 'camera': camera, 'kind': 'slice',
                                'follow': s['follow'], 'origin': origin, 'label': s['name']})
-    if mainSetup['SURFACE_IMG'].lower() == 'true':
+    if 'surface' in kinds:
         keywords = setup['SURFACE']['PATCHES'].split()
         selectors = ['/Root/%s' % (b) for b in blocks
                      if b != 'internalMesh' and any(k.replace('-', '').lower() in b.lower() for k in keywords)]
@@ -439,10 +529,51 @@ def main(argv=None):
                         print('\t\t%s: field not in the case, skipping' % (variable))
                         continue
                     panels.append({'name': 'surface%s_%s' % (view, variable), 'source': surface,
-                                   'variable': variable, 'spec': varDict['surfaceVariables'][variable],
+                                   'variable': variable, 'spec': varDict['surfaceVariables'][variable], 'kind': 'surface',
                                    'camera': camera, 'follow': None, 'origin': None, 'label': 'surface %s' % (view)})
+    #context for the volume renderings: the bodies (CONTEXT_PATCHES) in light grey, the mesh box outline with OUTLINE
+    context = None
+    if 'volume' in kinds:
+        keywords = setup['VOLUME'].get('CONTEXT_PATCHES', '').split()
+        selectors = ['/Root/%s' % (b) for b in blocks
+                     if b != 'internalMesh' and any(k.replace('-', '').lower() in b.lower() for k in keywords)]
+        if selectors:
+            context = pvs.ExtractBlock(Input=reader)
+            context.Selectors = selectors
+        #volume rendering needs a regular grid (the unstructured mapper skips snappy's polyhedra): the gas is
+        #resampled to RESAMPLE points along the longest box side, points outside the gas are 0 (clear in the ramps)
+        dims = resampleDims(bounds, int(setup['VOLUME'].get('RESAMPLE', '250')))
+        print('\t\tvolume rendering on a %d x %d x %d grid' % tuple(dims))
+        grid = pvs.ResampleToImage(Input=volume)
+        grid.UseInputBounds = 1
+        grid.SamplingDimensions = dims
+        for view in setup['VOLUME']['VIEWS'].split():
+            camera = volumeCamera(view, bounds, size)
+            for variable in setup['VOLUME']['VARIABLES'].split():
+                if not volumeVariable(variable, varDict, fields):
+                    continue
+                panels.append({'name': 'volume%s_%s' % (view, variable), 'source': grid, 'variable': variable,
+                               'spec': varDict['sliceVariables'][variable], 'camera': camera, 'kind': 'volume',
+                               'follow': None, 'origin': None, 'label': 'volume %s' % (view)})
+    if 'clip' in kinds:
+        for c in getClips(setup['CLIP']):
+            origin = sliceOrigin(c['origin'], bounds, locInMesh)
+            half = pvs.Clip(Input=volume)
+            half.ClipType = 'Plane'
+            half.ClipType.Origin = origin
+            half.ClipType.Normal = c['normal']
+            #keeping the half behind the plane (away from the normal and the camera)
+            half.Invert = 1
+            half.Crinkleclip = 0
+            camera = clipCamera(c['normal'], bounds, size)
+            for variable in setup['CLIP']['VARIABLES'].split():
+                if not volumeVariable(variable, varDict, fields):
+                    continue
+                panels.append({'name': '%s_%s' % (c['name'], variable), 'source': half, 'variable': variable,
+                               'spec': varDict['sliceVariables'][variable], 'camera': camera, 'kind': 'clip',
+                               'follow': None, 'origin': origin, 'label': c['name']})
     if not panels:
-        sys.exit('ERROR! nothing to plot: check SLICE_IMG / SURFACE_IMG and the variables')
+        sys.exit('ERROR! nothing to plot: check SLICE_IMG / SURFACE_IMG / VOLUME_IMG / CLIP_IMG and the variables')
 
     #colour ranges fixed over the selected times, slices use the whole volume so every slice has the same range
     print('\n\tColour ranges over the run...')
@@ -454,7 +585,7 @@ def main(argv=None):
         calc.ResultArrayName = panel['variable']
         calc.Function = str(panel['spec']['equation'])
         panel['calc'] = calc
-        panel['rangeKey'] = (panel['variable'], 'volume' if panel['origin'] is not None else 'surface')
+        panel['rangeKey'] = (panel['variable'], 'surface' if panel['kind'] == 'surface' else 'volume')
         if panel['rangeKey'] not in rangeCalcs:
             calc = pvs.Calculator(Input=panel['source'] if panel['rangeKey'][1] == 'surface' else volume)
             calc.AttributeType = 'Point Data'
@@ -503,13 +634,29 @@ def main(argv=None):
         view.CameraViewUp = panel['camera']['up']
         view.CameraParallelScale = panel['camera']['scale']
         display = pvs.Show(panel['calc'], view)
-        display.Representation = 'Surface'
+        display.Representation = 'Volume' if panel['kind'] == 'volume' else 'Surface'
         display.UseSeparateColorMap = 1
         pvs.ColorBy(display, ('POINTS', panel['variable']), separate=True)
         lut = display.LookupTable
         lut.ApplyPreset(panel['spec']['color'], True)
         lut.AutomaticRescaleRangeMode = 'Never'
         lut.RescaleTransferFunction(*panel['range'])
+        panel['pwf'] = None
+        if panel['kind'] == 'volume':
+            panel['pwf'] = volumeOpacity(pvs, display, panel, setup['VOLUME'], bounds)
+            if context is not None:
+                contextDisplay = pvs.Show(context, view)
+                contextDisplay.ColorArrayName = ['POINTS', '']
+                contextDisplay.AmbientColor = [0.6, 0.6, 0.6]
+                contextDisplay.DiffuseColor = [0.6, 0.6, 0.6]
+                contextDisplay.Opacity = float(setup['VOLUME'].get('CONTEXT_OPACITY', '0.15'))
+            #mesh box outline only on request (OUTLINE = True)
+            if setup['VOLUME'].get('OUTLINE', 'False').lower() == 'true':
+                outline = pvs.Show(volume, view)
+                outline.SetRepresentationType('Outline')
+                outline.ColorArrayName = ['POINTS', '']
+                outline.AmbientColor = [0.3, 0.3, 0.3]
+                outline.DiffuseColor = [0.3, 0.3, 0.3]
         display.SetScalarBarVisibility(view, scalarBar)
         if scalarBar:
             bar = pvs.GetScalarBar(lut, view)
@@ -520,6 +667,9 @@ def main(argv=None):
             bar.TitleFontSize = 22
             bar.LabelFontSize = 20
             bar.AutomaticLabelFormat = 0
+            bar.UseCustomLabels = 1
+            bar.CustomLabels = barLabels(*panel['range'])
+            bar.AddRangeLabels = 0
             bar.LabelFormat = '%-#6.4g'
             bar.RangeLabelFormat = '%-#6.4g'
             bar.Orientation = 'Horizontal'
@@ -547,6 +697,8 @@ def main(argv=None):
                 origin[2] += motion.dz(panel['follow'], t)
                 panel['source'].SliceType.Origin = origin
             panel['lut'].RescaleTransferFunction(*panel['range'])
+            if panel['pwf'] is not None:
+                panel['pwf'].Points = panel['pwfPoints']
             panel['view'].ViewTime = t
             panel['title'].Text = '%s   %s   %s   %s' % (caseName, panel['label'], panel['variable'], stamp)
             fileName = os.path.join('postProcessing', 'images', panel['name'],
@@ -554,6 +706,55 @@ def main(argv=None):
             pvs.SaveScreenshot(fileName, panel['view'], ImageResolution=size)
         print('\t\t%d/%d  %s' % (i + 1, len(times), stamp))
     print('\n\tImages in postProcessing/images (%d panels), total time %.1f s' % (len(panels), time.time() - begin))
+
+
+def volumeVariable(variable, varDict, fields):
+    #volume and clip panels use the slice variables (volume fields)
+    if variable not in varDict['sliceVariables']:
+        print('\t\t%s is not in the slice variable dict, skipping' % (variable))
+        return False
+    if not neededFields(varDict['sliceVariables'][variable]['equation'], fields):
+        print('\t\t%s: field not in the case, skipping' % (variable))
+        return False
+    return True
+
+
+def opacityPoints(lo, hi, ramp, opacity, symmetric=False):
+    #opacity transfer function points (value, opacity, midpoint, sharpness)
+    #rising: clear at the low end, opaque at the high end (hot gas, fast flow), falling: the other way,
+    #ends: clear in the middle, opaque at both ends (signed variables), auto: ends for symmetric ranges, else rising
+    if ramp == 'auto':
+        ramp = 'ends' if symmetric else 'rising'
+    mid = 0.5*(lo + hi)
+    if ramp == 'rising':
+        return [lo, 0.0, 0.5, 0.0, hi, opacity, 0.5, 0.0]
+    if ramp == 'falling':
+        return [lo, opacity, 0.5, 0.0, hi, 0.0, 0.5, 0.0]
+    if ramp == 'ends':
+        return [lo, opacity, 0.5, 0.0, mid, 0.0, 0.5, 0.0, hi, opacity, 0.5, 0.0]
+    sys.exit('ERROR! pvPostInternalSetup [VOLUME] OPACITY_RAMP must be auto, rising, falling or ends!')
+
+
+def volumeOpacity(pvs, display, panel, volumeSetup, bounds):
+    #opacity of the volume rendering: ramp over the fixed colour range, unit distance from the mesh box
+    #(auto = 0.05 x the shortest box side, so thin gas spaces still show; a larger UNIT_DISTANCE is more transparent)
+    ramp = volumeSetup.get('OPACITY_RAMP', 'auto').lower()
+    opacity = float(volumeSetup.get('OPACITY', '0.8'))
+    unit = volumeSetup.get('UNIT_DISTANCE', 'auto')
+    shortest = min(bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4])
+    display.ScalarOpacityUnitDistance = 0.05*shortest if unit.lower() == 'auto' else float(unit)
+    try:
+        pwf = display.ScalarOpacityFunction
+    except AttributeError:
+        pwf = None
+    if pwf is None:
+        pwf = pvs.GetOpacityTransferFunction(panel['variable'], display, separate=True)
+        display.ScalarOpacityFunction = pwf
+    lo, hi = panel['range']
+    panel['pwfPoints'] = opacityPoints(lo, hi, ramp, opacity, panel['spec']['range'] == 'symmetric')
+    pwf.Points = panel['pwfPoints']
+    pwf.AllowDuplicateScalars = 1
+    return pwf
 
 
 def getBlocks(source):

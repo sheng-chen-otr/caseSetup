@@ -359,7 +359,7 @@ Not supported yet with remeshing: \codeword{FAN} baffles.
     \item \codeword{ACCOUNT}, \codeword{MODULES}, \codeword{PARTITION} - Slurm account, environment modules and partition. Blank drops the line (clusters without accounts or modules, where OpenFOAM comes from the shell that submits).
     \item \codeword{POST_MODULES}, \codeword{POST_MEM} - modules and memory of the post job. The modules must provide \codeword{python3} with numpy, \codeword{pvbatch} and \codeword{ffmpeg}. \codeword{POST_MEM} blank: no memory request (nodes without a memory size in the Slurm configuration reject any \codeword{--mem}).
     \item \codeword{POST_ENV} - a Python virtual environment folder that \codeword{postScript} activates (blank: none). \codeword{POST_CONFIG} - the folder with the gsheet and Drive settings (blank: \codeword{~/.config/caseSetup}); on clusters whose compute nodes do not share the home directory it has to be on a shared disk.
-    \item \codeword{PVBATCH} - the pvbatch command (a full path for a local ParaView install).
+    \item \codeword{PVBATCH} - the pvbatch command (a full path for a local ParaView install; without a display it must be an offscreen build, e.g. OSMesa or EGL).
     \item \codeword{GSHEET} - \codeword{True}: \codeword{postScript} pushes the summary to the database sheet (needs \codeword{gspread} and the sheet settings, see Section \ref{sec:internalPost}). \codeword{COPY_BACK} - \codeword{True}: \codeword{postScript} copies the run data to Google Drive.
 \end{itemize}
 The scripts set \codeword{numberOfSubdomains} (and the hierarchical split) every time they run, so the same case can be run on the cluster and locally.
@@ -425,6 +425,7 @@ A closed \codeword{POR-<name>.stl} marks a porous region: the cells inside it be
     POROSITY = 0.9
     WIRE_DIA = 1e-4
     REF_VELOCITY = 1
+    COEFFS = local
     DP_DATA =
     DP_LENGTH = 0.1
     MOVES_WITH = none
@@ -435,7 +436,7 @@ A closed \codeword{POR-<name>.stl} marks a porous region: the cells inside it be
     SOLID_CP = 500
 \end{lstlisting}
 \begin{itemize}
-    \item \codeword{RESISTANCE} - \codeword{coeffs}: \codeword{D} (1/m$^2$) and \codeword{F} (1/m) along the directions \codeword{E1}, \codeword{E2} and their cross product. \codeword{wireMesh}: woven screens (Gedeon--Wood), from \codeword{POROSITY} and \codeword{WIRE_DIA}; the Reynolds-number dependent part is taken at \codeword{REF_VELOCITY} (superficial, m/s). \codeword{fit}: least-squares fit of \codeword{DP_DATA} (pairs of superficial velocity in m/s and pressure drop in Pa) measured over \codeword{DP_LENGTH} (m). The setup prints the resulting D and F.
+    \item \codeword{RESISTANCE} - \codeword{coeffs}: \codeword{D} (1/m$^2$) and \codeword{F} (1/m) along the directions \codeword{E1}, \codeword{E2} and their cross product. \codeword{wireMesh}: woven screens (Gedeon--Wood), from \codeword{POROSITY} and \codeword{WIRE_DIA}. \codeword{COEFFS = local} (default): the Reynolds-number dependent parts (the inertial drag and, with \codeword{HA = auto}, the heat transfer) are worked out in every cell and time step from the local gas velocity relative to the matrix; \codeword{REF_VELOCITY} (superficial, m/s) then only sets the values the setup prints. \codeword{COEFFS = ref}: constants taken at \codeword{REF_VELOCITY} for the whole run. \codeword{fit}: least-squares fit of \codeword{DP_DATA} (pairs of superficial velocity in m/s and pressure drop in Pa) measured over \codeword{DP_LENGTH} (m). The setup prints the resulting D and F.
     \item \codeword{HEAT} - \codeword{none}; \codeword{fixed}: the matrix stays at \codeword{SOLID_T} (heater, cooler, heat exchanger core); \codeword{solved}: the matrix temperature changes with its heat capacity (1$-\varepsilon$)$\rho_s c_s$ (\codeword{POROSITY}, \codeword{SOLID_RHO}, \codeword{SOLID_CP}), starting at \codeword{SOLID_T} (regenerator, transient solvers only). \codeword{SOLID_T} takes one value (uniform) or two: the matrix then starts linear from the first value at the $-z$ end of the zone to the second at the $+z$ end (e.g. \codeword{SOLID_T = 600 300} with the hot end at $-z$). A linear start shortens the many cycles a regenerator matrix needs to warm up from a uniform temperature. It is used only when the run has no saved matrix temperature, so restarts keep the current one. The gas receives $h a (T_s - T)$ per unit volume, with \codeword{HA} in W/m$^3$K or \codeword{auto} from the wire-mesh correlation. The term is linearised in the energy, so large values stay stable, and the matrix temperature is updated once per time step with the exact solution of $C_s\,dT_s/dt = h a (T - T_s)$. It is written as the field \codeword{Ts_<zone>} and restarts from it. Compressible runs only.
     \item \codeword{MOVES_WITH} - name of a MOVE body: the porous solid is moved to the start angle with that body before meshing, and its cells then move with the mesh (regenerator in the displacer). The drag then acts on the gas velocity relative to the matrix (below), and the drag force is part of the force on the body.
 \end{itemize}
@@ -494,7 +495,7 @@ The inertial term:
 2.91\,Re^{-0.103}\,\frac{\rho u^2}{2 d_h} = \frac{1}{2}\rho\, \frac{2.91\, Re^{-0.103}}{\varepsilon^2 d_h}\, U^2
 \quad\Rightarrow\quad F = \frac{2.91\, Re_{ref}^{-0.103}}{\varepsilon^2 d_h} .
 \end{equation}
-$D$ and $F$ must be constants, so the weak Reynolds-number dependence of the second term is frozen at \codeword{REF_VELOCITY} ($Re_{ref}$ evaluated with $U = $ \codeword{REF_VELOCITY}). Away from it the inertial part is off by the factor $(U/U_{ref})^{-0.103}$: about 7\,\% at twice or half the reference velocity, so set \codeword{REF_VELOCITY} to a typical superficial velocity through the regenerator. $D$ is the same along \codeword{E1}, \codeword{E2} and their cross product (isotropic); inside a hole the flow is along the hole anyway.
+With \codeword{COEFFS = local} the inertial term uses the Reynolds number of each cell, from its gas density and viscosity and the superficial velocity relative to the matrix $U_r = U - U_{mat}$ ($U_{mat} = 0$ for a static zone): the drag tensor is $\mu D + \frac{1}{2}\rho|U_r|\,F\,(Re/Re_{ref})^{-0.103}$, which is the Gedeon--Wood term at the local $Re$. The setup prints $F$ at \codeword{REF_VELOCITY} ($Re_{ref}$) and a table of $F$, $ha$ and the pressure gradient at 0.1, 1, 5 and 20\,m/s. With \codeword{COEFFS = ref}, $F$ is frozen at $Re_{ref}$; away from it the inertial part is off by $(U/U_{ref})^{-0.103}$, about 7\,\% at twice or half the reference velocity. $D$ is the same along \codeword{E1}, \codeword{E2} and their cross product (isotropic); inside a hole the flow is along the hole anyway.
 
 \paragraph{Heat transfer coefficient.}
 Gedeon and Wood give for the same screens
@@ -505,7 +506,7 @@ with the gas conductivity from its viscosity, specific heat and Prandtl number, 
 \begin{equation}
 h a = \frac{Nu\, k}{d_h}\cdot\frac{4(1-\varepsilon)}{d_w} ,
 \end{equation}
-evaluated, like $F$, at \codeword{REF_VELOCITY}. All gas properties ($\rho$, $\mu$, $c_p$, $Pr$) are those of \codeword{GAS} at \codeword{CHARGE_PRESSURE} and \codeword{INIT_T} ($\rho$ from the ideal gas law). With \codeword{HA} given as a number, it replaces this value.
+With \codeword{COEFFS = local} it is evaluated per cell and time step, with the cell's $\rho$ and $\mu$ and $Re$ from $|U_r|$ as above. $ha$ grows roughly as $|U_r|^{0.66}$, so in an engine regenerator it changes by about a factor of 7 between flow reversal and peak flow, and a constant value at one velocity gets the matrix exchange wrong over most of the cycle: at 1\,m/s for a regenerator whose flow peaks at about 20\,m/s, the cycle-averaged $ha$ is about half that of the correlation. The setup prints the value at \codeword{REF_VELOCITY}; with \codeword{COEFFS = ref} that value is used throughout. Gas properties for the printed values and for \codeword{COEFFS = ref} are those of \codeword{GAS} at \codeword{CHARGE_PRESSURE} and \codeword{INIT_T} ($\rho$ from the ideal gas law). \codeword{HA} given as a number replaces the correlation with a constant (the drag stays local).
 
 \paragraph{Matrix temperature (local thermal non-equilibrium).}
 Each cell of the zone has a gas temperature $T$ and a matrix temperature $T_s$. The matrix exchanges heat only with the gas in the same cell (no conduction along the matrix; stacked screens conduct poorly through their contacts):
@@ -541,7 +542,7 @@ The setup prints the largest misfit and stops if either coefficient comes out ne
 \paragraph{Known modelling errors.}
 \begin{itemize}
     \item The solver treats the whole zone as gas volume (no $\varepsilon$ in the time derivative), so the gas volume and gas heat capacity in the matrix are over-counted by $(1-\varepsilon) V_{zone}$. Count it as extra dead volume.
-    \item $F$ and $h a$ use a fixed $Re_{ref}$ (see above).
+    \item With \codeword{COEFFS = ref}, $F$ and $h a$ use a fixed $Re_{ref}$ (see above); the default \codeword{COEFFS = local} evaluates them per cell.
     \item The zone is meshed conformally: snappy selects the cells inside the \codeword{POR} solid and then snaps the zone boundary onto the surface, so the stack length is the drawn one to snapping accuracy (on the test pipe the zone volume matched the drawn cylinder within 0.5\,\%). Flat end faces and five to ten cells along the stack snap cleanly and resolve the temperature along it.
     \item No axial conduction in the matrix.
 \end{itemize}
@@ -558,6 +559,103 @@ Fifty 100-mesh screens, $d_w = 0.1$\,mm, stainless steel ($\rho_s = 7900$, $c_s 
 \end{itemize}
 These are the values the setup prints for \codeword{POROSITY = 0.6908}, \codeword{WIRE_DIA = 1e-4}, \codeword{REF_VELOCITY = 1}.
 
+\subsubsection{Random-Fibre Model (Steel Wool)}\label{sec:fiberModel}
+\codeword{RESISTANCE = randomFiber} models a loose bed of thin, randomly oriented fibres, such as steel wool stuffed into an end space. Compared with a plate, the bed puts a large area of hot metal into the gas (thousands of m$^2$ per m$^3$), and it can be squashed and expanded by a moving body. Drag, heat transfer and the fibre heat capacity are worked out in every cell and time step from the local fibre fraction and the gas velocity relative to the fibres. The equations are in \codeword{writeInternal.fiberCoeffs} (the values the setup prints) and in the coded sources it writes to \codeword{constant/fvOptions}.
+\begin{lstlisting}
+    [POR-wool]
+    RESISTANCE = randomFiber
+    WIRE_DIA = 5e-5
+    SOLID_MASS = 0.05
+    SOLID_RHO = 7850
+    SOLID_CP = 470
+    SOLID_K = 50
+    RADIATION = yes
+    WALL_CONTACT_PIDS = hot
+    WALL_CONTACT = 1
+    MOVES_WITH = mesh
+    HEAT = solved
+    HA = auto
+    SOLID_T = 600
+    REF_VELOCITY = 0.5
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{WIRE_DIA} - fibre diameter $d_w$ (m).
+    \item \codeword{SOLID_MASS} - fibre mass in the zone (kg). The fibre fraction then follows from the zone volume and is kept as a field (below). Without \codeword{SOLID_MASS}, \codeword{POROSITY} gives a uniform fixed porosity; \codeword{MOVES_WITH = mesh} needs \codeword{SOLID_MASS}.
+    \item \codeword{SOLID_RHO}, \codeword{SOLID_CP} - fibre density and specific heat. \codeword{SOLID_K} - conductivity of the fibre material (W/m\,K; default 50, plain carbon steel; stainless steel is about 15). \codeword{RADIATION} - \codeword{yes} (default) adds radiation through the bed.
+    \item \codeword{WALL_CONTACT_PIDS} - keywords of the wall patches the fibres touch (e.g. the hot plate); \codeword{WALL_CONTACT} - factor 0 to 1 on the conductance between those walls and the bed (default 1). Blank = no wall contact.
+    \item \codeword{MOVES_WITH = mesh} - the fibres move and deform with the mesh. The \codeword{POR} solid is a closed box of the end space at the geometry position (top at the moving face, sides and bottom inside the walls). The setup moves its points in $z$ like the mesh to every meshing angle, so the cell zone is the end space in every segment mesh.
+    \item \codeword{HEAT} - \codeword{solved} (fibre temperature solved) or \codeword{fixed}; \codeword{HA} must be \codeword{auto}; one \codeword{SOLID_T} value (uniform start).
+    \item \codeword{REF_VELOCITY} - only sets the table the setup prints: drag coefficient, $h a$ and bed conductivity at porosities 0.90, 0.95, 0.98 and 0.99.
+\end{itemize}
+
+\paragraph{Fibre fraction.}
+Each cell of the zone carries a fibre volume fraction $\varphi$ (field \codeword{solidFrac_<zone>}, written at write times, restarted from and mapped at remeshing); the porosity is $\varepsilon = 1 - \varphi$. The fibres stay in their cell when the mesh moves, so every time step
+\begin{equation}
+\varphi^{n+1} = \varphi^{n}\,\frac{V^{n}}{V^{n+1}} ,
+\end{equation}
+with $V$ the cell volume: squashing an end space to a fifth of its height raises $\varphi$ five times. At every start and restart (including after each remeshing map) $\varphi$ is scaled so that the zone holds exactly \codeword{SOLID_MASS}, $\sum \varphi V = M/\rho_s$, which keeps the fibre mass exact across maps. The fibres move with the mesh: their velocity $\mathbf{U}_m$ in a cell is the mean motion of its points over the time step, and all correlations use the gas velocity relative to the fibres, $\mathbf{U}_r = \mathbf{U} - \mathbf{U}_m$ (superficial). The pore velocity is $u = |\mathbf{U}_r|/\varepsilon$. For numerical safety $\varphi$ is capped at 0.5 in the correlations.
+
+\paragraph{Two limits, blended.}
+Steel wool is far more open than the materials the porous-media correlations were measured on, so two models are combined:
+\begin{itemize}
+    \item \textbf{Metal felt} (dense random fibres): Gedeon and Wood (1996, NASA CR-198442, eqs.~2.5 and 2.10), measured up to $\varepsilon = 0.84$. With $d_h = \varepsilon d_w/\varphi$ and $Re = \rho u d_h/\mu$,
+    \begin{equation}
+    f = \frac{192}{Re} + 4.53\,Re^{-0.067}, \qquad Nu = \frac{h d_h}{k} = \left(1 + 1.16\,(Re\,Pr)^{0.66}\right)\varepsilon^{2.61} .
+    \end{equation}
+    \item \textbf{Single fibres in cross flow} (the very open limit, where each fibre sees the flow on its own). The fibre length per unit volume is $\ell = 4\varphi/(\pi d_w^2)$ and the fibre Reynolds number $Re_d = \rho u d_w/\mu$. Drag coefficient from White's cylinder correlation, $C_d = 1 + 10\,Re_d^{-2/3}$, and below $Re_d = 1$ at least Lamb's Oseen-flow result $C_d = 8\pi/\left(Re_d\,(2.002 - \ln Re_d)\right)$. Heat transfer from Churchill and Bernstein (1977),
+    \begin{equation}
+    Nu_d = \frac{h d_w}{k} = 0.3 + \frac{0.62\,Re_d^{1/2}\,Pr^{1/3}}{\left(1 + (0.4/Pr)^{2/3}\right)^{1/4}} .
+    \end{equation}
+\end{itemize}
+The felt forms fall off as $(1-\varepsilon)^2$ at high porosity and give 4 to 10 times less $h a$ than the single-fibre model at steel-wool porosities (0.97 to 0.99), where they were never measured. Both drag coefficients $c$ and both $h a$ are therefore blended log-linearly in porosity,
+\begin{equation}
+c = c_{felt}^{\,1-w}\, c_{fibre}^{\,w}, \qquad h a = (h a)_{felt}^{\,1-w}\, (h a)_{fibre}^{\,w}, \qquad w = \min\!\left(\max\!\left(\frac{\varepsilon - 0.84}{0.97 - 0.84}, 0\right), 1\right) ,
+\end{equation}
+so the felt model holds up to its tested porosity, single fibres hold above 0.97, and a squashed bed moves smoothly from one to the other.
+
+\paragraph{Drag.}
+The force on the gas per unit volume is $\mathbf{f} = -c\,\mathbf{U}_r$, implicit in $\mathbf{U}$, with
+\begin{equation}
+c_{felt} = \mu\,\frac{96}{\varepsilon d_h^2} + \frac{1}{2}\rho\,|\mathbf{U}_r|\,\frac{4.53\,Re^{-0.067}}{\varepsilon^2 d_h},
+\qquad
+c_{fibre} = \frac{1}{2}\rho\, u\, d_w\, C_d\,\frac{\ell}{\varepsilon} .
+\end{equation}
+$c_{felt}$ is the Gedeon--Wood $f$ written for the superficial velocity, as for the screens (section~\ref{sec:regenModel}); $c_{fibre}$ is the drag of $\ell$ metres of cylinder per m$^3$, each with $\frac{1}{2}\rho u^2 d_w C_d$ per metre. The reaction on the fibres, $c\,\mathbf{U}_r$, is stored as \codeword{porDrag_<zone>} and integrated by the \codeword{porDrag_} function object. The fibres' spring force on a moving body is not modelled.
+
+\paragraph{Gas--fibre heat exchange.}
+$h a$ per unit volume from the blend above, with $a = 4\varphi/d_w$ and $k = \mu c_p/Pr$:
+\begin{equation}
+(h a)_{felt} = Nu\,\frac{k}{d_h}\,\frac{4\varphi}{d_w}, \qquad (h a)_{fibre} = Nu_d\,\frac{k}{d_w}\,\frac{4\varphi}{d_w} .
+\end{equation}
+Gas and fibres are coupled exactly as for the screens (implicit together, heat into the gas = heat the fibres give up, see section~\ref{sec:regenModel}), with $h_{eff}$ per cell and the fibre heat capacity per unit volume $C_s = \varphi\,\rho_s c_s$, which rises when the bed is squashed. The fibre temperature is the field \codeword{Ts_<zone>}; the heat into the gas is integrated by \codeword{porHeatToGas_<zone>}.
+
+\paragraph{Heat through the bed.}
+Without conduction through the bed, the fibres could only store heat that has first crossed the gas boundary layer on the hot plate. Fibres touching the plate instead act as fins. After the gas--fibre exchange of each step, the fibre temperature diffuses through the bed with the effective conductivity
+\begin{equation}
+k_{eff} = \underbrace{\frac{k_s\,\varphi}{3}}_{\textrm{conduction}} + \underbrace{\frac{16\,\sigma\,T_s^3\, d_w}{3\,\varphi}}_{\textrm{radiation}} .
+\end{equation}
+\begin{itemize}
+    \item \textbf{Conduction} is the orientation average for a network of straight fibres. A fibre conducts along its axis only; under a temperature gradient $G$ at angle $\theta$ to the fibre it carries $k_s G\cos\theta$ along itself, of which $k_s G\cos^2\theta$ is in the direction of $G$. Averaged over random 3D orientations, $\langle\cos^2\theta\rangle = 1/3$, and the fibres fill the fraction $\varphi$ of any cross-section, so $k_c = \varphi k_s/3$ (fibres lying in a plane give $\varphi k_s/2$ in that plane). This is an \textbf{upper bound}: it assumes continuous, straight fibres joined without resistance. Real steel wool is crimped, the strands are short, and heat has to cross point contacts between fibres, which usually dominate, so measured conductivities of fibre beds are well below it. \codeword{SOLID_K} can be lowered to account for that.
+    \item \textbf{Radiation} uses the Rosseland diffusion approximation for an optically thick medium (e.g. Siegel and Howell), $k_r = 16\sigma T^3/(3\beta)$, with the extinction coefficient of randomly oriented opaque fibres from geometric optics: the mean projected area of a convex body over all orientations is a quarter of its surface (Cauchy's formula), and the fibres have $4\varphi/d_w$ of surface per unit volume, so $\beta = \varphi/d_w$. Diffraction, the scattering pattern and the emissivities of fibres and walls are ignored (black fibres). Rosseland needs a bed many mean free paths $1/\beta = d_w/\varphi$ thick (2.5\,mm for 50\,$\mu$m fibres at $\varphi = 0.02$); a bed squashed to a few millimetres is only marginally thick, and the radiation near its walls is overestimated.
+\end{itemize}
+At 600\,K, with 50\,$\mu$m steel fibres, $k_{eff}$ is about 0.5\,W/m\,K for an expanded bed ($\varphi \approx 0.01$, mostly radiation) and about 0.9\,W/m\,K at $\varphi = 0.05$ (mostly conduction), compared with 0.045\,W/m\,K for air. The setup prints both parts for the porosities in its table.
+
+The diffusion is explicit and conservative: between neighbouring zone cells (also across processor boundaries) the face conductance is $G = \bar k\, A/\delta$ with the harmonic mean $\bar k$ of the two cells, the face area $A$ and the distance $\delta$ between the cell centres. The step is split into sub-steps so that $\Delta t \sum G / C \le 0.4$ in every cell (with $C = \varphi\rho_s c_s V$). Cells on a wall patch whose name contains a \codeword{WALL_CONTACT_PIDS} keyword exchange heat with the wall temperature through
+\begin{equation}
+G_{wall} = c_w\, k_{eff}\,\frac{A}{\delta_w} ,
+\end{equation}
+with $c_w$ = \codeword{WALL_CONTACT} and $\delta_w$ the distance from the cell centre to the wall face. This heat is stored as \codeword{Qwall_<zone>} (W/m$^3$) and integrated by \codeword{porWallToFiber_<zone>}; it is an extra heat input to the gas and fibres, and must be counted in energy balances along with the wall heat flux into the gas. \codeword{WALL_CONTACT} describes how well the wool touches the wall; it is not known from first principles, so it is worth bounding with runs at a lower and a higher value.
+
+\paragraph{Function objects.} \codeword{porHeatToGas_<zone>} (W, fibres to gas), \codeword{porDrag_<zone>} (N, force on the fibres), \codeword{porWallToFiber_<zone>} (W, walls to fibres), \codeword{fiber_<zone>} (fibre volume, constant when the mass is kept) and \codeword{por_<zone>} (zone averages, including \codeword{Ts}).
+
+\paragraph{Limitations.}
+\begin{itemize}
+    \item The correlations are not validated in the steel-wool porosity range (0.97 to 0.99): the felt data stop at 0.84 and the single-fibre model ignores the interaction between fibres. The two limits differ by 4 to 10 times in $h a$ there, so the blend is a modelling choice; measured pressure-drop or heat-transfer data on the actual wool would pin it down.
+    \item Bed conductivity: conduction is an upper bound (no contact resistance between fibres), and radiation is rough in a thin, squashed bed.
+    \item The wall contact (\codeword{WALL_CONTACT}) is a model input, not a prediction.
+    \item Not modelled: the spring force of the wool on a moving body, gaps between the wool and the walls, uneven packing (the fibre fraction starts uniform), and the gas volume taken up by the fibres (as for the screens, the whole zone counts as gas).
+\end{itemize}
+
 \subsection{Function Objects}
 Written to \codeword{system/internalFunctionObjects}, every time step:
 \begin{itemize}
@@ -570,6 +668,8 @@ Written to \codeword{system/internalFunctionObjects}, every time step:
     \item \codeword{porHeatToGas_<zone>} - heat from the matrix into the gas (W, \codeword{HEAT} fixed or solved).
     \item \codeword{porDragHeat_<zone>} - drag work added to the gas (W, only with \codeword{DISSIPATION = yes}).
     \item \codeword{porDrag_<zone>} - force of the gas on a porous zone moving with a body (N, vector).
+    \item \codeword{porWallToFiber_<zone>} - heat from the contact walls into a random-fibre bed (W, section~\ref{sec:fiberModel}).
+    \item \codeword{fiber_<zone>} - fibre volume of a random-fibre zone (m$^3$; constant when \codeword{SOLID_MASS} is kept).
 \end{itemize}
 
 \subsection{Post-Processing}\label{sec:internalPost}
@@ -608,6 +708,8 @@ Restarted runs are handled: the function object directories are merged in time o
     LAST_CYCLES = all
     SLICE_IMG = True
     SURFACE_IMG = True
+    VOLUME_IMG = True
+    CLIP_IMG = True
     CREATE_SCALAR_BAR = True
 
     [SLICE]
@@ -622,6 +724,23 @@ Restarted runs are handled: the function object directories are merged in time o
     VIEWS = Iso
     VARIABLES = p T
 
+    [VOLUME]
+    VIEWS = Iso
+    VARIABLES = T Umag
+    OPACITY = 0.8
+    OPACITY_RAMP = auto
+    UNIT_DISTANCE = auto
+    CONTEXT_PATCHES = MOVE
+    CONTEXT_OPACITY = 0.15
+    RESAMPLE = 250
+    OUTLINE = False
+
+    [CLIP]
+    NAMES = yClip
+    NORMALS = -Y
+    ORIGINS = center
+    VARIABLES = T Umag p
+
     [MOVIES]
     ENABLE = True
     FPS = 10
@@ -631,12 +750,15 @@ Restarted runs are handled: the function object directories are merged in time o
     \item \codeword{RESOLUTION} - image size in pixels, also the video size.
     \item \codeword{[SLICE]} - one entry per slice in each of the lists \codeword{NAMES}, \codeword{NORMALS} (\codeword{X}, \codeword{Y}, \codeword{Z}), \codeword{ORIGINS} and \codeword{FOLLOW}. Origin \codeword{center} = middle of the mesh box, \codeword{loc} = \codeword{LOC_IN_MESH}, or \codeword{x,y,z}. \codeword{FOLLOW = <body>} moves the slice in z with that body (from the motion table, or with the crank drive from the crank log and the crank table), so a z slice through the displacer holes stays in the holes. Every slice is drawn for every variable in \codeword{VARIABLES}.
     \item \codeword{[SURFACE]} - the patches whose name contains one of the \codeword{PATCHES} keywords (e.g. \codeword{MOVE}: the displacer), seen from each of the \codeword{VIEWS} (\codeword{Iso}, \codeword{Top}, \codeword{Bottom}, \codeword{Front}, \codeword{Back}, \codeword{Left}, \codeword{Right}).
-    \item \codeword{VARIABLE_DICT} - \codeword{default} (\codeword{postUtilities/default/defaultInternalVariables}) or the path to your own copy. Each variable has an \codeword{equation} (ParaView calculator, \codeword{PREF} is replaced by the charge pressure), a \codeword{label}, a \codeword{range} and a ParaView colour map. Slice variables: \codeword{Umag}, \codeword{Ux}, \codeword{Uy}, \codeword{Uz}, \codeword{p}, \codeword{pGauge} (p minus the charge pressure), \codeword{T}, \codeword{rho}. Surface variables: \codeword{p}, \codeword{pGauge}, \codeword{T}, \codeword{wallHeatFlux}. Variables whose fields are not in the case (e.g. \codeword{T} for \codeword{pimpleFoam}) are skipped.
+    \item \codeword{[VOLUME]} - volume rendering of the gas, seen from each of the \codeword{VIEWS}: semi-transparent colour through the whole gas volume, so the hot and cold gas and the jets from the holes show in 3D. The gas is resampled to a regular grid with \codeword{RESAMPLE} points along the longest side of the mesh box (ParaView's volume rendering of the unstructured mesh skips the polyhedral cells of snappyHexMesh). The opacity rises over the colour range up to \codeword{OPACITY}: \codeword{OPACITY_RAMP} \codeword{rising} (clear at the low end, so hot gas or fast flow stands out), \codeword{falling}, \codeword{ends} (clear in the middle, for signed variables like \codeword{Uz}), or \codeword{auto} (\codeword{ends} for symmetric ranges, else \codeword{rising}). \codeword{UNIT_DISTANCE} is the depth over which that opacity builds up: \codeword{auto} = 0.05 $\times$ the shortest side of the mesh box, larger values are more transparent. The patches matching \codeword{CONTEXT_PATCHES} (blank = none) are drawn in grey with \codeword{CONTEXT_OPACITY}. \codeword{OUTLINE = True} also draws the edges of the mesh box.
+    \item \codeword{[CLIP]} - half of the gas volume, cut by a plane through \codeword{ORIGINS} (as for slices) with normal \codeword{NORMALS} (\codeword{X}, \codeword{Y}, \codeword{Z}, \codeword{-X}, \codeword{-Y}, \codeword{-Z}). The normal points to the removed half, and the camera looks at the cut from that side, tilted so the depth shows: the cut face and the gas boundary (walls, displacer faces, bore) are coloured by each variable in \codeword{VARIABLES}.
+    \item \codeword{VOLUME_IMG}, \codeword{CLIP_IMG} (and \codeword{SLICE_IMG}, \codeword{SURFACE_IMG}) switch the panel types on or off. \codeword{--panels volume,clip} on the command line makes only the listed types.
+    \item \codeword{VARIABLE_DICT} - \codeword{default} (\codeword{postUtilities/default/defaultInternalVariables}) or the path to your own copy. Each variable has an \codeword{equation} (ParaView calculator, \codeword{PREF} is replaced by the charge pressure), a \codeword{label}, a \codeword{range} and a ParaView colour map. Slice variables (also used by the volume and clip panels): \codeword{Umag}, \codeword{Ux}, \codeword{Uy}, \codeword{Uz}, \codeword{p}, \codeword{pGauge} (p minus the charge pressure), \codeword{T}, \codeword{rho}. Surface variables: \codeword{p}, \codeword{pGauge}, \codeword{T}, \codeword{wallHeatFlux}. Variables whose fields are not in the case (e.g. \codeword{T} for \codeword{pimpleFoam}) are skipped.
     \item \codeword{range} - \codeword{auto}: minimum to maximum over all selected times, the same on every slice. \codeword{symmetric}: $\pm$ the largest absolute value. \codeword{[min, max]}: fixed. The range is fixed over the run, so the colours mean the same in every frame of a video.
 \end{itemize}
 Each image has a title with the case, panel, variable, time and crank angle. Run it by hand from the case directory:
 \begin{lstlisting}
-    pvbatch --force-offscreen-rendering /path/to/caseSetup/postUtilities/pvPostInternal.py [--every N] [--lastCycles N]
+    pvbatch --force-offscreen-rendering /path/to/caseSetup/postUtilities/pvPostInternal.py [--every N] [--lastCycles N] [--panels slice,surface,volume,clip]
 \end{lstlisting}
 
 \subsubsection{Videos}

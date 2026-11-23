@@ -69,6 +69,45 @@ def test_slices_parse_and_errors():
             pvPostInternal.getSlices(bad)
 
 
+def test_panel_types_and_clips():
+    main = {'SLICE_IMG': 'True', 'SURFACE_IMG': 'false', 'VOLUME_IMG': 'True'}
+    assert pvPostInternal.getPanelTypes(main) == ['slice', 'volume']
+    #--panels overrides the switches
+    assert pvPostInternal.getPanelTypes(main, 'Volume, clip') == ['volume', 'clip']
+    with pytest.raises(SystemExit):
+        pvPostInternal.getPanelTypes(main, 'volume,iso')
+    #the default setup has the volume and clip panels on
+    setup = pvPostInternal.getPVSetup('/nonexistent')
+    assert pvPostInternal.getPanelTypes(setup['PV_POST_MAIN']) == ['slice', 'surface', 'volume', 'clip']
+    clips = pvPostInternal.getClips({'NAMES': 'a b', 'NORMALS': '-Y z', 'ORIGINS': 'center 0,0,0.01'})
+    assert clips[0]['normal'] == [0, -1, 0] and clips[1]['normal'] == [0, 0, 1] and clips[1]['origin'] == [0, 0, 0.01]
+    for bad in [{'NAMES': 'a b', 'NORMALS': 'Y', 'ORIGINS': 'center'},
+                {'NAMES': 'a', 'NORMALS': '-W', 'ORIGINS': 'center'}]:
+        with pytest.raises(SystemExit):
+            pvPostInternal.getClips(bad)
+    #the camera sits on the removed side (the normal side), z up unless cutting along z
+    bounds = [-0.2, 0.2, -0.2, 0.2, -0.03, 0.03]
+    cam = pvPostInternal.clipCamera([0, -1, 0], bounds, [1920, 1080])
+    assert cam['position'][1] < -1 and cam['up'][2] > 0.8
+    assert pvPostInternal.clipCamera([0, 0, 1], bounds, [1920, 1080])['up'][1] > 0.8
+    #fitted to the box as seen: looking down z at a 0.4 x 0.4 box, the height sets the scale
+    cam = pvPostInternal.fittedCamera([0, 0, 1], [0, 1, 0], bounds, [1920, 1080], barSpace=0.0, margin=1.0)
+    assert cam['scale'] == pytest.approx(0.2) and cam['focal'][2] == pytest.approx(0.0)
+    assert pvPostInternal.barLabels(300, 600) == [300, 375, 450, 525, 600]
+    assert pvPostInternal.resampleDims([0, 0.4, 0, 0.2, 0, 0.01], 201) == [201, 101, 10]
+
+
+def test_volume_opacity_ramps():
+    assert pvPostInternal.opacityPoints(300, 600, 'rising', 0.5) == [300, 0.0, 0.5, 0.0, 600, 0.5, 0.5, 0.0]
+    assert pvPostInternal.opacityPoints(300, 600, 'falling', 0.4)[1] == 0.4
+    #signed variables (symmetric range): clear around zero, opaque at both ends
+    ends = pvPostInternal.opacityPoints(-2, 2, 'auto', 0.5, symmetric=True)
+    assert ends[0::4] == [-2, 0, 2] and ends[1::4] == [0.5, 0.0, 0.5]
+    assert pvPostInternal.opacityPoints(0, 1, 'auto', 0.5)[1] == 0.0
+    with pytest.raises(SystemExit):
+        pvPostInternal.opacityPoints(0, 1, 'flat', 0.5)
+
+
 def test_select_times_keeps_the_last():
     times = [0.0] + [0.005*i for i in range(1, 61)]
     assert pvPostInternal.selectTimes(times, 10.0)[0] == 0.005

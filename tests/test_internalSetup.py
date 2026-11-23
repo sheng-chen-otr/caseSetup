@@ -922,6 +922,49 @@ def test_porous_resistance_inputs(repo_root):
     assert writeInternal.getPorous(geomDict, full)[0]['heat'] == 'none'
 
 
+def test_wire_mesh_local_coefficients(tmp_path, monkeypatch, repo_root):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'constant').mkdir()
+    #static wire mesh, COEFFS local (default): coded drag with the Forchheimer term scaled by the local Re (no
+    #explicitPorositySource), h*a per cell in the heat source, Umat kept at zero
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoPimpleFoam', RESISTANCE='wireMesh', POROSITY='0.9',
+                                               WIRE_DIA='1e-4', REF_VELOCITY='1', HEAT='solved', SOLID_T='600 300')
+    zone = writeInternal.getPorous(geomDict, full)[0]
+    assert zone['wire']['local'] and zone['haLocal'] and zone['wire']['reRef'] > 0
+    writeInternal.writeFvOptionsInternal([zone], full)
+    text = (tmp_path / 'constant/fvOptions').read_text()
+    assert 'explicitPorositySource' not in text and 'type            vectorCodedSource;' in text
+    assert 'const scalar fScale = pow(ReC/ReRef, -0.103);' in text
+    assert 'const tensor C(muC*Dt + (0.5*rhoC*mag(Ur)*fScale)*Ft);' in text
+    assert 'if (false && m.time().timeIndex() != lastIndex)' in text
+    assert 'pow(epsW, 1.79)' in text and 'hEff[c] = (Cs > 0 ? haC*Cs/(Cs + haC*dt) : haC);' in text
+    assert 'Qs[c] = hEff[c]*(TsOld[c] - T1);' in text and 'const scalar ha = ' not in text
+    assert text.count('#{') == text.count('#}')
+    #the per-cell h*a at the reference velocity is the setup value (same correlation)
+    props = writeInternal.getGasProperties(full)
+    wire = zone['wire']
+    dh = wire['eps']*wire['dw']/(1 - wire['eps'])
+    k = props['MU']*props['CP']/props['PR']
+    ha = (1 + 0.99*(wire['reRef']*props['PR'])**0.66)*wire['eps']**1.79*k/dh*4*(1 - wire['eps'])/wire['dw']
+    assert ha == pytest.approx(zone['ha'], rel=1e-9)
+    #COEFFS ref: the constants at REF_VELOCITY as before
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoPimpleFoam', RESISTANCE='wireMesh', POROSITY='0.9',
+                                               WIRE_DIA='1e-4', REF_VELOCITY='1', HEAT='solved', COEFFS='ref')
+    zone = writeInternal.getPorous(geomDict, full)[0]
+    assert not zone['wire']['local'] and not zone['haLocal']
+    writeInternal.writeFvOptionsInternal([zone], full)
+    text = (tmp_path / 'constant/fvOptions').read_text()
+    assert 'type            explicitPorositySource;' in text and 'const scalar ha = ' in text and 'fScale' not in text
+    #given HA: constant h*a, drag still local
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoPimpleFoam', RESISTANCE='wireMesh', POROSITY='0.9',
+                                               WIRE_DIA='1e-4', HEAT='solved', HA='5e5')
+    zone = writeInternal.getPorous(geomDict, full)[0]
+    assert zone['wire']['local'] and not zone.get('haLocal') and zone['ha'] == 5e5
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoPimpleFoam', RESISTANCE='wireMesh', COEFFS='fast')
+    with pytest.raises(SystemExit):
+        writeInternal.getPorous(geomDict, full)
+
+
 def test_porous_fvoptions_and_function_objects(tmp_path, monkeypatch, repo_root):
     monkeypatch.chdir(tmp_path)
     (tmp_path / 'constant').mkdir()

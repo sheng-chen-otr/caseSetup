@@ -5,6 +5,8 @@ EVERY = 1
 LAST_CYCLES = all
 SLICE_IMG = True
 SURFACE_IMG = True
+VOLUME_IMG = True
+CLIP_IMG = True
 CREATE_SCALAR_BAR = True
 
 [SLICE]
@@ -18,6 +20,26 @@ VARIABLES = Umag Uz p T
 PATCHES = MOVE
 VIEWS = Iso
 VARIABLES = p T
+
+[VOLUME]
+#volume rendering of the gas, resampled to a regular grid of RESAMPLE points along the longest side: colour and opacity from the fixed range, OPACITY_RAMP auto (rising, ends for signed variables) | rising | falling | ends
+#UNIT_DISTANCE auto (0.05 x shortest mesh box side), larger = more transparent; CONTEXT_PATCHES drawn in grey with CONTEXT_OPACITY (keywords, blank = none), OUTLINE True draws the mesh box
+VIEWS = Iso
+VARIABLES = T Umag
+OPACITY = 0.8
+OPACITY_RAMP = auto
+UNIT_DISTANCE = auto
+CONTEXT_PATCHES = MOVE
+CONTEXT_OPACITY = 0.15
+RESAMPLE = 250
+OUTLINE = False
+
+[CLIP]
+#half of the gas volume cut by a plane, NORMALS X Y Z -X -Y -Z point to the removed half (the camera side)
+NAMES = yClip
+NORMALS = -Y
+ORIGINS = center
+VARIABLES = T Umag p
 
 [MOVIES]
 ENABLE = True
