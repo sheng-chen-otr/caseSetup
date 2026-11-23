@@ -153,14 +153,18 @@ def test_run_loop_steps(tmp_path, repo_root, monkeypatch):
         os.makedirs(mapped)
         for field in ['p', 'U', 'rho']:
             (mapped / field).write_text('mapped %s\n' % field)
-    rr.graft('seg02', '0.003')
+    rr.graft('seg02', '0.003', '5e-07')
     t = tmp_path / 'processor1' / '0.003'
     assert sorted(os.listdir(t)) == ['U', 'p', 'pointDisplacement', 'polyMesh', 'rho', 'uniform']
     assert (t / 'p').read_text() == 'mapped p\n'
     assert sorted(os.listdir(t / 'polyMesh')) == ['faces', 'points', 'points0', 'remeshSegment']
     assert b'object      points0;' in (t / 'polyMesh' / 'points0').read_bytes()
     assert (t / 'polyMesh' / 'points0').read_bytes().endswith(b'\x00\x01binary')
-    assert 'deltaT 1e-06;' in (t / 'uniform' / 'time').read_text()
+    #mesh files hard-linked from the segment mesh (kept for the next cycle), points0 and the marker only in the time
+    segMesh = tmp_path / 'meshes' / 'seg02' / 'processor1' / 'constant' / 'polyMesh'
+    assert os.path.samefile(t / 'polyMesh' / 'faces', segMesh / 'faces')
+    assert sorted(os.listdir(segMesh)) == ['faces', 'points']
+    assert 'deltaT 5e-07;' in (t / 'uniform' / 'time').read_text()
     assert (t / 'uniform' / 'crankState').is_file()
     assert not os.path.exists(tmp_path / 'meshes' / 'seg02' / 'processor1' / '0.003')
     assert (tmp_path / 'constant' / 'dynamicMeshDict').read_text() == 'seg02\n'

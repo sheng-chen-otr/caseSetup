@@ -197,7 +197,8 @@ def readDat(foDir, fileName, textColumns=False):
                     if re.match(r'^#\s*Time\b', line):
                         names = line.lstrip('#').split()
                     continue
-                values = line.split()
+                #vector entries (x y z) become three columns
+                values = line.replace('(', ' ').replace(')', ' ').split()
                 if values:
                     try:
                         rows.append([float(v) for v in values])
@@ -244,6 +245,14 @@ def readTable(path):
     return rows[:, 0], rows[:, 3]
 
 
+def readCrankTable(path):
+    #constant/tables/<body>Crank (theta dz), crank drive and remeshing
+    with open(path) as f:
+        text = f.read()
+    rows = np.array(re.findall(r'\(\s*([-0-9.eE+]+)\s+([-0-9.eE+]+)\s*\)', text), dtype=float)
+    return rows[:, 0], rows[:, 1]
+
+
 def tableVelocity(times, dz, t):
     #the solver interpolates the table linearly in time, so the velocity is constant between table points
     slopes = np.diff(dz)/np.diff(times)
@@ -274,7 +283,10 @@ def readCrank(caseDir, post):
     if crank is None:
         return None, None, None
     theta0 = None
-    path = os.path.join(caseDir, 'constant', 'dynamicMeshDict')
+    #remeshing: constant/dynamicMeshDict is the current segment's (theta0 = its start angle), seg01 has the run's
+    path = os.path.join(caseDir, 'constant', 'dynamicMeshDict.seg01')
+    if not os.path.isfile(path):
+        path = os.path.join(caseDir, 'constant', 'dynamicMeshDict')
     if os.path.isfile(path):
         with open(path) as f:
             match = re.search(r'^\s*theta0\s+([-0-9.eE+]+)\s*;', f.read(), re.M)
@@ -285,6 +297,12 @@ def readCrank(caseDir, post):
     #the run starts at t = 0 at theta0 (the log starts after the first step)
     if crank[0, 1] > theta0:
         crank = np.vstack([np.r_[0.0, theta0, crank[0, 2:]], crank])
+    #a single repeated angle is a segment end, not a stop: runs before the crank solver requested its stop 1.5 steps
+    #ahead could take one extra step at the stop angle with the crank at rest (no work, no motion)
+    d = np.diff(crank[:, 1])
+    repeat = [i + 1 for i in range(len(d)) if d[i] == 0 and (i == 0 or d[i - 1] > 0) and (i + 1 == len(d) or d[i + 1] > 0)]
+    if repeat:
+        crank = np.delete(crank, repeat, axis=0)
     if np.any(np.diff(crank[:, 1]) <= 0):
         print('\tWARNING: the crank stopped or turned backwards: cycles counted up to the first stop')
         stop = int(np.argmax(np.diff(crank[:, 1]) <= 0))
@@ -381,13 +399,35 @@ def heatSummary(config, post, t0, t1):
     return results
 
 
+def porousDragZ(config, post, body, times):
+    #gas drag on the porous zones moving with the body (MOVES_WITH), z component at the given times (N), None if none
+    total = None
+    for section in config.sections():
+        if not section.startswith('POR') or getSetting(config, section, 'MOVES_WITH') != body:
+            continue
+        names, rows = readDat(os.path.join(post, 'porDrag_%s' % (section)), 'volFieldValue')
+        if rows is None or rows.shape[1] < 4:
+            continue
+        fz = np.interp(times, rows[:, 0], rows[:, 3])
+        total = fz if total is None else total + fz
+    return total
+
+
 def porousSummary(post, t0, t1):
     #porous zones over t0..t1: HEAT_<zone> (W from the matrix into the gas), TS_MEAN_<zone> (matrix T), T_MEAN_<zone>
     results = {}
-    for foDir in sorted(glob.glob(os.path.join(post, 'porHeat_*'))):
+    #porHeatToGas_<zone> (porHeat_<zone> in older cases)
+    for foDir in sorted(glob.glob(os.path.join(post, 'porHeat*_*'))):
         names, rows = readDat(foDir, 'volFieldValue')
         if rows is not None:
-            results['HEAT_%s' % (os.path.basename(foDir)[len('porHeat_'):])] = timeMean(rows[:, 0], rows[:, 1], t0, t1)
+            zoneName = os.path.basename(foDir).split('_', 1)[1]
+            results['HEAT_%s' % (zoneName)] = timeMean(rows[:, 0], rows[:, 1], t0, t1)
+    #porDragHeat_<zone>: drag work put into the gas (W, DISSIPATION yes)
+    for foDir in sorted(glob.glob(os.path.join(post, 'porDragHeat_*'))):
+        names, rows = readDat(foDir, 'volFieldValue')
+        if rows is not None:
+            zoneName = os.path.basename(foDir).split('_', 1)[1]
+            results['DRAG_HEAT_%s' % (zoneName)] = timeMean(rows[:, 0], rows[:, 1], t0, t1)
     for foDir in sorted(glob.glob(os.path.join(post, 'por_*'))):
         zone = os.path.basename(foDir)[len('por_'):]
         names, rows = readDat(foDir, 'volFieldValue')
@@ -558,6 +598,11 @@ def buildSummary(caseDir, avgCycles=1, avgIters=50):
             sel = window(force[:, 0], t0, t1)
             t = force[sel, 0]
             fz = force[sel, fNames.index('total_z')]
+            #porous matrix moving with the body: the gas drag on it is part of the force on the body
+            dragZ = porousDragZ(config, post, body, t)
+            if dragZ is not None:
+                summary['WORK_DRAG_%s' % (body)] = integrate(t, dragZ*tableVelocity(tTable, dz, t))/nAvg
+                fz = fz + dragZ
             work = integrate(t, fz*tableVelocity(tTable, dz, t))/nAvg
             summary['WORK_%s' % (body)] = work
             summary['FORCE_Z_AMP_%s' % (body)] = float(0.5*(fz.max() - fz.min()))
@@ -653,7 +698,11 @@ def cycleSeries(caseDir):
             if force is None or not os.path.isfile(table):
                 continue
             tTable, dz = readTable(table)
-            power = force[:, fNames.index('total_z')]*tableVelocity(tTable, dz, force[:, 0])
+            fz = force[:, fNames.index('total_z')]
+            dragZ = porousDragZ(config, post, body, force[:, 0])
+            if dragZ is not None:
+                fz = fz + dragZ
+            power = fz*tableVelocity(tTable, dz, force[:, 0])
             work = []
             for k in range(cyclesDone):
                 t, p = clipped(force[:, 0], power, edges[k], edges[k + 1])
@@ -703,6 +752,88 @@ def pvLoops(caseDir, nLoops=3):
         sel = window(mass[:, 0], edges[k], edges[k + 1])
         loops.append((k + 1, volume[sel], p[sel]))
     return loops
+
+
+def bodyDisplacement(caseDir, config, body, t, theta):
+    #z displacement of a body at times t (crank angle theta in deg, accumulated), None without a motion table
+    tables = os.path.join(caseDir, 'constant', 'tables')
+    if os.path.isfile(os.path.join(tables, '%sCrank' % (body))):
+        angle, dz = readCrankTable(os.path.join(tables, '%sCrank' % (body)))
+        return np.interp(np.mod(theta, 360.0), angle, dz, period=360.0)
+    if os.path.isfile(os.path.join(tables, '%sTable' % (body))):
+        times, dz = readTable(os.path.join(tables, '%sTable' % (body)))
+        return np.interp(t, times, dz)
+    return None
+
+
+def crownPressure(caseDir, config, post, t, theta, volume):
+    #area-averaged p on the faces of the body that changes the gas volume (the piston crown): its p-V loop is the
+    #piston work. The body is the one whose table displacement follows the gas volume, its faces the p_<source>_<pid>
+    #function objects (ZONE_PIDS keywords). Returns (label, p) or (None, None)
+    best, bestCorr = None, 0.9
+    for body in getBodies(config):
+        dz = bodyDisplacement(caseDir, config, body, t, theta)
+        if dz is None or np.std(dz) == 0 or np.std(volume) == 0:
+            continue
+        corr = abs(float(np.corrcoef(dz, volume)[0, 1]))
+        if corr > bestCorr:
+            best, bestCorr = body, corr
+    if best is None:
+        return None, None
+    section = 'MOVE-%s' % (best)
+    source = getSetting(config, section, 'FROM') or section
+    keywords = [k.lower() for k in getSetting(config, section, 'ZONE_PIDS').split()]
+    pSum, areaSum, patches = np.zeros_like(t), 0.0, []
+    for foDir in sorted(glob.glob(os.path.join(post, 'p_%s_*' % (source)))):
+        pid = os.path.basename(foDir)[len('p_%s_' % (source)):]
+        if keywords and not any(k in pid.lower() for k in keywords):
+            continue
+        names, rows = readDat(foDir, 'surfaceFieldValue')
+        if rows is None:
+            continue
+        area = patchArea(foDir) or 1.0
+        pSum += area*np.interp(t, rows[:, 0], rows[:, 1])
+        areaSum += area
+        patches.append(pid)
+    if not patches:
+        return None, None
+    return 'pressure on the %s faces (%s)' % (best, ' '.join(patches)), pSum/areaSum
+
+
+def pvData(caseDir, nLoops=3):
+    #p-V data of the last nLoops cycles (compressible runs): per cycle the crank angle in the cycle, gas volume
+    #V = mass/rho, volume-averaged p and the piston crown p; an unfinished last cycle is kept (closed False)
+    caseDir = os.path.abspath(caseDir)
+    config = readCaseSetup(caseDir)
+    post = os.path.join(caseDir, 'postProcessing')
+    names, gasAvg = readDat(os.path.join(post, 'gasAvg'), 'volFieldValue')
+    mNames, mass = readDat(os.path.join(post, 'gasMass'), 'volFieldValue')
+    if gasAvg is None or mass is None or 'volAverage(rho)' not in names:
+        return None
+    t = mass[:, 0]
+    crankNames, crank, theta0 = readCrank(caseDir, post)
+    if crank is not None:
+        theta = np.interp(t, crank[:, 0], crank[:, 1])
+    else:
+        #prescribed motion: the crank turns at FREQ from the start angle
+        freq = float(getSetting(config, 'GLOBAL_CONTROL', 'FREQ'))
+        theta0 = float(getSetting(config, 'SETUP_INFO', 'START_ANGLE', '0') or 0)
+        theta = theta0 + 360.0*freq*t
+    volume = mass[:, 1]/np.interp(t, gasAvg[:, 0], gasAvg[:, names.index('volAverage(rho)')])
+    pAvg = np.interp(t, gasAvg[:, 0], gasAvg[:, names.index('volAverage(p)')])
+    crownLabel, pCrown = crownPressure(caseDir, config, post, t, theta, volume)
+    phase = theta - theta0
+    nCycles = int(np.ceil(phase[-1]/360.0 - 1e-6))
+    cycles = []
+    for k in range(max(nCycles - nLoops, 0), nCycles):
+        sel = (phase >= 360.0*k - 1e-9) & (phase <= 360.0*(k + 1) + 1e-9)
+        if sel.sum() < 10:
+            continue
+        #closed: a later cycle follows, or the data reach the cycle end within two samples
+        closed = k < nCycles - 1 or phase[-1] >= 360.0*(k + 1) - 2.0*float(np.max(np.diff(phase[sel])))
+        cycles.append({'cycle': k + 1, 'angle': phase[sel] - 360.0*k, 'volume': volume[sel], 'pAvg': pAvg[sel],
+                       'pCrown': None if pCrown is None else pCrown[sel], 'closed': bool(closed)})
+    return {'theta0': theta0, 'crown': crownLabel, 'cycles': cycles}
 
 
 def flowSeries(caseDir):
@@ -779,6 +910,61 @@ def writeFlowPlot(caseDir, plt):
     return path
 
 
+#plot colours: categorical order (cycles), text and grid inks
+PLOT_COLOURS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
+PLOT_INK, PLOT_INK2, PLOT_GRID = '#0b0b0b', '#52514e', '#e4e3df'
+
+
+def writePvPlot(caseDir, plt, nLoops=3):
+    #pV.png: p-V loops of the last cycles (area = piston work, + out of the gas), p and gas volume vs crank angle
+    #and the loop shape (deviation from a polytropic fit of each cycle); crown p when the piston faces are known
+    data = pvData(caseDir, nLoops)
+    if not data or not data['cycles']:
+        return None
+    caseName = os.path.basename(os.path.abspath(caseDir))
+    key, pLabel = ('pCrown', data['crown']) if data['crown'] else ('pAvg', 'volume-averaged p')
+    style = {'axes.edgecolor': PLOT_INK2, 'axes.labelcolor': PLOT_INK, 'xtick.color': PLOT_INK2,
+             'ytick.color': PLOT_INK2, 'grid.color': PLOT_GRID, 'axes.spines.top': False,
+             'axes.spines.right': False, 'legend.frameon': False}
+    with plt.rc_context(style):
+        fig, ax = plt.subplots(2, 2, figsize=(12, 9))
+        for i, c in enumerate(data['cycles']):
+            colour = PLOT_COLOURS[i % len(PLOT_COLOURS)]
+            v, p = c['volume']*1e6, c[key]/1e5
+            if c['closed']:
+                label = 'cycle %d: %+.2f J' % (c['cycle'], integrate(c['volume'], c[key]))
+            else:
+                label = 'cycle %d (%.0f deg, not closed)' % (c['cycle'], c['angle'][-1] - c['angle'][0])
+            ax[0, 0].plot(v, p, color=colour, lw=1.6, label=label)
+            ax[0, 1].plot(c['angle'], p, color=colour, lw=1.6, label='cycle %d' % (c['cycle']))
+            #loop shape: p over the polytropic fit p = C V^-n of this cycle
+            fit = np.linalg.lstsq(np.column_stack([np.ones(len(v)), np.log(v)]), np.log(p), rcond=None)[0]
+            ax[1, 1].plot(v, 100.0*(p/np.exp(fit[0] + fit[1]*np.log(v)) - 1.0), color=colour, lw=1.6,
+                          label='cycle %d (n = %.3f)' % (c['cycle'], -fit[1]))
+        last = data['cycles'][-1]
+        ax[1, 0].plot(last['angle'], last['volume']*1e6, color=PLOT_INK2, lw=1.6)
+        ax[0, 0].set(xlabel='gas volume [cm$^3$]', ylabel='p [bar]', title='p-V loops (area = work per cycle, + out of the gas)')
+        ax[0, 1].set(xlabel='crank angle from the start angle [deg]', ylabel='p [bar]', title='p vs crank angle')
+        ax[1, 0].set(xlabel='crank angle from the start angle [deg]', ylabel='gas volume [cm$^3$]',
+                     title='gas volume vs crank angle (cycle %d)' % (last['cycle']))
+        ax[1, 1].axhline(0.0, color=PLOT_INK2, lw=0.8)
+        ax[1, 1].set(xlabel='gas volume [cm$^3$]', ylabel='p / polytropic fit - 1 [%]',
+                     title='loop shape: deviation from p V$^n$ = const')
+        for a in ax.flat:
+            a.grid(True, lw=0.6)
+        for a in (ax[0, 0], ax[0, 1], ax[1, 1]):
+            a.legend(fontsize=9)
+        for a in (ax[0, 1], ax[1, 0]):
+            a.set_xlim(0, 360)
+            a.set_xticks(range(0, 361, 45))
+        fig.suptitle('%s: %s, start angle %g deg' % (caseName, pLabel, data['theta0']), color=PLOT_INK)
+        fig.tight_layout()
+        path = os.path.join(os.path.abspath(caseDir), 'pV.png')
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+    return path
+
+
 def writePlots(caseDir, nLoops=3):
     #pV.png (last cycles overlaid) and cycleConvergence.png in the case directory
     try:
@@ -796,19 +982,8 @@ def writePlots(caseDir, nLoops=3):
         path = writeFlowPlot(caseDir, plt)
         return [path] if path else []
 
-    loops = pvLoops(caseDir, nLoops)
-    if loops:
-        fig, ax = plt.subplots(figsize=(8, 6))
-        for cycle, volume, p in loops:
-            ax.plot(volume*1e6, p/1e5, label='cycle %d' % (cycle))
-        ax.set_xlabel('gas volume [cm$^3$]')
-        ax.set_ylabel('volume-averaged p [bar]')
-        ax.set_title('%s p-V' % (caseName))
-        ax.grid(True)
-        ax.legend()
-        path = os.path.join(caseDir, 'pV.png')
-        fig.savefig(path, dpi=200, bbox_inches='tight')
-        plt.close(fig)
+    path = writePvPlot(caseDir, plt, nLoops)
+    if path:
         written.append(path)
 
     series = cycleSeries(caseDir)

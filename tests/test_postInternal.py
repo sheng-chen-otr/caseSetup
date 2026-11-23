@@ -231,6 +231,17 @@ def test_summary_crank_drive(tmp_path):
     assert s['POWER_LOAD'] == pytest.approx(c*wMeanSq, rel=1e-4)
 
 
+def test_crank_theta0_remeshing(tmp_path):
+    #remeshing: constant/dynamicMeshDict is the last segment's (its own theta0), the run's start angle is in seg01's
+    case = makeCrankCase(tmp_path)
+    (case / 'constant' / 'dynamicMeshDict.seg01').write_text('crank\n{\n        theta0          30;   //deg\n}\n')
+    (case / 'constant' / 'dynamicMeshDict').write_text('crank\n{\n        theta0          300;   //deg\n}\n')
+    names, crank, theta0 = postInternal.readCrank(str(case), str(case / 'postProcessing'))
+    assert theta0 == 30.0
+    s = postInternal.buildSummary(str(case), avgCycles=1)
+    assert s['CYCLES_DONE'] == 3 and s['WORK_piston'] == pytest.approx(2*math.pi*CRANK['B'], rel=1e-4)
+
+
 #----- plots
 
 def test_cycle_series_and_plots(tmp_path):
@@ -254,6 +265,21 @@ def test_cycle_series_and_plots(tmp_path):
     written = postInternal.writePlots(str(case))
     assert sorted(os.path.basename(p) for p in written) == ['cycleConvergence.png', 'pV.png']
     assert (case / 'pV.png').stat().st_size > 1000 and (case / 'cycleConvergence.png').stat().st_size > 1000
+
+
+def test_pv_data_crown(tmp_path):
+    #the piston table follows the gas volume: its crown p_ function object is used, loop area pi*P_AMP*V_AMP
+    case = makeCase(tmp_path, cycles=2.5)
+    data = postInternal.pvData(str(case), nLoops=3)
+    assert data['theta0'] == 0.0 and 'piston' in data['crown'] and 'crown' in data['crown']
+    assert [c['cycle'] for c in data['cycles']] == [1, 2, 3]
+    assert [c['closed'] for c in data['cycles']] == [True, True, False]
+    full = data['cycles'][1]
+    assert postInternal.integrate(full['volume'], full['pCrown']) == pytest.approx(math.pi*P_AMP*V_AMP, rel=2e-3)
+    assert full['angle'][0] == pytest.approx(0.0, abs=0.5) and full['angle'][-1] == pytest.approx(360.0, abs=0.5)
+    #a body that does not change the gas volume: no crown, volume-averaged p only
+    (case / 'constant' / 'tables' / 'pistonTable').write_text('FoamFile { class scalarVectorTable; }\n2\n(\n(0 (0 0 0))\n(1 (0 0 0))\n)\n')
+    assert postInternal.pvData(str(case))['crown'] is None
 
 
 def test_cycle_series_crank_drive(tmp_path):

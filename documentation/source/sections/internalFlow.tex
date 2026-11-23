@@ -131,26 +131,30 @@ After changing these values, \codeword{internalSetup.py -d} rewrites the control
     [GLOBAL_SIM_CONTROL]
     SOLVER = rhoPimpleFoam
     TURB_MODEL = laminar
+    DISSIPATION = no
     N_OUTER_CORR = 1
     N_CORR = 2
     N_NONORTH_CORR = 1
-    RELAX_P = 0.3
-    RELAX_U = 0.7
-    RELAX_E = 0.7
+    RELAX_P = auto
+    RELAX_U = auto
+    RELAX_E = auto
 
     [GLOBAL_MATERIAL]
     GAS = air
     CHARGE_PRESSURE = 1e5
     INIT_T = 300
+    INIT_T_FIELD = uniform
     TRANSPORT = const
 \end{lstlisting}
 \begin{itemize}
     \item \codeword{SOLVER} - \codeword{rhoPimpleFoam}: perfect gas, absolute pressure in Pa, energy equation, wall heat transfer. \codeword{pimpleFoam}: incompressible, kinematic pressure (p/$\rho$) referenced to 0 at \codeword{LOC_IN_MESH}, no temperature. The incompressible option is only useful for looking at the flow through the displacer: the gas is not compressed, so the pressure level, the piston work and the heat transfer have no meaning.
     \item \codeword{TURB_MODEL} - \codeword{laminar} (default), \codeword{kOmegaSST}, \codeword{kEpsilon} or \codeword{kOmega}. The wall model column of \codeword{GEOM} (\codeword{low}/\codeword{high}) selects low or high Reynolds wall treatment.
-    \item \codeword{N_OUTER_CORR} - PIMPLE outer correctors. \codeword{1} is PISO: stable only around a Courant number of 1 on the moving mesh, so keep \codeword{MAX_CO} near 1. For larger time steps (\codeword{MAX_CO} well above 1) use 3 or more outer correctors.
-    \item \codeword{RELAX_P}, \codeword{RELAX_U}, \codeword{RELAX_E} - under-relaxation of the pressure field and of the U (and k, omega) and e equations, written only when \codeword{N_OUTER_CORR} is above 1. The last outer iteration of each time step is not relaxed.
+    \item \codeword{DISSIPATION} - \codeword{no} (default) or \codeword{yes}. \codeword{rhoPimpleFoam} solves the energy in total-energy form: $\partial(\rho e)/\partial t + \nabla\cdot(\rho \mathbf{U} e) + \partial(\rho K)/\partial t + \nabla\cdot(\rho \mathbf{U} K) + \nabla\cdot(p\mathbf{U}) = -\nabla\cdot\mathbf{q}$, with $K = |\mathbf{U}|^2/2$ and without the viscous work $\nabla\cdot(\boldsymbol{\tau}\cdot\mathbf{U})$ and the work of momentum sources. Subtracting the kinetic energy equation (momentum $\cdot\,\mathbf{U}$) leaves $\rho\,De/Dt = -p\nabla\cdot\mathbf{U} - \mathbf{U}\cdot\nabla\cdot\boldsymbol{\tau} - \mathbf{U}\cdot\mathbf{f} - \nabla\cdot\mathbf{q}$: the drag work $-\mathbf{U}\cdot\mathbf{f}$ of a porous zone is in $e$, and $-\mathbf{U}\cdot\nabla\cdot\boldsymbol{\tau} = \boldsymbol{\tau}:\nabla\mathbf{U} - \nabla\cdot(\boldsymbol{\tau}\cdot\mathbf{U})$ is the viscous dissipation up to a divergence, which over the whole gas is only the viscous work of the walls. The heat made by friction and drag is therefore already in the gas energy; only its placement near walls differs. \codeword{yes} adds the ESI \codeword{viscousDissipation} fvOption and the drag work of every porous zone (\codeword{porDragHeat_<zone>}) on top, which counts that heat twice (seen in a closed-engine test as a gas energy rise above the heat and work put in). It is kept for testing only.
+    \item \codeword{N_OUTER_CORR} - PIMPLE outer correctors. \codeword{1} is PISO: stable only around a Courant number of 1 on the moving mesh, so keep \codeword{MAX_CO} near 1. For larger time steps (\codeword{MAX_CO} well above 1) use 3 or more outer correctors, without under-relaxation (below).
+    \item \codeword{RELAX_P}, \codeword{RELAX_U}, \codeword{RELAX_E} - under-relaxation of the pressure field and of the U (and k, omega) and e equations. \codeword{auto} (default): 0.3, 0.7, 0.7 for the steady solvers, none (1) for the transient ones. The last outer iteration of each time step is never relaxed. Do not relax a transient compressible run: with the pressure relaxed, the density $\psi p$ lags the continuity equation in the relaxed outer iterations, and the energy equation of the last iteration still uses that density, so the gas energy is wrong by the lag times $\rho e$ in every step. In a closed-cylinder compression test with 3 outer correctors and p relaxed by 0.3, half of the compression heating was lost (the gas ended 15\,K too cold after a 23\,\% volume change); without relaxation the energy balance closed within 0.2\,\% at the same cost, and with relaxation it took 20 outer correctors to get within 1\,\%. The setup warns when a transient compressible run is relaxed.
     \item \codeword{GAS} - \codeword{air}, \codeword{nitrogen}, \codeword{helium}, \codeword{hydrogen} or \codeword{custom}. Each preset sets the molecular weight, Cp, viscosity and Prandtl number. Any of \codeword{MOL_WEIGHT}, \codeword{CP}, \codeword{MU}, \codeword{PR} that is not \codeword{default} overrides the preset, \codeword{custom} needs all four.
     \item \codeword{CHARGE_PRESSURE} [\codeword{float,Pa}], \codeword{INIT_T} [\codeword{float,K}] - initial gas state. The gas mass follows from these and the meshed volume.
+    \item \codeword{INIT_T_FIELD} - \codeword{uniform} (default): the gas starts at \codeword{INIT_T}. \codeword{matrix} (the only porous zone with two \codeword{SOLID_T} values) or a \codeword{POR} zone name: warm start, the gas temperature follows the matrix start profile along $z$ (first \codeword{SOLID_T} value at the $-z$ end of the zone, second at the $+z$ end, linear in between) and stays at the end values beyond the zone, so the hot and cold spaces start at their wall temperatures. The pressure is raised to a uniform value that keeps the gas mass of the charge state (charged at \codeword{CHARGE_PRESSURE} and \codeword{INIT_T}, then heated): $p = \sum p_c V_i/T_c \,/\, \sum V_i/T_i$. The run script does it with \codeword{remeshMassFix -warmStart} after the zero directories are made, only while the case has no later time, and prints the new mean temperature and pressure in \codeword{log.warmStart}. A warm start avoids the first cycles in which a cold gas and a warm matrix only even each other out.
     \item \codeword{TRANSPORT} - \codeword{const} viscosity or \codeword{sutherland} (coefficients from the preset, or \codeword{SUTHERLAND_AS} / \codeword{SUTHERLAND_TS}).
     \item \codeword{NU} - kinematic viscosity for \codeword{pimpleFoam}, \codeword{default} = $\mu/\rho$ of the gas at the charge state.
 \end{itemize}
@@ -222,6 +226,8 @@ Both bodies are driven by one CSV file with the shared crank angle, so the phase
     MAX_DEFORMATION = 15
     REMESH = no
     REMESH_DEFORMATION = 3
+    GAP_CELLS_Z = 6
+    REMESH_DT = 1e-6
     ZONE_FLAT_TOL = 1e-4
     MOTION_FRAMES = 24
     DRIVE = prescribed
@@ -232,6 +238,8 @@ Both bodies are driven by one CSV file with the shared crank angle, so the phase
     \item \codeword{MAX_DEFORMATION} [\codeword{float}] - largest allowed ratio between a gap at the meshing angle and the same gap anywhere in the cycle (both ways). Larger: increase \codeword{TDC_CLEARANCE}, or remesh. Not used with remeshing.
     \item \codeword{REMESH} - \codeword{no} (one mesh for the whole run) or \codeword{auto} (a new mesh whenever a gap has been squashed or stretched \codeword{REMESH_DEFORMATION} times, Section \ref{sec:remesh}).
     \item \codeword{REMESH_DEFORMATION} [\codeword{float}] - squash/stretch allowed per mesh with \codeword{REMESH = auto} (above 1).
+    \item \codeword{GAP_CELLS_Z} [\codeword{float}] - smallest number of cells across a gap between two zones (end spaces) at each meshing angle. Thinner gaps get a band refined in z only (flat cells, Section \ref{sec:remesh}). 0 = off.
+    \item \codeword{REMESH_DT} [\codeword{float,s}] - time step of the first step after each map (default $10^{-6}$), then the adjustable time step ramps up again.
     \item \codeword{ZONE_FLAT_TOL} [\codeword{float,m}] - how flat a zone face must be.
     \item \codeword{DRIVE} - \codeword{prescribed} (the crank turns at \codeword{FREQ}) or \codeword{crank} (Section \ref{sec:crankDrive}).
 \end{itemize}
@@ -303,7 +311,9 @@ With \codeword{REMESH = auto} the cycle is split into segments. Each segment has
     \item \codeword{runScript} makes all meshes in the same job (snappy, topoSet, zone reordering and checkMesh for each), then loops: solve until the crank reaches the end of the segment, map the fields onto the next mesh with \codeword{mapFieldsPar}, restart. The map is volume weighted (conservative); the few new cells along the walls that the old mesh does not overlap at all (snapped walls never match exactly) would be left at zero, so \codeword{remeshMassFix -combine} fills them from their neighbours on the new mesh; the wall values are mapped from the nearest old face. A separate nearest-cell map is not used: it crashes in v2412 on large parallel cases. The crank motion solver stops the run itself (\codeword{stopAngle} in each \codeword{constant/dynamicMeshDict.seg*}); its last step lands exactly on the segment end. Prescribed motion runs as the crank drive with \codeword{LOAD = speed}.
     \item The new mesh is written into the time directory of the map (\codeword{polyMesh} with \codeword{points0} and a \codeword{remeshSegment} marker), so the run stays one case and the post-processing works as before.
     \item Mapping changes the gas mass slightly (of the order of $10^{-4}$ per map). For \codeword{rhoPimpleFoam} the utility \codeword{remeshMassFix} (\codeword{foamLibs/remeshMassFix}, compiled by the run script) scales p and $\rho$ back to the mass before the map, T is kept.
-    \item Surface fluxes cannot be mapped, so the restart rebuilds them from U. The first steps then start from \codeword{INIT_DT} and the adjustable time step ramps up again (needs \codeword{MAX_CO} above 0).
+    \item Surface fluxes cannot be mapped, so the restart rebuilds them from U. The first step after a map uses \codeword{REMESH_DT} ($10^{-6}$ s) and the adjustable time step ramps up again (needs \codeword{MAX_CO} above 0). With $10^{-5}$ s one map of an engine cycle diverged in its first step.
+    \item A mesh made near a stroke end has a thin end space (a few mm between the displacer and the end face). Every gap between two zones that would get fewer than \codeword{GAP_CELLS_Z} cells across at the meshing angle gets a band over the gap that snappy refines in z only (directional refinement, \codeword{levelIncrement}), so the cells there are flat, as in a deformed mesh, instead of one or two cubes. \codeword{LOC_IN_MESH} of each segment mesh is moved to the middle of the gap it lies in (snappy picks the mesh region before the z refinement). The setup prints the bands per meshing angle; each segment has its own \codeword{meshes/segNN/snappyHexMeshDict}.
+    \item The new mesh files are hard links to the segment mesh (no copy), so a map takes about a minute.
     \item The motion dry run (\codeword{motionCheckScript}) only covers the first segment.
 \end{itemize}
 Not supported yet with remeshing: \codeword{FAN} baffles.
@@ -415,10 +425,18 @@ A closed \codeword{POR-<name>.stl} marks a porous region: the cells inside it be
 \end{lstlisting}
 \begin{itemize}
     \item \codeword{RESISTANCE} - \codeword{coeffs}: \codeword{D} (1/m$^2$) and \codeword{F} (1/m) along the directions \codeword{E1}, \codeword{E2} and their cross product. \codeword{wireMesh}: woven screens (Gedeon--Wood), from \codeword{POROSITY} and \codeword{WIRE_DIA}; the Reynolds-number dependent part is taken at \codeword{REF_VELOCITY} (superficial, m/s). \codeword{fit}: least-squares fit of \codeword{DP_DATA} (pairs of superficial velocity in m/s and pressure drop in Pa) measured over \codeword{DP_LENGTH} (m). The setup prints the resulting D and F.
-    \item \codeword{HEAT} - \codeword{none}; \codeword{fixed}: the matrix stays at \codeword{SOLID_T} (heater, cooler, heat exchanger core); \codeword{solved}: the matrix temperature changes with its heat capacity (1$-\varepsilon$)$\rho_s c_s$ (\codeword{POROSITY}, \codeword{SOLID_RHO}, \codeword{SOLID_CP}), starting at \codeword{SOLID_T} (regenerator, transient solvers only). The gas receives $h a (T_s - T)$ per unit volume, with \codeword{HA} in W/m$^3$K or \codeword{auto} from the wire-mesh correlation. The term is linearised in the energy, so large values stay stable, and the matrix temperature is updated once per time step with the exact solution of $C_s\,dT_s/dt = h a (T - T_s)$. It is written as the field \codeword{Ts_<zone>} and restarts from it. Compressible runs only.
-    \item \codeword{MOVES_WITH} - name of a MOVE body: the porous solid is moved to the start angle with that body before meshing, and its cells then move with the mesh (regenerator in the displacer).
+    \item \codeword{HEAT} - \codeword{none}; \codeword{fixed}: the matrix stays at \codeword{SOLID_T} (heater, cooler, heat exchanger core); \codeword{solved}: the matrix temperature changes with its heat capacity (1$-\varepsilon$)$\rho_s c_s$ (\codeword{POROSITY}, \codeword{SOLID_RHO}, \codeword{SOLID_CP}), starting at \codeword{SOLID_T} (regenerator, transient solvers only). \codeword{SOLID_T} takes one value (uniform) or two: the matrix then starts linear from the first value at the $-z$ end of the zone to the second at the $+z$ end (e.g. \codeword{SOLID_T = 600 300} with the hot end at $-z$). A linear start shortens the many cycles a regenerator matrix needs to warm up from a uniform temperature. It is used only when the run has no saved matrix temperature, so restarts keep the current one. The gas receives $h a (T_s - T)$ per unit volume, with \codeword{HA} in W/m$^3$K or \codeword{auto} from the wire-mesh correlation. The term is linearised in the energy, so large values stay stable, and the matrix temperature is updated once per time step with the exact solution of $C_s\,dT_s/dt = h a (T - T_s)$. It is written as the field \codeword{Ts_<zone>} and restarts from it. Compressible runs only.
+    \item \codeword{MOVES_WITH} - name of a MOVE body: the porous solid is moved to the start angle with that body before meshing, and its cells then move with the mesh (regenerator in the displacer). The drag then acts on the gas velocity relative to the matrix (below), and the drag force is part of the force on the body.
 \end{itemize}
-The heat source is a \codeword{scalarCodedSource} in \codeword{constant/fvOptions}, compiled when the solver starts, so a C++ compiler must be available where the job runs. \codeword{postInternal.py} reports \codeword{HEAT_<zone>} (W from the matrix into the gas), \codeword{TS_MEAN_<zone>}, \codeword{T_MEAN_<zone>} and \codeword{P_MEAN_<zone>}.
+\paragraph{Drag on a moving matrix.} \codeword{explicitPorositySource} works with the absolute velocity, which is right for a fixed matrix only: a matrix moving with the displacer would drag on gas that simply moves along with it. For a zone with \codeword{MOVES_WITH} the setup writes a \codeword{vectorCodedSource} on U instead, with the same Darcy--Forchheimer law on the relative velocity,
+\begin{equation}
+\mathbf{f} = -\mathbf{C}\cdot(\mathbf{U} - \mathbf{U}_m), \qquad \mathbf{C} = \mu \mathbf{D} + \tfrac{1}{2}\rho\,|\mathbf{U} - \mathbf{U}_m|\,\mathbf{F} ,
+\end{equation}
+with $\mathbf{D}$, $\mathbf{F}$ the coefficient tensors along \codeword{E1}, \codeword{E2} and their cross product. The matrix velocity $\mathbf{U}_m$ of each cell is the mean motion of its points over the time step (the zone moves rigidly with its body). As in ESI, the isotropic part $\mathrm{tr}(\mathbf{C})/3$ is implicit on the diagonal and the rest is explicit. The force of the gas on the matrix, $\mathbf{C}\cdot(\mathbf{U} - \mathbf{U}_m)$ per unit volume, is stored as \codeword{porDrag_<zone>}; the crank drive adds its integral to the force on the body (\codeword{porousZones} in \codeword{dynamicMeshDict}), and \codeword{postInternal.py} adds it to the body force for prescribed motion.
+
+\paragraph{Drag work.} The drag work $(\mathbf{U} - \mathbf{U}_m)\cdot\mathbf{C}\cdot(\mathbf{U} - \mathbf{U}_m) \ge 0$ (W/m$^3$, $\mathbf{U}_m = 0$ for a fixed zone) heats the gas through the total-energy form of the energy equation (see \codeword{DISSIPATION}); the work the moving matrix does on the gas, $\mathbf{U}_m\cdot\mathbf{C}\cdot(\mathbf{U} - \mathbf{U}_m)$, goes into the gas the same way and is part of the body work. Physically the drag heat appears at the wires; with a large $h a$ the gas passes it on to the matrix within a few time steps, so it makes no practical difference that it is put into the gas. \codeword{DISSIPATION = yes} adds it a second time and logs it as \codeword{porDragHeat_<zone>}.
+
+The heat, drag and drag-work sources are coded fvOptions (\codeword{scalarCodedSource}, \codeword{vectorCodedSource}) in \codeword{constant/fvOptions}, compiled when the solver starts, so a C++ compiler must be available where the job runs. \codeword{postInternal.py} reports \codeword{HEAT_<zone>} (W from the matrix into the gas), \codeword{DRAG_HEAT_<zone>} (W, drag work into the gas), \codeword{TS_MEAN_<zone>}, \codeword{T_MEAN_<zone>} and \codeword{P_MEAN_<zone>}.
 
 \subsubsection{Wire-Screen Regenerator Model}\label{sec:regenModel}
 This section gives the equations behind \codeword{RESISTANCE = wireMesh}, \codeword{HA = auto} and \codeword{HEAT = solved}, as they are implemented in \codeword{writeInternal.wireMeshCoeffs} and the heat source in \codeword{constant/fvOptions}.
@@ -483,22 +501,22 @@ Each cell of the zone has a gas temperature $T$ and a matrix temperature $T_s$. 
 \begin{equation}
 C_s \frac{dT_s}{dt} = h a\,(T - T_s), \qquad C_s = (1-\varepsilon)\,\rho_s c_s ,
 \end{equation}
-with $\rho_s$ = \codeword{SOLID_RHO}, $c_s$ = \codeword{SOLID_CP}. Over one time step with $T$ held at its current value this has the exact solution
+with $\rho_s$ = \codeword{SOLID_RHO}, $c_s$ = \codeword{SOLID_CP}. Gas and matrix are stepped together, implicitly (backward Euler), so that the heat the gas receives in a time step is exactly the heat the matrix gives up:
 \begin{equation}
-T_s^{n+1} = T + \left(T_s^{n} - T\right) \exp\!\left(-\frac{h a\, \Delta t}{C_s}\right),
+C_s\,\frac{T_s^{n+1} - T_s^{n}}{\Delta t} = h a\,(T^{n+1} - T_s^{n+1}) .
 \end{equation}
-which is used once per time step, so it is stable for any time step. With \codeword{HEAT = fixed}, $C_s$ is taken as zero and $T_s$ stays at \codeword{SOLID_T}.
+Eliminating $T_s^{n+1}$, the heat into the gas is
+\begin{equation}
+Q_s = h a\,(T_s^{n+1} - T^{n+1}) = h_{eff}\,(T_s^{n} - T^{n+1}), \qquad h_{eff} = \frac{h a\, C_s}{C_s + h a\,\Delta t} ,
+\end{equation}
+which is stable for any time step. After the energy equation is solved, $Q_s$ is evaluated with the new gas temperature and the matrix is updated with $T_s^{n+1} = T_s^{n} - Q_s\,\Delta t/C_s$, so the two sides balance to round-off. With \codeword{HEAT = fixed}, $C_s = 0$: $h_{eff} = h a$ and $T_s$ stays at \codeword{SOLID_T}.
 
 \paragraph{Heat source in the gas energy equation.}
-The gas receives, per unit volume,
+The gas receives $Q_s = h_{eff}\,(T_s^{n} - T)$ per unit volume. For a large $h a$ an explicit source makes the energy equation stiff, so it is linearised in the internal energy $e$: with $T \approx T^* + (e - e^*)/c_v$ around the current state $(T^*, e^*)$,
 \begin{equation}
-Q_s = h a\,(T_s - T) .
+Q_s \approx \underbrace{h_{eff}\,(T_s^{n} - T^*) + \frac{h_{eff}}{c_v}\, e^*}_{\textrm{explicit}} \;-\; \underbrace{\frac{h_{eff}}{c_v}\, e}_{\textrm{implicit}} ,
 \end{equation}
-For a large $h a$ an explicit source makes the energy equation stiff, so it is linearised in the internal energy $e$: with $T \approx T^* + (e - e^*)/c_v$ around the current state $(T^*, e^*)$,
-\begin{equation}
-Q_s \approx \underbrace{h a\,(T_s - T^*) + \frac{h a}{c_v}\, e^*}_{\textrm{explicit}} \;-\; \underbrace{\frac{h a}{c_v}\, e}_{\textrm{implicit}} ,
-\end{equation}
-with $c_v = c_p - R_u/M$ of the gas. The implicit part goes on the matrix diagonal, the explicit part into the source. At convergence both give $Q_s = h a (T_s - T)$. The heat from the matrix into the gas, $\int_V Q_s\,dV$, is written by the \codeword{porHeat_<zone>} function object and reported as \codeword{HEAT_<zone>}.
+with $c_v = c_p - R_u/M$ of the gas. The implicit part goes on the matrix diagonal, the explicit part into the source; with $c_v$ constant the linearisation is exact. The heat from the matrix into the gas, $\int_V Q_s\,dV$, is written by the \codeword{porHeatToGas_<zone>} function object (negative while the gas heats the matrix) and reported as \codeword{HEAT_<zone>}.
 
 \paragraph{Fit to measured data (\texttt{RESISTANCE = fit}).}
 For measured pairs $(U_i, \Delta p_i)$ over a sample of length \codeword{DP_LENGTH} $= L$, $D$ and $F$ are the least-squares solution through the origin of
@@ -537,6 +555,10 @@ Written to \codeword{system/internalFunctionObjects}, every time step:
     \item \codeword{wallHeatFlux} - heat flux on every wall patch (compressible), positive = into the gas.
     \item \codeword{force_<body>} - force on the moving faces of each body.
     \item \codeword{p_<patch>} - area-averaged pressure on each moving zone face.
+    \item \codeword{por_<zone>} - volume averages over each porous zone (p, T, matrix temperature).
+    \item \codeword{porHeatToGas_<zone>} - heat from the matrix into the gas (W, \codeword{HEAT} fixed or solved).
+    \item \codeword{porDragHeat_<zone>} - drag work added to the gas (W, only with \codeword{DISSIPATION = yes}).
+    \item \codeword{porDrag_<zone>} - force of the gas on a porous zone moving with a body (N, vector).
 \end{itemize}
 
 \subsection{Post-Processing}\label{sec:internalPost}
@@ -658,7 +680,7 @@ The work done by the gas on a body over the window, per cycle:
 \begin{equation}
 W_{body} = \frac{1}{N}\int_{t_0}^{t_1} F_z(t)\, v(t)\, dt ,
 \end{equation}
-with $F_z$ the \codeword{total_z} column of \codeword{force_<body>} (pressure and viscous) and $v$ the body velocity from its motion table. Because the solver interpolates the table linearly in time, the mesh moves with a constant velocity between two table points $t_j$ and $t_{j+1}$:
+with $F_z$ the \codeword{total_z} column of \codeword{force_<body>} (pressure and viscous), plus the $z$ component of \codeword{porDrag_<zone>} for porous zones moving with the body (reported separately as \codeword{WORK_DRAG_<body>}), and $v$ the body velocity from its motion table. Because the solver interpolates the table linearly in time, the mesh moves with a constant velocity between two table points $t_j$ and $t_{j+1}$:
 \begin{equation}
 v(t) = \frac{\Delta z_{j+1} - \Delta z_j}{t_{j+1} - t_j}, \qquad t_j \le t < t_{j+1} .
 \end{equation}
@@ -676,7 +698,7 @@ The force of the gas on each body along the axis, pressure only, relative to the
 \begin{equation}
 F_{body} = \sum_{f \in body} (p_f - p_{ref})\,\mathbf{S}_f \cdot \mathbf{e}_z .
 \end{equation}
-For \codeword{pimpleFoam} $p$ is kinematic, so $F$ is multiplied by the gas density at the charge state and $p_{ref} = 0$. The viscous force is left out; in a typical displacer run it is about $10^{-6}$ of the pressure force.
+Porous zones moving with the body add the gas drag on them, $\sum_{cells} (\mathbf{f}_{drag}\cdot\mathbf{e}_z)\,V$ from \codeword{porDrag_<zone>} of the previous step. For \codeword{pimpleFoam} $p$ is kinematic, so $F$ is multiplied by the gas density at the charge state and $p_{ref} = 0$. The viscous force is left out; in a typical displacer run it is about $10^{-6}$ of the pressure force.
 
 The torque on the crank follows from the virtual work, $F\,dz = T\,d\theta$:
 \begin{equation}
@@ -745,7 +767,7 @@ V(t) = \frac{m(t)}{\bar{\rho}(t)} .
 \begin{equation}
 \mathrm{PV\_WORK} = \frac{1}{N}\oint \bar{p}\, dV \approx \frac{1}{N}\sum_i \frac{\bar{p}_i + \bar{p}_{i+1}}{2}\,(V_{i+1} - V_i)
 \end{equation}
-over the window. A loop run clockwise in the p--V plot gives positive work (out of the gas). \codeword{PV_WORK} uses one mean pressure for the whole gas. The body work uses the pressure on each face, so the two differ by the pressure differences inside the engine (flow loss through the regenerator and the holes): $\mathrm{PV\_WORK} - \mathrm{AVG\_ENERGY}$ is roughly the work lost to flow friction per cycle. \codeword{pV.png} plots $\bar{p}$ against $V$ for the last \codeword{--pvCycles} cycles.
+over the window. A loop run clockwise in the p--V plot gives positive work (out of the gas). \codeword{PV_WORK} uses one mean pressure for the whole gas. The body work uses the pressure on each face, so the two differ by the pressure differences inside the engine (flow loss through the regenerator and the holes): $\mathrm{PV\_WORK} - \mathrm{AVG\_ENERGY}$ is roughly the work lost to flow friction per cycle. \codeword{pV.png} plots the last \codeword{--pvCycles} cycles (an unfinished last cycle is marked): the p--V loops with their work, p and $V$ against the crank angle, and the loop shape as $p/(C V^{-n}) - 1$ with $C$, $n$ fitted to each cycle. The pressure is the area average on the faces of the body whose motion table follows the gas volume (the piston crown, so the loop area is the piston work), or $\bar{p}$ when no such body is found.
 
 \paragraph{Mass drift.}
 A closed volume must keep its mass:
@@ -783,7 +805,7 @@ $s_p = 1$, $p_0 = 0$ for compressible, $s_p = \rho_{ref}$, $p_0$ = \codeword{CHA
 The imbalance is zero for a converged steady run, and small (the change of gas mass inside) for a transient one. Without \codeword{RHO_REF} an incompressible run reports \codeword{VOLUME_FLOW_<group>} in m$^3$/s and the kinematic pressure.
 
 \paragraph{Porous zones.}
-\codeword{porHeat_<zone>} writes $\int_{zone} Q_s\,dV$ with $Q_s = h a\,(T_s - T)$ (Section~\ref{sec:regenModel}); its time average is \codeword{HEAT_<zone>} (W, from the matrix into the gas). \codeword{por_<zone>} writes the volume averages over the zone; their time averages are \codeword{P_MEAN_<zone>}, \codeword{T_MEAN_<zone>} and \codeword{TS_MEAN_<zone>} (matrix temperature).
+\codeword{porHeatToGas_<zone>} writes $\int_{zone} Q_s\,dV$ with $Q_s = h a\,(T_s - T)$ (Section~\ref{sec:regenModel}); its time average is \codeword{HEAT_<zone>} (W, from the matrix into the gas). \codeword{por_<zone>} writes the volume averages over the zone; their time averages are \codeword{P_MEAN_<zone>}, \codeword{T_MEAN_<zone>} and \codeword{TS_MEAN_<zone>} (matrix temperature).
 
 \paragraph{Steady runs.}
 The time is the iteration number. The averages above are taken over the last \codeword{avgIters} = 50 iterations (fewer if the run is shorter): $t_0 = \max(t_{first}, t_{end} - 50)$, $t_1 = t_{end}$. There are no cycles, work or p--V values. \codeword{flowConvergence.png} shows the initial residuals and the flow, pressure and temperature of each inlet/outlet group per iteration.

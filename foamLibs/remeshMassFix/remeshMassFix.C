@@ -31,6 +31,11 @@ and limitations.
 //                                          The fill replaces a second, nearest-cell map: v2412 mapNearest crashes
 //                                          in parallel (cell walk over a disconnected piece of the old mesh)
 //   remeshMassFix -time <t> -mass <m>      scales p and rho by m/gasMass (T kept, rho ~ p for a perfect gas)
+//   remeshMassFix -time 0 -warmStart <zone> -warmStartT '(Tlow Thigh)'
+//                                          warm start: gas T along z from Tlow at the -z end of the cellZone to Thigh
+//                                          at its +z end (cell centres, as the matrix start), constant beyond the
+//                                          ends; p uniform so the gas mass (sum p V/T, R cancels) is kept. Running it
+//                                          again gives the same fields
 // setExprFields would do the scaling, but v2412 aborts on any expression that reads a field
 
 #include "argList.H"
@@ -43,6 +48,7 @@ and limitations.
 #include "OSspecific.H"
 #include "IOmanip.H"
 #include "syncTools.H"
+#include "Pair.H"
 
 using namespace Foam;
 
@@ -183,13 +189,28 @@ label combineFields
 }
 
 
-// porous zones with a matrix temperature: Ts_<zone> fields whose cellZone exists
+// zone of a matrix field: Ts_<zone> (matrix temperature) or solidFrac_<zone> (fibre fraction of a random-fibre zone)
+word matrixZone(const word& name)
+{
+    for (const word prefix : {word("Ts_"), word("solidFrac_")})
+    {
+        if (name.size() > prefix.size() && name.substr(0, prefix.size()) == prefix)
+        {
+            return name.substr(prefix.size());
+        }
+    }
+    return word::null;
+}
+
+
+// porous zones with matrix fields whose cellZone exists
 wordList matrixFields(const fvMesh& mesh, const IOobjectList& objects)
 {
     wordList names;
     for (const word& name : objects.sortedNames(volScalarField::typeName))
     {
-        if (name.size() > 3 && name.substr(0, 3) == "Ts_" && mesh.cellZones().findZoneID(name.substr(3)) != -1)
+        const word zone(matrixZone(name));
+        if (!zone.empty() && mesh.cellZones().findZoneID(zone) != -1)
         {
             names.append(name);
         }
@@ -198,10 +219,10 @@ wordList matrixFields(const fvMesh& mesh, const IOobjectList& objects)
 }
 
 
-// zone volume and volume-averaged matrix temperature
+// zone volume and volume average (matrix temperature) or integral (fibre volume)
 void matrixReport(const fvMesh& mesh, const volScalarField& Ts, const word& when)
 {
-    const labelList& cells = mesh.cellZones()[mesh.cellZones().findZoneID(Ts.name().substr(3))];
+    const labelList& cells = mesh.cellZones()[mesh.cellZones().findZoneID(matrixZone(Ts.name()))];
     scalar vol = 0;
     scalar sumTV = 0;
     for (const label celli : cells)
@@ -211,8 +232,16 @@ void matrixReport(const fvMesh& mesh, const volScalarField& Ts, const word& when
     }
     reduce(vol, sumOp<scalar>());
     reduce(sumTV, sumOp<scalar>());
-    Info<< "matrix " << Ts.name() << " " << when << ": zone volume " << setprecision(10) << vol
-        << " m3, mean Ts " << sumTV/max(vol, VSMALL) << " K" << endl;
+    if (Ts.name().substr(0, 3) == "Ts_")
+    {
+        Info<< "matrix " << Ts.name() << " " << when << ": zone volume " << setprecision(10) << vol
+            << " m3, mean Ts " << sumTV/max(vol, VSMALL) << " K" << endl;
+    }
+    else
+    {
+        Info<< "matrix " << Ts.name() << " " << when << ": zone volume " << setprecision(10) << vol
+            << " m3, fibre volume " << sumTV << " m3 (the solver scales it back to SOLID_MASS)" << endl;
+    }
 }
 
 
@@ -220,7 +249,7 @@ void matrixReport(const fvMesh& mesh, const volScalarField& Ts, const word& when
 void extendMatrixField(const fvMesh& mesh, volScalarField& Ts, const label nLayers)
 {
     scalarField isSet(mesh.nCells(), 0);
-    for (const label celli : mesh.cellZones()[mesh.cellZones().findZoneID(Ts.name().substr(3))])
+    for (const label celli : mesh.cellZones()[mesh.cellZones().findZoneID(matrixZone(Ts.name()))])
     {
         isSet[celli] = 1;
     }
@@ -237,6 +266,8 @@ int main(int argc, char *argv[])
     argList::addBoolOption("writeCover", "write remeshCover = 1 (old mesh, before mapping)");
     argList::addBoolOption("combine", "fill the cells the volume-weighted map left without overlap");
     argList::addOption("minCover", "frac", "below this covered fraction a cell is filled from its neighbours (0.5)");
+    argList::addOption("warmStart", "zone", "gas T along z from the cellZone's ends (-warmStartT), p for the same mass");
+    argList::addOption("warmStartT", "(Tlow Thigh)", "warm start T at the -z and +z ends of the zone");
     timeSelector::addOptions(false, false);
 
     #include "setRootCase.H"
@@ -323,6 +354,77 @@ int main(int argc, char *argv[])
             FatalErrorInFunction
                 << nUnfilled << " cells without overlap have no filled neighbour within 20 layers" << exit(FatalError);
         }
+    }
+
+    if (args.found("warmStart"))
+    {
+        const word zoneName(args.get<word>("warmStart"));
+        const Pair<scalar> Tends(args.get<Pair<scalar>>("warmStartT"));
+        const label zoneID = mesh.cellZones().findZoneID(zoneName);
+        if (zoneID == -1)
+        {
+            FatalErrorInFunction
+                << "no cellZone " << zoneName << ", zones: " << mesh.cellZones().names() << exit(FatalError);
+        }
+        // zone extent along z (cell centres), as the matrix start profile of the porous heat source
+        const volVectorField& C = mesh.C();
+        scalar zLow = GREAT;
+        scalar zHigh = -GREAT;
+        for (const label celli : mesh.cellZones()[zoneID])
+        {
+            zLow = min(zLow, C[celli].z());
+            zHigh = max(zHigh, C[celli].z());
+        }
+        reduce(zLow, minOp<scalar>());
+        reduce(zHigh, maxOp<scalar>());
+
+        volScalarField T(IOobject("T", runTime.timeName(), mesh, IOobject::MUST_READ, IOobject::NO_WRITE), mesh);
+        volScalarField p(IOobject("p", runTime.timeName(), mesh, IOobject::MUST_READ, IOobject::NO_WRITE), mesh);
+        const scalarField& V = mesh.V();
+        const scalarField T0(T.primitiveField());
+        const scalarField p0(p.primitiveField());
+        const scalar mass0 = gSum(p0*V/T0);
+        const scalar vol = gSum(V);
+
+        // T along z, constant beyond the zone ends
+        forAll(T, celli)
+        {
+            const scalar s = min(max((C[celli].z() - zLow)/max(zHigh - zLow, SMALL), 0.0), 1.0);
+            T[celli] = Tends.first() + s*(Tends.second() - Tends.first());
+        }
+        // uniform p with the same mass
+        const scalar pNew = mass0/gSum(V/T.primitiveField());
+        p.primitiveFieldRef() = pNew;
+
+        // calculated patches from the cells, the others evaluate (fixed wall T stays)
+        for (volScalarField* fld : {&T, &p})
+        {
+            fld->correctBoundaryConditions();
+            forAll(fld->boundaryField(), patchi)
+            {
+                if (isA<calculatedFvPatchScalarField>(fld->boundaryField()[patchi]))
+                {
+                    fld->boundaryFieldRef()[patchi] == fld->boundaryField()[patchi].patchInternalField();
+                }
+            }
+        }
+        T.write();
+        p.write();
+
+        // a rho of that time (if any) follows p/T
+        IOobject rhoIO("rho", runTime.timeName(), mesh, IOobject::MUST_READ, IOobject::NO_WRITE);
+        if (rhoIO.typeHeaderOk<volScalarField>(true))
+        {
+            volScalarField rho(rhoIO, mesh);
+            rho.primitiveFieldRef() *= (pNew/p0)*(T0/T.primitiveField());
+            rho.correctBoundaryConditions();
+            rho.write();
+        }
+        Info<< "warm start: gas T " << Tends.first() << " K below z " << zLow << " to " << Tends.second()
+            << " K above z " << zHigh << " (" << zoneName << "), mean T " << gSum(T0*V)/vol << " -> "
+            << gSum(T.primitiveField()*V)/vol << " K" << nl
+            << "warm start: p " << gSum(p0*V)/vol << " -> " << pNew << " Pa, same gas mass (sum p V/T "
+            << setprecision(10) << mass0 << " -> " << pNew*gSum(V/T.primitiveField()) << ")" << endl;
     }
 
     // gas mass (compressible only)

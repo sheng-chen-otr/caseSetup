@@ -2,6 +2,7 @@
 GAS = air
 CHARGE_PRESSURE = 1e5
 INIT_T = 300
+INIT_T_FIELD = uniform
 TRANSPORT = const
 MOL_WEIGHT = default
 CP = default

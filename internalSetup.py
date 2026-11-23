@@ -198,19 +198,21 @@ def main(argv=None):
         writeInternal.writeMotionGeometry(motionInfo, mshDir)
         writeInternal.writeRemeshMeshes(motionInfo, mshDir)
     writeInternal.writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict)
-    writeInternal.writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict,
-                                      motionInfo['gapRefs'] if motionInfo else None)
+    writeInternal.writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo)
     writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGroups)
     writeInternal.writeThermoInternal(templateLoc, fullCaseSetupDict)
     fanNames = writeInternal.writeFanBaffles(geomDict, fullCaseSetupDict)
     porous = writeInternal.getPorous(geomDict, fullCaseSetupDict)
-    writeInternal.writeFvOptionsInternal(porous, fullCaseSetupDict)
+    porOwners = motionInfo['porOwners'] if motionInfo else {}
+    writeInternal.writeFvOptionsInternal(porous, fullCaseSetupDict, porOwners)
+    warmStart = writeInternal.getWarmStart(fullCaseSetupDict, porous)
     writeInternal.writeTurbulenceInternal(templateLoc, fullCaseSetupDict)
     writeInternal.writeControlDictInternal(templateLoc, fullCaseSetupDict)
     writeInternal.writeNumericsInternal(templateLoc, fullCaseSetupDict, writeInternal.hasPressureBC(wallGroups))
     writeInternal.writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo, porous)
     motionZones = writeInternal.writeMotionDicts(templateLoc, motionInfo, fullCaseSetupDict) if motionInfo else None
-    writeInternal.makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones, fanNames, motionInfo)
+    writeInternal.makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones, fanNames, motionInfo,
+                                      warmStart)
 
     copyPostSetup(execDir, caseDir)
     fullCaseSetupDict = writeInternal.addSetupInfo(fullCaseSetupDict, wallGroups, motionInfo)

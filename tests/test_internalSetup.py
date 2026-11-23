@@ -20,6 +20,7 @@ and limitations.
 import gzip
 import os
 import re
+import types
 
 import numpy as np
 import pytest
@@ -293,6 +294,25 @@ def test_scripts_slurm_header_and_placeholders(tmp_path, monkeypatch, repo_root)
     assert 'runScript --meshOnly' in submit and 'motionCheckScript' in submit
 
 
+def test_scripts_without_account_or_modules(tmp_path, monkeypatch, repo_root):
+    #in-house cluster: partition and node fixed, no account, no environment modules, mpirun through foamExec
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    compute = full['GLOBAL_COMPUTE_SETUP']
+    compute['ACCOUNT'], compute['MODULES'], compute['POST_MODULES'] = [''], [''], ['']
+    compute['PARTITION'], compute['NODELIST'] = ['solve2'], ['cfd07']
+    compute['MPI_RUN'] = ['/usr/bin/mpirun', '/of/bin/tools/foamExec']
+    case = tmp_path / '008'
+    case.mkdir()
+    monkeypatch.chdir(case)
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    for name in ['runScript', 'motionCheckScript', 'postScript']:
+        text = (case / name).read_text()
+        assert '--account' not in text and 'module' not in text
+        assert '#SBATCH --job-name=008' in text and '#SBATCH --partition=solve2\n#SBATCH --nodelist=cfd07\n' in text
+    assert 'RUN="/usr/bin/mpirun /of/bin/tools/foamExec"' in (case / 'runScript').read_text()
+
+
 def test_post_script_and_chaining(tmp_path, monkeypatch, repo_root):
     case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a'])
     post = (case / 'postScript').read_text()
@@ -368,6 +388,26 @@ def _fullDefaults(repo_root, solver):
     return templateLoc, full
 
 
+def test_segment_snappy_dicts(tmp_path, monkeypatch, repo_root):
+    #remeshing: the case dict keeps LOC_IN_MESH as given, each other mesh gets its own dict with its location and
+    #z-only end-gap bands; the run script copies it over the case's
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    full['WALL-chamber'] = {}
+    geomDict = {'WALL-chamber.stl': {'refinement': '1', 'scale': '1', 'layers': '0', 'expansion': '1.2'}}
+    motionInfo = {'gapRefs': [], 'segments': [(0.0, 90.0), (90.0, 360.0)],
+                  'meshSetups': [{'loc': [0.001, 0.002, 0.003], 'bands': []},
+                                 {'loc': [0.001, 0.002, 0.0287936], 'bands': [(0.026, 0.0315, 2)]}]}
+    monkeypatch.chdir(tmp_path)
+    writeInternal.writeSnappyInternal(templateLoc, geomDict, full, motionInfo)
+    case = (tmp_path / 'system/snappyHexMeshDict').read_text()
+    seg = (tmp_path / 'meshes/seg02/snappyHexMeshDict').read_text()
+    assert 'locationInMesh (0.001 0.002 0.003);' in case and 'GAPZ' not in case
+    assert 'locationInMesh (0.001 0.002 0.0287936);' in seg
+    assert 'GAPZ-0 { type searchableBox; min (-1e3 -1e3 0.026); max (1e3 1e3 0.0315); }' in seg
+    assert 'GAPZ-0 { mode inside; levels ((1e15 0)); levelIncrement (0 20 (0 0 2)); }' in seg
+    assert not (tmp_path / 'meshes/seg01').exists()
+
+
 def test_flow_type_and_nu(repo_root):
     templateLoc, full = _fullDefaults(repo_root, 'pimpleFoam')
     assert writeInternal.getFlow(full) == 'incompressible'
@@ -412,6 +452,15 @@ def test_compressible_dicts_unchanged(tmp_path, monkeypatch, repo_root):
     assert 'executeControl  timeStep;' in heat and 'writeControl    writeTime;' in heat
 
 
+def test_relaxation_auto_steady(tmp_path, monkeypatch, repo_root):
+    #steady solvers relax by default (auto = p 0.3, U and e 0.7)
+    templateLoc, full = _fullDefaults(repo_root, 'rhoSimpleFoam')
+    monkeypatch.chdir(tmp_path)
+    assert full['GLOBAL_SIM_CONTROL']['RELAX_P'] == ['auto']
+    text = writeInternal.getRelaxation(full)
+    assert 'p               0.3;' in text and 'e               0.7;' in text
+
+
 def test_relaxation_only_with_outer_correctors(tmp_path, monkeypatch, repo_root):
     templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
     monkeypatch.chdir(tmp_path)
@@ -419,6 +468,12 @@ def test_relaxation_only_with_outer_correctors(tmp_path, monkeypatch, repo_root)
     text = (tmp_path / 'system/fvSolution').read_text()
     assert 'nOuterCorrectors 1;' in text and 'relaxationFactors' not in text and '<RELAXATION>' not in text
     full['GLOBAL_SIM_CONTROL']['N_OUTER_CORR'] = ['3']
+    #transient, RELAX_* auto: no under-relaxation (it breaks the gas energy balance)
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    text = (tmp_path / 'system/fvSolution').read_text()
+    assert 'nOuterCorrectors 3;' in text and 'relaxationFactors' not in text and '<RELAXATION>' not in text
+    for key, value in (('RELAX_P', '0.3'), ('RELAX_U', '0.7'), ('RELAX_E', '0.7')):
+        full['GLOBAL_SIM_CONTROL'][key] = [value]
     writeInternal.writeNumericsInternal(templateLoc, full)
     text = (tmp_path / 'system/fvSolution').read_text()
     assert 'nOuterCorrectors 3;' in text and 'relaxationFactors' in text
@@ -525,6 +580,38 @@ def test_crank_scripts_compile_the_library(tmp_path, monkeypatch, repo_root):
     assert run.index('wmake libso') < run.index('createZeroDirectory')
     motion = (case / 'motionCheckScript').read_text()
     assert motion.index('wmake libso') < motion.index('moveDynamicMesh -parallel')
+
+
+def test_crank_dict_porous_zones(tmp_path, monkeypatch, repo_root):
+    #a porous zone moving with a body is listed under it: its gas drag is part of the body force
+    monkeypatch.chdir(tmp_path)
+    os.makedirs('constant')
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    full['MESH_MOTION']['DRIVE'] = ['crank']
+    crank = writeInternal.getCrank(full)
+    disp = types.SimpleNamespace(name='displacer', source='MOVE-displacer', movedPids=['top', 'bottom'])
+    piston = types.SimpleNamespace(name='piston', source='WALL-chamber', movedPids=['crown'])
+    zone = types.SimpleNamespace(name='displacerTop', body=disp)
+    motionInfo = {'bodies': [disp, piston], 'zones': [zone], 'porOwners': {'POR-matrix': disp}}
+    writeInternal.writeCrankDict(templateLoc, motionInfo, crank, 0.0, 'constant/dynamicMeshDict', '<constant>/tables')
+    text = open('constant/dynamicMeshDict').read()
+    displacer = text[text.index('displacer\n'):text.index('piston\n')]
+    assert 'porousZones (POR-matrix);' in displacer and text.count('porousZones') == 1
+
+
+def test_warm_start_script(tmp_path, monkeypatch, repo_root):
+    #warm start: remeshMassFix compiled and run before the solve, only while the case has nothing but the 0 time
+    case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a'])
+    assert 'warmStart' not in (case / 'runScript').read_text() and 'remeshMassFix' not in (case / 'runScript').read_text()
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'], None, None,
+                                      {'zone': 'POR-matrix', 'T': [600, 300]})
+    run = (case / 'runScript').read_text()
+    assert "remeshMassFix -parallel -time 0 -warmStart POR-matrix -warmStartT '(600 300)'" in run
+    assert "cd '/opt/caseSetup/foamLibs/remeshMassFix' && wmake" in run
+    assert run.index('createZeroDirectory') < run.index('-warmStart') < run.index('running rhoPimpleFoam')
+    assert 'ls -d processor0/[0-9]* | wc -l) = 1' in run
 
 
 #----- decomposition without scotch
@@ -786,7 +873,7 @@ def test_porous_resistance_inputs(repo_root):
     zone = writeInternal.getPorous(geomDict, full)[0]
     dh = 0.8*1e-4/0.2
     assert zone['d'][0] == pytest.approx(129.0/(2*0.8*dh**2)) and zone['f'][0] > 0
-    assert zone['heat'] == 'fixed' and zone['ha'] > 0 and zone['Ts'] == 550 and zone['Cs'] == 0
+    assert zone['heat'] == 'fixed' and zone['ha'] > 0 and zone['Ts'] == [550, 550] and zone['Cs'] == 0
     #fit: data made from d 5e6, f 400 is fitted back
     gas = {'RHO': writeInternal.getGasDensity(full), 'MU': writeInternal.getGasProperties(full)['MU']}
     pairs = []
@@ -820,14 +907,157 @@ def test_porous_fvoptions_and_function_objects(tmp_path, monkeypatch, repo_root)
     assert 'd   (10000000 10000000 10000000);' in text and 'rotation { type axes; e1 (1 0 0); e2 (0 1 0); }' in text
     assert 'type            scalarCodedSource;' in text and 'fields          (e);' in text
     assert 'const scalar ha = 20000;' in text and 'const scalar Cs = 395000;' in text
-    assert 'Ts_POR-matrix' in text and text.count('#{') == text.count('#}')
+    assert 'const word zoneName("POR-matrix");' in text and text.count('#{') == text.count('#}')
+    #gas and matrix implicit together: the same hEff*(TsOld - T1) heats the gas and cools the matrix
+    assert 'hEff = (Cs > 0 ? ha*Cs/(Cs + ha*dt) : ha)' in text and 'Qs[c] = hEff*(TsOld[c] - T1);' in text
+    assert 'Ts[c] = TsOld[c] - Qs[c]*dt/Cs;' in text and 'codeCorrect\n        #{' in text
+    assert 'const scalar TinitLow = 600;' in text and 'const scalar TinitHigh = 600;' in text
+    #two SOLID_T values: linear start from the -z to the +z end
+    templateLoc, full2, geomDict2 = _porDefaults(repo_root, 'rhoPimpleFoam', HEAT='solved', HA='2e4', SOLID_T='600 300')
+    porous2 = writeInternal.getPorous(geomDict2, full2)
+    assert porous2[0]['Ts'] == [600, 300]
+    text2 = writeInternal.porousHeatSource(porous2[0], 718.0)
+    assert 'const scalar TinitLow = 600;' in text2 and 'const scalar TinitHigh = 300;' in text2
+    assert 'typeHeaderOk<volScalarField>(true)' in text2
     #function objects: zone averages incl. the matrix T, heat into the gas
     writeInternal.writeFunctionObjectsInternal({}, full, None, porous)
     fos = (tmp_path / 'system/internalFunctionObjects').read_text()
-    assert 'porHeat_POR-matrix' in fos and '(Qs_POR-matrix);' in fos and '(p T Ts_POR-matrix);' in fos
-    #no porous zone: fvOptions removed
+    assert 'porHeatToGas_POR-matrix' in fos and '(Qs_POR-matrix);' in fos and '(p T Ts_POR-matrix);' in fos
+    #DISSIPATION no (default): no extra energy sources
+    assert 'DragHeat' not in text and 'viscousDissipation' not in text
+    #DISSIPATION yes: drag work of the static zone and viscous dissipation into e, logged
+    full['GLOBAL_SIM_CONTROL']['DISSIPATION'] = ['yes']
+    writeInternal.writeFvOptionsInternal(porous, full)
+    text = (tmp_path / 'constant/fvOptions').read_text()
+    writeInternal.writeFunctionObjectsInternal({}, full, None, porous)
+    fos = (tmp_path / 'system/internalFunctionObjects').read_text()
+    assert 'POR_matrixDragHeat' in text and 'heat[c] = Ur & (C & Ur);' in text and 'vector(Zero)' in text
+    assert 'type            viscousDissipation;' in text
+    assert 'const tensor Dt(tensor(10000000, 0, 0, 0, 10000000, 0, 0, 0, 10000000));' in text
+    assert '(porDragHeat_POR-matrix);' in fos and 'porDrag_POR-matrix' not in fos.replace('porDragHeat', '')
+    #no porous zone: viscous dissipation only, DISSIPATION no: fvOptions removed
+    writeInternal.writeFvOptionsInternal([], full)
+    text = (tmp_path / 'constant/fvOptions').read_text()
+    assert 'viscousDissipation' in text and 'Porosity' not in text
+    full['GLOBAL_SIM_CONTROL']['DISSIPATION'] = ['no']
     writeInternal.writeFvOptionsInternal([], full)
     assert not (tmp_path / 'constant/fvOptions').exists()
+    writeInternal.writeFvOptionsInternal(porous, full)
+    text = (tmp_path / 'constant/fvOptions').read_text()
+    assert 'viscousDissipation' not in text and 'DragHeat' not in text
+
+
+def test_porous_moving_drag(tmp_path, monkeypatch, repo_root):
+    #a zone moving with a body: coded drag on U - Umat instead of explicitPorositySource, force logged and in the crank
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'constant').mkdir()
+    (tmp_path / 'system').mkdir()
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoPimpleFoam', HEAT='solved', HA='2e4', SOLID_T='600 300',
+                                              E1='0 0 1', E2='1 0 0', D='1 2 3', F='4 5 6')
+    full['GLOBAL_SIM_CONTROL']['DISSIPATION'] = ['yes']
+    porous = writeInternal.getPorous(geomDict, full)
+    body = types.SimpleNamespace(name='displacer')
+    writeInternal.writeFvOptionsInternal(porous, full, {'POR-matrix': body})
+    text = (tmp_path / 'constant/fvOptions').read_text()
+    assert 'explicitPorositySource' not in text and 'type            vectorCodedSource;' in text
+    assert 'fields          (U);' in text and 'codeAddSupRho\n        #{' in text and 'codeAddSup #{ #};' in text
+    assert 'Umat[c] = d/(cellPoints[c].size()*dt);' in text and 'porDrag[c] = (C & Ur);' in text
+    assert 'diag[c] -= iso*V[c];' in text and 'source[c] -= ((C & Umat[c]) - ((C - iso*I) & U[c]))*V[c];' in text
+    #d along e1 = z (1), e2 = x (2), e3 = e1 x e2 = y (3)
+    assert 'const tensor Dt(tensor(2, 0, 0, 0, 3, 0, 0, 0, 1));' in text
+    assert 'const tensor Ft(tensor(5, 0, 0, 0, 6, 0, 0, 0, 4));' in text
+    assert 'm.lookupObject<volVectorField>("Umat_" + zoneName)[c]' in text and text.count('#{') == text.count('#}')
+    motionInfo = {'bodies': [], 'zones': [], 'porOwners': {'POR-matrix': body}}
+    writeInternal.writeFunctionObjectsInternal({}, full, motionInfo, porous)
+    fos = (tmp_path / 'system/internalFunctionObjects').read_text()
+    assert '(porDrag_POR-matrix);' in fos and '(porDragHeat_POR-matrix);' in fos
+    #incompressible: kinematic drag (nu), force scaled by the gas density, no energy sources
+    full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['pimpleFoam']
+    porous = writeInternal.getPorous(geomDict, full)
+    writeInternal.writeFvOptionsInternal(porous, full, {'POR-matrix': body})
+    text = (tmp_path / 'constant/fvOptions').read_text()
+    rho = writeInternal.getGasDensity(full)
+    assert 'codeAddSup\n        #{' in text and 'codeAddSupRho #{ #};' in text and 'const scalar rhoC = 1;' in text
+    assert 'porDrag[c] = %.9g*(C & Ur);' % (rho) in text
+    assert 'viscousDissipation' not in text and 'scalarCodedSource' not in text
+
+
+def test_fiber_coeffs_blend():
+    #felt correlation where tested, single fibres at steel-wool porosity, log-linear between; Darcy limit of the felt
+    #form = 192/(2 eps dh^2)
+    gas = {'RHO': 1.0, 'MU': 2e-5, 'CP': 1000.0, 'PR': 0.7}
+    c, ha, cF, cC, hF, hC = writeInternal.fiberCoeffs(0.8, 5e-5, 1e-9, gas)
+    dh = 0.8*5e-5/0.2
+    assert c == pytest.approx(cF) and ha == pytest.approx(hF) and cF == pytest.approx(2e-5*96/(0.8*dh**2), rel=1e-6)
+    c, ha, cF, cC, hF, hC = writeInternal.fiberCoeffs(0.99, 5e-5, 0.5, gas)
+    assert c == pytest.approx(cC) and ha == pytest.approx(hC) and hC > 3*hF
+    c, ha, cF, cC, hF, hC = writeInternal.fiberCoeffs(0.905, 5e-5, 0.5, gas)
+    assert c == pytest.approx(cF**0.5*cC**0.5) and ha == pytest.approx(hF**0.5*hC**0.5)
+
+
+def test_porous_fiber_deforming(tmp_path, monkeypatch, repo_root):
+    #steel wool: random fibres with a fixed mass, deforming with the mesh: fibre fraction field, per-cell drag and h*a
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'constant').mkdir()
+    (tmp_path / 'system').mkdir()
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoPimpleFoam', RESISTANCE='randomFiber', WIRE_DIA='5e-5',
+                                              SOLID_RHO='7900', SOLID_CP='500', SOLID_MASS='0.02', HEAT='solved',
+                                              SOLID_T='550', MOVES_WITH='mesh')
+    zone = writeInternal.getPorous(geomDict, full)[0]
+    assert zone['fiber']['mass'] == 0.02 and zone['fiber']['cs'] == 500 and zone['Cs'] == 0
+    writeInternal.writeFvOptionsInternal([zone], full, {})
+    text = (tmp_path / 'constant/fvOptions').read_text()
+    assert 'explicitPorositySource' not in text and text.count('#{') == text.count('#}')
+    assert 'const scalar solidVol = %.9g;' % (0.02/7900) in text
+    assert 'solidFrac[zoneCells[i]] *= V0[zoneCells[i]]/V[zoneCells[i]];' in text
+    assert 'diag[c] -= cDrag*V[c];' in text and 'source[c] -= cDrag*Umat[c]*V[c];' in text
+    assert 'const scalar Cs = solidFrac[c]*rhoCs;' in text and 'const scalar rhoCs = %.9g;' % (7900*500) in text
+    assert 'pow(eps, 2.61)' in text and 'muC*96/(eps*sqr(dh))' in text
+    writeInternal.writeFunctionObjectsInternal({}, full, {'bodies': [], 'zones': [], 'porOwners': {}}, [zone])
+    fos = (tmp_path / 'system/internalFunctionObjects').read_text()
+    assert '(solidFrac_POR-matrix);' in fos and '(porDrag_POR-matrix);' in fos and '(Qs_POR-matrix);' in fos
+    #heat through the fibre bed (conduction + radiation) and from the hot wall it touches
+    assert 'kEff[c] = ks*phiC/3 + (radiation ? 16*sigma*pow3(Ts[c])*dw/(3*phiC) : 0);' in text
+    assert 'contactKeys.append' not in text and 'const label nSub' in text
+    full['POR-matrix']['WALL_CONTACT_PIDS'] = ['Hot']
+    full['POR-matrix']['WALL_CONTACT'] = ['0.5']
+    zone = writeInternal.getPorous(geomDict, full)[0]
+    writeInternal.writeFvOptionsInternal([zone], full, {})
+    text = (tmp_path / 'constant/fvOptions').read_text()
+    assert 'contactKeys.append(word("hot"));' in text and 'const scalar contact = 0.5;' in text
+    assert 'Qwall[fc[i]] += q/V[fc[i]]/nSub;' in text and text.count('#{') == text.count('#}')
+    writeInternal.writeFunctionObjectsInternal({}, full, {'bodies': [], 'zones': [], 'porOwners': {}}, [zone])
+    assert '(Qwall_POR-matrix);' in (tmp_path / 'system/internalFunctionObjects').read_text()
+    kc, kr = writeInternal.fiberConductivity(0.01, 5e-5, 50.0, 600.0)
+    assert kc == pytest.approx(50*0.01/3) and kr == pytest.approx(16*5.670374e-8*600**3*5e-5/(3*0.01))
+    #deforming needs a fibre mass, and only random fibres can deform
+    full['POR-matrix']['WALL_CONTACT_PIDS'] = ['']
+    full['POR-matrix']['SOLID_MASS'] = ['']
+    with pytest.raises(SystemExit):
+        writeInternal.getPorous(geomDict, full)
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoPimpleFoam', RESISTANCE='wireMesh', POROSITY='0.8',
+                                              WIRE_DIA='1e-4', REF_VELOCITY='2', MOVES_WITH='mesh')
+    with pytest.raises(SystemExit):
+        writeInternal.getPorous(geomDict, full)
+
+
+def test_warm_start(tmp_path, monkeypatch, repo_root):
+    monkeypatch.chdir(tmp_path)
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoPimpleFoam', HEAT='solved', HA='2e4', SOLID_T='600 300')
+    porous = writeInternal.getPorous(geomDict, full)
+    assert writeInternal.getWarmStart(full, porous) is None
+    full['GLOBAL_MATERIAL']['INIT_T_FIELD'] = ['matrix']
+    assert writeInternal.getWarmStart(full, porous) == {'zone': 'POR-matrix', 'T': [600, 300]}
+    full['GLOBAL_MATERIAL']['INIT_T_FIELD'] = ['POR-matrix']
+    assert writeInternal.getWarmStart(full, porous)['zone'] == 'POR-matrix'
+    full['GLOBAL_MATERIAL']['INIT_T_FIELD'] = ['POR-other']
+    with pytest.raises(SystemExit):
+        writeInternal.getWarmStart(full, porous)
+    #uniform matrix: 'matrix' has no linear zone to follow
+    templateLoc, full, geomDict = _porDefaults(repo_root, 'rhoPimpleFoam', HEAT='solved', HA='2e4', SOLID_T='600')
+    full['GLOBAL_MATERIAL']['INIT_T_FIELD'] = ['matrix']
+    with pytest.raises(SystemExit):
+        writeInternal.getWarmStart(full, writeInternal.getPorous(geomDict, full))
 
 
 def test_fan_baffles(tmp_path, monkeypatch, repo_root):

@@ -162,6 +162,39 @@ def test_gap_width_and_refinement():
     assert distance == pytest.approx(0.0025)
 
 
+def test_gap_bands_thin_end_space():
+    #displacer at its hot end (270 deg): hot gap 7 mm = 3.5 cells of 2 mm -> one z split (7 cells); the displacer's own
+    #two faces never make a band, gaps with enough cells neither
+    zones, bodies = _engine()
+    bands = mu.gapBands(zones, 270.0, 1.0, lambda zone: 0.002, 6)
+    names = [(lower.name, upper.name) for lower, upper, zLo, zHi, splits, before, after in bands]
+    assert ('hot', 'dBot') in names and ('dBot', 'dTop') not in names and ('dTop', 'cold') not in names
+    lower, upper, zLo, zHi, splits, before, after = bands[names.index(('hot', 'dBot'))]
+    assert zHi - zLo == pytest.approx(0.007) and before == pytest.approx(3.5) and splits == 1 and after >= 6
+    assert mu.gapBands(zones, 270.0, 1.0, lambda zone: 0.002, 0) == []
+
+
+def test_mesh_displacement_z():
+    #as the motion solver: anchors 0, a zone's points move with it, linear between, constant beyond the ends
+    zones, bodies = _engine()
+    disp = bodies[0]
+    dz = float(disp.shift(90.0))
+    z = np.array([-0.01, 0.0, 0.0065, 0.013, 0.03, 0.047, 0.0535, 0.06])
+    d = mu.meshDisplacementZ(z, [zn for zn in zones if zn.name != 'crown'], 90.0)
+    assert d[0] == 0 and d[1] == 0 and d[-1] == 0
+    assert d[2] == pytest.approx(0.5*dz) and d[3] == pytest.approx(dz) and d[4] == pytest.approx(dz)
+    assert d[5] == pytest.approx(dz) and d[6] == pytest.approx(0.5*dz)
+
+
+def test_location_follows_its_gap():
+    #point in the cold end space at 0 deg (dTop 0.047 < 0.05 < cold 0.06): mid-gap at 90 deg (dTop 0.053),
+    #or the same relative position when allowed
+    zones, bodies = _engine()
+    assert mu.locationAt([0.1, 0.2, 0.05], zones, 0.0, 90.0, 1.0)[2] == pytest.approx(0.0565)
+    loc = mu.locationAt([0.1, 0.2, 0.05], zones, 0.0, 90.0, 1.0, keep=(0.0, 1.0))
+    assert loc[:2] == [0.1, 0.2] and loc[2] == pytest.approx(0.053 + 3.0/13.0*0.007)
+
+
 #----- tables
 
 def test_tables_start_at_zero_and_share_times(tmp_path):

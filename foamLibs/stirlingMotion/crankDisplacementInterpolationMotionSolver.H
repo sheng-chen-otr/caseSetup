@@ -18,7 +18,8 @@ and limitations.
 
 // crank-driven zone interpolation (ESI OpenFOAM v2412)
 // bodies move along one axis with a position vs crank angle table (one cycle, deg).
-// each time step the gas pressure force on each body gives a crank torque F dz/dtheta,
+// each time step the gas pressure force on each body (plus the gas drag on porous zones moving with it)
+// gives a crank torque F dz/dtheta,
 // the flywheel (inertia, load, friction) is stepped and the zones are moved to the new angle.
 // points between zones are interpolated linearly along the axis (as displacementInterpolation,
 // but zones are matched by name, so the faceZone order in the mesh does not matter)
@@ -43,9 +44,11 @@ class crankDisplacementInterpolationMotionSolver
     // motion axis (unit)
     vector axis_;
 
-    // bodies: name, patches the gas pushes on, displacement vs crank angle
+    // bodies: name, patches the gas pushes on, porous zones moving with it (gas drag porDrag_<zone>),
+    // displacement vs crank angle
     wordList bodyNames_;
     List<labelList> bodyPatches_;
+    List<wordList> bodyPorousZones_;
     PtrList<Function1<scalar>> bodyPosition_;
     scalarField bodyForce_;
     scalarField bodyTorque_;
@@ -72,6 +75,7 @@ class crankDisplacementInterpolationMotionSolver
 
     // remeshing: the last step of the run is written (restarts are not on the write grid)
     bool endRequested_;
+    label endIndex_;
 
     // flywheel and load
     scalar inertia_;

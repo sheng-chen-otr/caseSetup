@@ -17,6 +17,7 @@ and limitations.
 */
 
 #include "crankDisplacementInterpolationMotionSolver.H"
+#include "fvMesh.H"
 #include "addToRunTimeSelectionTable.H"
 #include "SortableList.H"
 #include "volFields.H"
@@ -56,6 +57,7 @@ void Foam::crankDisplacementInterpolationMotionSolver::readCoeffs()
     const dictionary& bodiesDict = coeffs.subDict("bodies");
     bodyNames_ = bodiesDict.toc();
     bodyPatches_.setSize(bodyNames_.size());
+    bodyPorousZones_.setSize(bodyNames_.size());
     bodyPosition_.setSize(bodyNames_.size());
     bodyForce_.setSize(bodyNames_.size(), Zero);
     bodyTorque_.setSize(bodyNames_.size(), Zero);
@@ -71,6 +73,16 @@ void Foam::crankDisplacementInterpolationMotionSolver::readCoeffs()
                 << "body " << bodyNames_[bodyi] << ": no patches match "
                 << patchNames << nl << "Known patches: "
                 << mesh().boundaryMesh().names() << exit(FatalIOError);
+        }
+        bodyPorousZones_[bodyi] = bodyDict.getOrDefault<wordList>("porousZones", wordList());
+        for (const word& zoneName : bodyPorousZones_[bodyi])
+        {
+            if (mesh().cellZones().findZoneID(zoneName) == -1)
+            {
+                FatalIOErrorInFunction(bodyDict)
+                    << "body " << bodyNames_[bodyi] << ": no cellZone " << zoneName << nl
+                    << "Known cellZones: " << mesh().cellZones().names() << exit(FatalIOError);
+            }
         }
         bodyPosition_.set
         (
@@ -165,6 +177,7 @@ void Foam::crankDisplacementInterpolationMotionSolver::readCoeffs()
     stopTheta_ = VGREAT;
     stopIndex_ = labelMax;
     endRequested_ = false;
+    endIndex_ = labelMax;
     if (crankDict.found("stopAngle"))
     {
         const scalar stopDeg = crankDict.get<scalar>("stopAngle");
@@ -292,6 +305,20 @@ void Foam::crankDisplacementInterpolationMotionSolver::calcForces()
         {
             const vectorField Sf(mesh().boundaryMesh()[patchi].faceAreas());
             force += sum((p.boundaryField()[patchi] - pRef_)*(Sf & axis_));
+        }
+        // gas drag on porous zones moving with the body (N/m3, from the zone's drag source, last solved U)
+        for (const word& zoneName : bodyPorousZones_[bodyi])
+        {
+            const volVectorField* dragPtr = mesh().findObject<volVectorField>("porDrag_" + zoneName);
+            if (!dragPtr)
+            {
+                continue;
+            }
+            const scalarField& V = refCast<const fvMesh>(mesh()).V();
+            for (const label celli : mesh().cellZones()[mesh().cellZones().findZoneID(zoneName)])
+            {
+                force += ((*dragPtr)[celli] & axis_)*V[celli]/factor;
+            }
         }
         bodyForce_[bodyi] = factor*returnReduce(force, sumOp<scalar>());
     }
@@ -453,48 +480,81 @@ void Foam::crankDisplacementInterpolationMotionSolver::solve()
     torqueGas_ = sum(bodyTorque_);
     const scalar friction = frictionTorque_*sign(omegaOld_);
 
-    // flywheel: I domega/dt = torqueGas - load - friction, speed-proportional parts implicit
-    powerElec_ = 0;
-    if (load_ == "speed")
+    // flywheel over a step dtStep: I domega/dt = torqueGas - load - friction, speed-proportional parts implicit
+    auto advance = [&](const scalar dtStep)
     {
-        omega_ = omegaFixed_;
-        torqueLoad_ = torqueGas_;
-    }
-    else
-    {
-        scalar c = frictionCoeff_;
-        scalar T0 = friction;
-        if (load_ == "torque")
+        powerElec_ = 0;
+        if (load_ == "speed")
         {
-            T0 += loadTorque_;
-        }
-        else if (load_ == "damper")
-        {
-            c += damping_;
+            omega_ = omegaFixed_;
+            torqueLoad_ = torqueGas_;
         }
         else
         {
-            c += sqr(genK_)/(genRLoad_ + genRInt_);
+            scalar c = frictionCoeff_;
+            scalar T0 = friction;
+            if (load_ == "torque")
+            {
+                T0 += loadTorque_;
+            }
+            else if (load_ == "damper")
+            {
+                c += damping_;
+            }
+            else
+            {
+                c += sqr(genK_)/(genRLoad_ + genRInt_);
+            }
+            omega_ = (inertia_*omegaOld_ + dtStep*(torqueGas_ - T0))/(inertia_ + dtStep*c);
+            torqueLoad_ = T0 + c*omega_;
+            if (load_ == "generator")
+            {
+                const scalar current = genK_*omega_/(genRLoad_ + genRInt_);
+                powerElec_ = sqr(current)*genRLoad_;
+            }
         }
-        omega_ = (inertia_*omegaOld_ + dt*(torqueGas_ - T0))/(inertia_ + dt*c);
-        torqueLoad_ = T0 + c*omega_;
-        if (load_ == "generator")
+        theta_ = thetaOld_ + 0.5*dtStep*(omegaOld_ + omega_);
+    };
+    advance(dt);
+
+    // the last step of a segment or of the run is shortened (or lengthened, up to 1.2x) to end exactly on the stop
+    // angle or endTime, so time and crank angle stay together (with a fixed speed the angle is omega t: setting only
+    // the angle lost 0.2 deg per map). Called before the equations of the step are solved
+    auto land = [&](const scalar dtNew)
+    {
+        if (dtNew > SMALL && mag(dtNew - dt) > 1e-12*dt)
         {
-            const scalar current = genK_*omega_/(genRLoad_ + genRInt_);
-            powerElec_ = sqr(current)*genRLoad_;
+            Time& time = const_cast<Time&>(runTime);
+            time.setTime(runTime.value() - dt + dtNew, runTime.timeIndex());
+            time.setDeltaT(dtNew, false);
+            advance(dtNew);
         }
-    }
-    theta_ = thetaOld_ + 0.5*dt*(omegaOld_ + omega_);
+    };
 
     // remeshing: the step after the stop is requested is the last one and lands exactly on the stop angle
-    // (it moves 0 to 1.2 normal steps), the stop is requested when the next step would reach it
+    // (it moves up to 1.5 normal steps), the stop is requested when the next step could reach it
     if (stopTheta_ < 0.5*VGREAT)
     {
-        if (runTime.timeIndex() >= stopIndex_ || theta_ >= stopTheta_)
+        if (runTime.timeIndex() >= stopIndex_)
         {
+            //step length that reaches the stop angle (exact for a fixed speed, close for the flywheel)
+            land(dt*(stopTheta_ - thetaOld_)/max(theta_ - thetaOld_, SMALL));
             theta_ = stopTheta_;
         }
-        if (stopIndex_ == labelMax && theta_ + 1.2*(theta_ - thetaOld_) >= stopTheta_)
+        else if (theta_ >= stopTheta_)
+        {
+            //passed before the stop was requested (the time step stretched to a write time can grow more than
+            //1.5x): go half way now and land on the stop angle next step, the stop only takes effect after the
+            //next step, so landing now gave an extra step with the crank at rest
+            land(0.5*dt*(stopTheta_ - thetaOld_)/max(theta_ - thetaOld_, SMALL));
+        }
+        else if (runTime.timeIndex() >= endIndex_)
+        {
+            land(runTime.endTime().value() - (runTime.value() - dt));
+        }
+        //1.5 steps ahead: the time step grows by at most 1.2x per step, so the stop angle is normally not passed
+        //before the stop is requested (write-time stretching can still do it, handled above)
+        if (stopIndex_ == labelMax && theta_ + 1.5*(theta_ - thetaOld_) >= stopTheta_)
         {
             stopIndex_ = runTime.timeIndex() + 1;
             runTime.stopAt(Time::stopAtControls::saWriteNow);
@@ -507,10 +567,11 @@ void Foam::crankDisplacementInterpolationMotionSolver::solve()
         if
         (
             !endRequested_ && stopIndex_ == labelMax
-         && runTime.value() + 1.2*dtNow >= runTime.endTime().value() - 0.5*dtNow
+         && runTime.value() + 1.7*dtNow >= runTime.endTime().value()
         )
         {
             endRequested_ = true;
+            endIndex_ = runTime.timeIndex() + 1;
             runTime.stopAt(Time::stopAtControls::saWriteNow);
             Info<< "crankDisplacementInterpolation: next step reaches endTime, writing and stopping after it"
                 << endl;

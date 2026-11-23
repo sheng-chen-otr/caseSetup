@@ -33,6 +33,7 @@ import sys
 import glob
 import gzip
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 
 
 stateFile = '.remeshState'
@@ -195,43 +196,65 @@ def setDeltaT(timeDir, deltaT):
         f.write(text)
 
 
-def graft(seg, timeName):
+def linkTree(src, dst):
+    #hard links of the segment mesh files (no copy: the case is on a busy disk, copying 36 processor meshes took
+    #5 min per map), a copy where links are not possible. OpenFOAM never rewrites the files of its start time
+    os.makedirs(dst)
+    for entry in os.listdir(src):
+        path = os.path.join(src, entry)
+        if os.path.isdir(path):
+            linkTree(path, os.path.join(dst, entry))
+            continue
+        try:
+            os.link(path, os.path.join(dst, entry))
+        except OSError:
+            shutil.copy2(path, os.path.join(dst, entry))
+
+
+def graft(seg, timeName, restartDt=None):
     segDir = os.path.join('meshes', seg)
     procDirs = sorted(glob.glob('processor[0-9]*'))
-    #restart with a small time step after the map (INIT_DT, the controlDict deltaT) when the time step is adjustable
+    #restart with a small time step after the map when the time step is adjustable: restartDt (REMESH_DT), else INIT_DT
+    #(the controlDict deltaT). The fluxes are rebuilt from the mapped U: 1e-5 s diverged in the first step at one map
+    #of an engine cycle (negative T), 1e-6 s went through it
     adjust = (readEntry(os.path.join('system', 'controlDict'), 'adjustTimeStep') or 'no').lower() in ('yes', 'on', 'true')
-    initDt = readEntry(os.path.join('system', 'controlDict'), 'deltaT') if adjust else None
+    initDt = (restartDt or readEntry(os.path.join('system', 'controlDict'), 'deltaT')) if adjust else None
     value = float(timeName)
-    for procDir in procDirs:
-        dst = os.path.join(procDir, timeName)
-        srcName = findTime(os.path.join(segDir, procDir), value)
-        if srcName is None:
-            sys.exit('ERROR! %s has no mapped time %s (mapFieldsPar failed?)' % (os.path.join(segDir, procDir), timeName))
-        src = os.path.join(segDir, procDir, srcName)
-        #fields of the old mesh go (surface fluxes cannot be mapped), uniform/ (time, crank state) stays
-        for entry in os.listdir(dst):
-            if entry == 'uniform':
-                continue
-            path = os.path.join(dst, entry)
-            if os.path.isdir(path) and not os.path.islink(path):
-                shutil.rmtree(path)
-            else:
-                os.remove(path)
-        for entry in os.listdir(src):
-            if entry != 'uniform':
-                shutil.move(os.path.join(src, entry), os.path.join(dst, entry))
-        shutil.rmtree(src)
-        meshDir = os.path.join(dst, 'polyMesh')
-        shutil.copytree(os.path.join(segDir, procDir, 'constant', 'polyMesh'), meshDir)
-        writePoints0(meshDir)
-        with open(os.path.join(meshDir, markerName), 'w') as f:
-            f.write('%s\n' % (seg))
-        shutil.copyfile(os.path.join('system', 'pointDisplacement'), os.path.join(dst, 'pointDisplacement'))
-        if initDt:
-            setDeltaT(dst, initDt)
+    #processors in parallel (the time goes into waiting for the disk)
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(lambda procDir: graftProcessor(seg, segDir, procDir, timeName, value, initDt), procDirs))
     useDynamicMeshDict(seg)
     print('%s mesh and mapped fields in processor*/%s%s' % (seg, timeName,
                                                          ', restart time step %s' % (initDt) if initDt else ''))
+
+
+def graftProcessor(seg, segDir, procDir, timeName, value, initDt):
+    dst = os.path.join(procDir, timeName)
+    srcName = findTime(os.path.join(segDir, procDir), value)
+    if srcName is None:
+        sys.exit('ERROR! %s has no mapped time %s (mapFieldsPar failed?)' % (os.path.join(segDir, procDir), timeName))
+    src = os.path.join(segDir, procDir, srcName)
+    #fields of the old mesh go (surface fluxes cannot be mapped), uniform/ (time, crank state) stays
+    for entry in os.listdir(dst):
+        if entry == 'uniform':
+            continue
+        path = os.path.join(dst, entry)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+    for entry in os.listdir(src):
+        if entry != 'uniform':
+            shutil.move(os.path.join(src, entry), os.path.join(dst, entry))
+    shutil.rmtree(src)
+    meshDir = os.path.join(dst, 'polyMesh')
+    linkTree(os.path.join(segDir, procDir, 'constant', 'polyMesh'), meshDir)
+    writePoints0(meshDir)
+    with open(os.path.join(meshDir, markerName), 'w') as f:
+        f.write('%s\n' % (seg))
+    shutil.copyfile(os.path.join('system', 'pointDisplacement'), os.path.join(dst, 'pointDisplacement'))
+    if initDt:
+        setDeltaT(dst, initDt)
 
 
 def main(argv):
@@ -239,10 +262,10 @@ def main(argv):
         print(nextStep())
     elif len(argv) == 3 and argv[0] == 'prepare':
         prepare(argv[1], argv[2])
-    elif len(argv) == 3 and argv[0] == 'graft':
-        graft(argv[1], argv[2])
+    elif len(argv) in (3, 4) and argv[0] == 'graft':
+        graft(argv[1], argv[2], argv[3] if len(argv) == 4 else None)
     else:
-        sys.exit('usage: remeshRun.py next | prepare <seg> <time> | graft <seg> <time>')
+        sys.exit('usage: remeshRun.py next | prepare <seg> <time> | graft <seg> <time> [restart deltaT]')
 
 
 if __name__ == '__main__':

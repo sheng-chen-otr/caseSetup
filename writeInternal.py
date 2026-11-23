@@ -347,7 +347,7 @@ def writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict):
     return bbox
 
 
-def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, gapRefs=None):
+def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=None):
     print('\n\tWriting snappyHexMeshDict...')
     refinement = fullCaseSetupDict['GLOBAL_REFINEMENT']
     locInMesh = [v for v in refinement['LOC_IN_MESH'] if v != '']
@@ -400,25 +400,41 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, gapRefs=None):
             layerArray.append('        "%s_.*%s.*" { nSurfaceLayers 0; }' % (geomName, kw))
     #gap refinement: distance band around a per-body STL of the gap faces
     regionArray = []
-    for gapRef in (gapRefs or []):
+    for gapRef in (motionInfo['gapRefs'] if motionInfo else []):
         geometryArray.append('    %s { type triSurfaceMesh; name %s; file "%s"; }'
                              % (gapRef['file'], gapRef['name'], gapRef['file']))
         regionArray.append('        %s { mode distance; levels ((%.6g %d)); }'
                            % (gapRef['name'], gapRef['distance'], gapRef['level']))
-    replaceDict = {'GEOMETRY': '\n'.join(geometryArray),
-                   'REFINEMENT_SURFACES': '\n'.join(surfaceArray),
-                   'REFINEMENT_REGIONS': '\n'.join(regionArray),
-                   'LAYERS': '\n'.join(layerArray),
-                   'LOC_IN_MESH': ' '.join(locInMesh),
-                   'RESOLVE_FEAT_ANGLE': refinement['RESOLVE_FEAT_ANGLE'][0],
-                   'N_CELLS_BETWEEN_LEVELS': refinement['N_CELLS_BETWEEN_LEVELS'][0],
-                   'FINAL_LAYER_THICKNESS': refinement['FINAL_LAYER_THICKNESS'][0],
-                   'MIN_LAYER_THICKNESS': refinement['MIN_LAYER_THICKNESS'][0],
-                   'FEATURES': '\n'.join(featureArray),
-                   'EXPLICIT_SNAP': 'true' if featureSnap == 'explicit' else 'false',
-                   'IMPLICIT_SNAP': 'false' if featureSnap == 'explicit' else 'true'}
+    #one dict per meshing angle: the case mesh, then meshes/segNN for remeshing (own LOC_IN_MESH and end-gap bands)
+    meshSetups = motionInfo.get('meshSetups') if motionInfo else None
+    if not meshSetups:
+        meshSetups = [{'loc': locInMesh, 'bands': []}]
+    names = segmentNames(motionInfo['segments']) if motionInfo and motionInfo.get('segments') else ['seg01']
+    for name, meshSetup in zip(names, meshSetups):
+        geometryBands, regionBands = [], []
+        for k, (zLo, zHi, splits) in enumerate(meshSetup['bands']):
+            #z-only (directional) refinement of every cell in the band, after the other refinement
+            geometryBands.append('    GAPZ-%d { type searchableBox; min (-1e3 -1e3 %.9g); max (1e3 1e3 %.9g); }' % (k, zLo, zHi))
+            regionBands.append('        GAPZ-%d { mode inside; levels ((1e15 0)); levelIncrement (0 20 (0 0 %d)); }' % (k, splits))
+        replaceDict = {'GEOMETRY': '\n'.join(geometryArray + geometryBands),
+                       'REFINEMENT_SURFACES': '\n'.join(surfaceArray),
+                       'REFINEMENT_REGIONS': '\n'.join(regionArray + regionBands),
+                       'LAYERS': '\n'.join(layerArray),
+                       'LOC_IN_MESH': ' '.join(locInMesh) if name == 'seg01' else ' '.join('%.9g' % v for v in meshSetup['loc']),
+                       'RESOLVE_FEAT_ANGLE': refinement['RESOLVE_FEAT_ANGLE'][0],
+                       'N_CELLS_BETWEEN_LEVELS': refinement['N_CELLS_BETWEEN_LEVELS'][0],
+                       'FINAL_LAYER_THICKNESS': refinement['FINAL_LAYER_THICKNESS'][0],
+                       'MIN_LAYER_THICKNESS': refinement['MIN_LAYER_THICKNESS'][0],
+                       'FEATURES': '\n'.join(featureArray),
+                       'EXPLICIT_SNAP': 'true' if featureSnap == 'explicit' else 'false',
+                       'IMPLICIT_SNAP': 'false' if featureSnap == 'explicit' else 'true'}
+        #seg01 is the case mesh, the other meshes get their own dict (runScript copies it over the case's)
+        dest = 'system/snappyHexMeshDict' if name == 'seg01' else os.path.join('meshes', name, 'snappyHexMeshDict')
+        copyTemplate(templateLoc, 'system/snappyHexMeshDict', dest, replaceDict)
+        if name != 'seg01':
+            print('\t\t%s: locationInMesh (%s)%s' % (name, replaceDict['LOC_IN_MESH'],
+                                                  ', %d end-gap z bands' % (len(regionBands)) if regionBands else ''))
     print('\t\tfeature edges: includedAngle %s, level %s, %s snapping' % (featAngle, featureLevel, featureSnap))
-    copyTemplate(templateLoc, 'system/snappyHexMeshDict', 'system/snappyHexMeshDict', replaceDict)
     copyTemplate(templateLoc, 'system/surfaceFeatureExtractDict', 'system/surfaceFeatureExtractDict',
                  {'SURFACE_FEAT_EXTRACT': '\n'.join(extractArray)})
     copyTemplate(templateLoc, 'system/snappyRefinementDict', 'system/snappyRefinementDict', {})
@@ -680,6 +696,51 @@ def wireMeshCoeffs(porosity, wireDia, refVelocity, gas):
     return d, f, ha, re
 
 
+#random fibres: felt correlation up to the highest tested porosity, single fibres from fiberEpsCyl, log-linear between
+fiberEpsFelt = 0.84
+fiberEpsCyl = 0.97
+
+
+def fiberBlend(porosity):
+    return min(max((porosity - fiberEpsFelt)/(fiberEpsCyl - fiberEpsFelt), 0.0), 1.0)
+
+
+def fiberCoeffs(porosity, wireDia, velocity, gas):
+    #random fibres (steel wool, felt), two models blended by porosity (the C++ source does the same per cell):
+    #  Gedeon-Wood metal felts (NASA CR-198442, eqs 2.5, 2.10, porosity up to 0.84 tested): f = 192/Re + 4.53 Re^-0.067,
+    #  Nu = (1 + 1.16 Pe^0.66) eps^2.61 on dh = eps*dw/(1-eps), pore velocity u = U/eps;
+    #  single fibres in cross flow (the high-porosity limit, where the felt forms fall off as (1-eps)^2): fibre length
+    #  per volume 4(1-eps)/(pi dw^2), Cd = 1 + 10 Re_d^-2/3 (Lamb 8 pi/(Re_d (2.002 - ln Re_d)) below Re_d 1),
+    #  Nu_d Churchill-Bernstein; felt up to eps 0.84, single fibres from 0.97, log-linear between (steel wool is
+    #  ~0.97-0.99: the fibre model governs, it gives 4-10x the h*a of the felt forms extrapolated there)
+    #returns drag coefficient c (force/volume = c*U, N s/m4) and h*a (W/m3/K): blended, felt, single fibres
+    eps = porosity
+    phi = 1.0 - eps
+    dh = eps*wireDia/phi
+    up = velocity/eps
+    kGas = gas['MU']*gas['CP']/gas['PR']
+    re = max(gas['RHO']*up*dh/gas['MU'], 1e-6)
+    cFelt = gas['MU']*96.0/(eps*dh**2) + 0.5*gas['RHO']*velocity*4.53*re**-0.067/(eps**2*dh)
+    haFelt = (1.0 + 1.16*(re*gas['PR'])**0.66)*eps**2.61*kGas/dh*4.0*phi/wireDia
+    reD = max(gas['RHO']*up*wireDia/gas['MU'], 1e-6)
+    cd = 1.0 + 10.0*reD**(-2.0/3.0)
+    if reD < 1.0:
+        cd = max(cd, 8.0*math.pi/(reD*(2.002 - math.log(reD))))
+    cCyl = 0.5*gas['RHO']*up*wireDia*cd*4.0*phi/(math.pi*wireDia**2)/eps
+    nuD = 0.3 + 0.62*reD**0.5*gas['PR']**(1.0/3.0)/(1.0 + (0.4/gas['PR'])**(2.0/3.0))**0.25
+    haCyl = nuD*kGas/wireDia*4.0*phi/wireDia
+    w = fiberBlend(porosity)
+    return cFelt**(1.0 - w)*cCyl**w, haFelt**(1.0 - w)*haCyl**w, cFelt, cCyl, haFelt, haCyl
+
+
+def fiberConductivity(solidFrac, wireDia, solidK, T, radiation=True):
+    #effective conductivity of the fibre bed (solid side): conduction along random fibres k_s*phi/3, radiation
+    #(Rosseland) 16 sigma T^3/(3 beta), extinction beta = phi/dw (mean projected fibre area per volume = surface/4)
+    kc = solidK*solidFrac/3.0
+    kr = 16.0*5.670374e-8*T**3*wireDia/(3.0*solidFrac) if radiation and solidFrac > 0 else 0.0
+    return kc, kr
+
+
 def fitDarcyForchheimer(velocities, pressureDrops, length, gas):
     #least squares of dp/L = mu*d*U + 0.5*rho*f*U^2 through the origin
     U = np.asarray(velocities, dtype=float)
@@ -738,8 +799,48 @@ def getPorous(geomDict, fullCaseSetupDict):
             zone['d'], zone['f'] = [d]*3, [f]*3
             print('\t\t%s: fit to %d points over %g m: d %.4g 1/m2, f %.4g 1/m, worst misfit %.3g Pa/m'
                   % (name, len(data)//2, length, d, f, float(np.abs(misfit).max())))
+        elif resistance == 'randomFiber':
+            #random fibres (steel wool, felt): drag and heat transfer per cell from its porosity and the gas velocity
+            #relative to the fibres, at run time (porosity changes when the zone deforms with the mesh)
+            wireDia, solidRho = number('WIRE_DIA'), number('SOLID_RHO')
+            deforming = setup.get('MOVES_WITH', ['none'])[0] == 'mesh'
+            mass = [v for v in setup.get('SOLID_MASS', ['']) if v != '']
+            if deforming and not mass:
+                sys.exit('ERROR! [%s] MOVES_WITH mesh needs SOLID_MASS (kg of fibre in the zone)' % (name))
+            if wireDia <= 0 or solidRho <= 0:
+                sys.exit('ERROR! [%s] randomFiber needs WIRE_DIA > 0 (fibre diameter) and SOLID_RHO > 0' % (name))
+            zone['fiber'] = {'dw': wireDia, 'rhos': solidRho, 'mass': number('SOLID_MASS') if mass else None,
+                             'porosity': None if mass else number('POROSITY')}
+            #heat through the fibres (conduction k_s*phi/3, radiation 16 sigma T^3 dw/(3 phi)) and from the walls it
+            #touches (WALL_CONTACT_PIDS keywords in the patch names, WALL_CONTACT factor 0-1 on that conductance)
+            zone['fiber']['ks'] = float(setup.get('SOLID_K', ['50'])[0] or 0)
+            zone['fiber']['radiation'] = setup.get('RADIATION', ['yes'])[0].lower() == 'yes'
+            zone['fiber']['contactPids'] = [k for k in setup.get('WALL_CONTACT_PIDS', ['']) if k != '']
+            zone['fiber']['contact'] = float(setup.get('WALL_CONTACT', ['1'])[0] or 0)
+            if zone['fiber']['ks'] < 0 or not 0 <= zone['fiber']['contact'] <= 1:
+                sys.exit('ERROR! [%s] SOLID_K must be >= 0 and WALL_CONTACT between 0 and 1' % (name))
+            if zone['fiber']['porosity'] is not None and not 0 < zone['fiber']['porosity'] < 1:
+                sys.exit('ERROR! [%s] randomFiber needs 0 < POROSITY < 1 (or SOLID_MASS)' % (name))
+            zone['d'], zone['f'] = [0.0]*3, [0.0]*3
+            print('\t\t%s: random fibres %g m, %s' % (name, wireDia, 'solid mass %g kg (porosity from the zone volume '
+                                                     'at run time, follows its deformation)' % (zone['fiber']['mass'])
+                                                     if mass else 'porosity %g' % (zone['fiber']['porosity'])))
+            refVelocity = float(setup.get('REF_VELOCITY', ['0.5'])[0] or 0.5)
+            print('\t\t\tat %g m/s (charge state): porosity  drag c (N s/m4)  h*a (W/m3/K)   [felt / single fibres]'
+                  % (refVelocity))
+            for eps in ([zone['fiber']['porosity']] if not mass else [0.9, 0.95, 0.98, 0.99]):
+                c, ha, cF, cC, hF, hC = fiberCoeffs(eps, wireDia, refVelocity, gas)
+                kc, kr = fiberConductivity(1.0 - eps, wireDia, zone['fiber']['ks'], 600.0, zone['fiber']['radiation'])
+                print('\t\t\t%30.3f  %10.3g  %12.3g   [%.3g / %.3g, %.3g / %.3g]   k %.3g W/m/K at 600 K'
+                      ' (fibres %.3g, radiation %.3g)' % (eps, c, ha, cF, cC, hF, hC, kc + kr, kc, kr))
+            fiber = zone['fiber']
+            print('\t\t\tfibre conductivity %g W/m/K, radiation %s, wall contact %s'
+                  % (fiber['ks'], 'on' if fiber['radiation'] else 'off',
+                     '%s (factor %g)' % (' '.join(fiber['contactPids']), fiber['contact']) if fiber['contactPids'] else 'none'))
         else:
-            sys.exit('ERROR! [%s] RESISTANCE must be coeffs, wireMesh or fit!' % (name))
+            sys.exit('ERROR! [%s] RESISTANCE must be coeffs, wireMesh, fit or randomFiber!' % (name))
+        if setup.get('MOVES_WITH', ['none'])[0] == 'mesh' and 'fiber' not in zone:
+            sys.exit('ERROR! [%s] MOVES_WITH mesh needs RESISTANCE randomFiber (porosity follows the deformation)' % (name))
 
         #heat exchange with the matrix (compressible only)
         heat = setup.get('HEAT', ['none'])[0]
@@ -754,123 +855,901 @@ def getPorous(geomDict, fullCaseSetupDict):
         zone['heat'] = heat
         if heat != 'none':
             haSetting = setup.get('HA', ['auto'])[0]
-            if haSetting == 'auto':
+            if 'fiber' in zone:
+                if haSetting != 'auto':
+                    sys.exit('ERROR! [%s] randomFiber works out h*a per cell, HA must be auto' % (name))
+                zone['ha'] = 0.0
+            elif haSetting == 'auto':
                 if 'wireHA' not in zone:
                     sys.exit('ERROR! [%s] HA auto needs RESISTANCE wireMesh, else give HA (W/m3/K)' % (name))
                 zone['ha'] = zone['wireHA']
             else:
                 zone['ha'] = number('HA')
-            zone['Ts'] = number('SOLID_T')
+            #SOLID_T: one value = uniform, two = linear from the -z to the +z end of the zone (start values only)
+            nSolidT = len([v for v in setup.get('SOLID_T', ['']) if v != ''])
+            if 'fiber' in zone and nSolidT == 2:
+                sys.exit('ERROR! [%s] randomFiber takes one SOLID_T (uniform start)' % (name))
+            solidT = number('SOLID_T', 2 if nSolidT == 2 else 1)
+            zone['Ts'] = solidT if nSolidT == 2 else [solidT, solidT]
             zone['Cs'] = 0.0
-            if heat == 'solved':
+            if heat == 'solved' and 'fiber' in zone:
+                #per cell at run time: solid fraction * rhos * cs
+                zone['fiber']['cs'] = number('SOLID_CP')
+            elif heat == 'solved':
                 zone['Cs'] = (1.0 - number('POROSITY'))*number('SOLID_RHO')*number('SOLID_CP')
-            print('\t\t%s: heat %s, h*a %.4g W/m3/K, matrix T %g K%s'
-                  % (name, heat, zone['ha'], zone['Ts'],
-                     ', (1-eps)*rhos*cs %.4g J/m3/K' % (zone['Cs']) if heat == 'solved' else ' (fixed)'))
+            matrixT = ('%g K' % (zone['Ts'][0]) if zone['Ts'][0] == zone['Ts'][1]
+                       else '%g K (-z end) to %g K (+z end), linear' % tuple(zone['Ts']))
+            if 'fiber' in zone:
+                print('\t\t%s: heat %s, h*a per cell (Gedeon-Wood random fibres), matrix T %s%s'
+                      % (name, heat, matrixT, ', cs %g J/kg/K' % (zone['fiber']['cs']) if heat == 'solved' else ' (fixed)'))
+            else:
+                print('\t\t%s: heat %s, h*a %.4g W/m3/K, matrix T %s%s'
+                      % (name, heat, zone['ha'], matrixT,
+                         ', (1-eps)*rhos*cs %.4g J/m3/K' % (zone['Cs']) if heat == 'solved' else ' (fixed)'))
         porous.append(zone)
     return porous
 
 
 def porousHeatSource(zone, cv):
-    #scalarCodedSource on e: gas-matrix heat exchange h*a*(Ts - T), linearised in e (implicit part h*a/cv)
-    #Ts_<zone> (written) and Qs_<zone> (W/m3 into the gas) are registered fields, Ts is updated once per time step
-    #with the exact solution of Cs*dTs/dt = h*a*(T - Ts) (Cs 0: fixed matrix temperature)
+    #scalarCodedSource on e: gas-matrix heat exchange, gas and matrix implicit together (backward Euler), so the heat
+    #the gas gets each step is exactly the heat the matrix gives (Cs 0: fixed matrix temperature):
+    #  Cs*(Ts1 - Ts0)/dt = h*a*(T1 - Ts1)  ->  gas source h*a*(Ts1 - T1) = hEff*(Ts0 - T1), hEff = h*a*Cs/(Cs + h*a*dt)
+    #addSup puts hEff*(Ts0 - T1) into the e equation (implicit in e, cv constant); correct (after the e solve) sets
+    #Qs = hEff*(Ts0 - T1) (W/m3 into the gas) and Ts1 from the solved e; Ts0 moves on once per time step
+    #Ts_<zone> is written (restarts), TsOld/Qs/eLin/TLin_<zone> are working fields
     name = zone['name'].replace('-', '_')
-    code = '''        codeAddSupRho
+    constants = '\n'.join([
+        '            const fvMesh& m = mesh_;',
+        '            const scalar ha = %.9g;' % (zone['ha']),
+        '            const scalar Cv = %.9g;' % (cv),
+        '            const scalar Cs = %.9g;' % (zone['Cs']),
+        '            const scalar dt = m.time().deltaTValue();',
+        '            const scalar hEff = (Cs > 0 ? ha*Cs/(Cs + ha*dt) : ha);',
+        '            const word zoneName("%s");' % (zone['name']),
+        '            const labelList& zoneCells = this->cells();'])
+    lookups = '\n'.join(['            volScalarField& %s = const_cast<volScalarField&>(m.lookupObject<volScalarField>'
+                         '("%s_" + zoneName));' % (f, f) for f in ('Ts', 'TsOld', 'Qs', 'eLin', 'TLin')])
+    addSup = '''        codeAddSupRho
         #{
-            const fvMesh& m = mesh_;
+%s
+            const scalar TinitLow = %.9g;
+            const scalar TinitHigh = %.9g;
             const volScalarField& T = m.lookupObject<volScalarField>("T");
-            const scalar ha = %.9g;
-            const scalar Cv = %.9g;
-            const scalar Cs = %.9g;
-            const scalar Tinit = %.9g;
-            const word TsName("Ts_%s");
-            const word QsName("Qs_%s");
-            if (!m.foundObject<volScalarField>(TsName))
+            if (!m.foundObject<volScalarField>("Ts_" + zoneName))
             {
                 //first call is already in the first new time step: read the matrix temperature from the start
                 //(restart) time, not the current one, else every restart begins again from the initial value
                 const word startName(m.time().timeName(m.time().startTime().value()));
-                volScalarField* TsPtr = new volScalarField
-                (
-                    IOobject(TsName, startName, m, IOobject::READ_IF_PRESENT, IOobject::AUTO_WRITE),
-                    m,
-                    dimensionedScalar(dimTemperature, Tinit)
-                );
+                IOobject TsIO("Ts_" + zoneName, startName, m, IOobject::READ_IF_PRESENT, IOobject::AUTO_WRITE);
+                const bool TsFound = TsIO.typeHeaderOk<volScalarField>(true);
+                volScalarField* TsPtr = new volScalarField(TsIO, m, dimensionedScalar(dimTemperature, TinitLow));
                 TsPtr->store();
-                volScalarField* QsPtr = new volScalarField
-                (
-                    IOobject(QsName, m.time().timeName(), m, IOobject::NO_READ, IOobject::NO_WRITE),
-                    m,
-                    dimensionedScalar(dimPower/dimVolume, Zero)
-                );
-                QsPtr->store();
+                //no saved matrix temperature: linear from the -z to the +z end of the zone (cell centres)
+                if (!TsFound && TinitHigh != TinitLow)
+                {
+                    const volVectorField& C = m.C();
+                    scalar zLow = GREAT, zHigh = -GREAT;
+                    forAll(zoneCells, i)
+                    {
+                        zLow = min(zLow, C[zoneCells[i]].z());
+                        zHigh = max(zHigh, C[zoneCells[i]].z());
+                    }
+                    reduce(zLow, minOp<scalar>());
+                    reduce(zHigh, maxOp<scalar>());
+                    forAll(zoneCells, i)
+                    {
+                        const scalar s = (C[zoneCells[i]].z() - zLow)/max(zHigh - zLow, SMALL);
+                        (*TsPtr)[zoneCells[i]] = TinitLow + s*(TinitHigh - TinitLow);
+                    }
+                    Info<< "    Ts_" << zoneName << ": linear start " << TinitLow << " K at z " << zLow << " to "
+                        << TinitHigh << " K at z " << zHigh << endl;
+                }
+                //working fields (not written)
+                const word now(m.time().timeName());
+                (new volScalarField(IOobject("TsOld_" + zoneName, now, m), *TsPtr))->store();
+                (new volScalarField(IOobject("Qs_" + zoneName, now, m), m,
+                    dimensionedScalar(dimPower/dimVolume, Zero)))->store();
+                (new volScalarField(IOobject("eLin_" + zoneName, now, m), m,
+                    dimensionedScalar(dimEnergy/dimMass, Zero)))->store();
+                (new volScalarField(IOobject("TLin_" + zoneName, now, m), m,
+                    dimensionedScalar(dimTemperature, Zero)))->store();
             }
-            volScalarField& Ts = const_cast<volScalarField&>(m.lookupObject<volScalarField>(TsName));
-            volScalarField& Qs = const_cast<volScalarField&>(m.lookupObject<volScalarField>(QsName));
+%s
+            //new time step: the matrix temperature at the end of the last step is the old level
             static label lastIndex = -1;
-            const bool update = (Cs > 0 && m.time().timeIndex() != lastIndex);
-            lastIndex = m.time().timeIndex();
-            const scalar dt = m.time().deltaTValue();
-            const labelList& zoneCells = this->cells();
+            if (m.time().timeIndex() != lastIndex)
+            {
+                lastIndex = m.time().timeIndex();
+                forAll(zoneCells, i)
+                {
+                    TsOld[zoneCells[i]] = Ts[zoneCells[i]];
+                }
+            }
             const scalarField& V = m.V();
             const scalarField& e = eqn.psi();
             scalarField& diag = eqn.diag();
             scalarField& source = eqn.source();
-            const scalar k = ha/Cv;
+            const scalar k = hEff/Cv;
             forAll(zoneCells, i)
             {
                 const label c = zoneCells[i];
-                if (update)
-                {
-                    Ts[c] = T[c] + (Ts[c] - T[c])*Foam::exp(-ha*dt/Cs);
-                }
-                Qs[c] = ha*(Ts[c] - T[c]);
+                eLin[c] = e[c];
+                TLin[c] = T[c];
                 diag[c] -= k*V[c];
-                source[c] -= (Qs[c] + k*e[c])*V[c];
+                source[c] -= (hEff*(TsOld[c] - T[c]) + k*e[c])*V[c];
             }
-        #};''' % (zone['ha'], cv, zone['Cs'], zone['Ts'], zone['name'], zone['name'])
+        #};''' % (constants, zone['Ts'][0], zone['Ts'][1], lookups)
+    correct = '''        codeCorrect
+        #{
+%s
+            if (!m.foundObject<volScalarField>("Ts_" + zoneName))
+            {
+                return;
+            }
+%s
+            //gas temperature after the e solve (cv constant), the heat it got, and the matrix temperature that gave it
+            forAll(zoneCells, i)
+            {
+                const label c = zoneCells[i];
+                const scalar T1 = TLin[c] + (fld[c] - eLin[c])/Cv;
+                Qs[c] = hEff*(TsOld[c] - T1);
+                if (Cs > 0)
+                {
+                    Ts[c] = TsOld[c] - Qs[c]*dt/Cs;
+                }
+            }
+        #};''' % (constants, lookups)
     lines = ['%sHeat' % (name), '{', '    type            scalarCodedSource;', '    name            %sHeat;' % (name),
              '    scalarCodedSourceCoeffs', '    {', '        selectionMode   cellZone;',
              '        cellZone        %s;' % (zone['name']), '        fields          (e);', '',
              '        codeInclude', '        #{', '            #include "fvCFD.H"', '        #};', '',
-             '        codeCorrect #{ #};', '        codeAddSup #{ #};', '        codeConstrain #{ #};', '', code,
+             correct, '', '        codeAddSup #{ #};', '        codeConstrain #{ #};', '', addSup,
              '    }', '}']
     return '\n'.join(lines)
 
 
-def writeFvOptionsInternal(porous, fullCaseSetupDict):
-    #constant/fvOptions: explicitPorositySource per POR zone, plus the heat source when HEAT is fixed or solved
+def getDissipation(fullCaseSetupDict):
+    #DISSIPATION yes: viscous dissipation (ESI viscousDissipation) and porous drag work added to the gas energy,
+    #compressible only. Default no: the rhoPimpleFoam energy equation is in total-energy form (K terms, no tau.U and no
+    #momentum sources), so the kinetic energy that viscosity and drag destroy already ends up in e (globally; the
+    #viscous part is placed by -U.div(tau) instead of tau:grad(U)). Switching it on counts that heat twice
+    setting = fullCaseSetupDict['GLOBAL_SIM_CONTROL'].get('DISSIPATION', ['no'])[0].lower()
+    if setting not in ('yes', 'no'):
+        sys.exit('ERROR! GLOBAL_SIM_CONTROL DISSIPATION must be yes or no!')
+    return setting == 'yes' and getFlow(fullCaseSetupDict) == 'compressible'
+
+
+def porousTensors(zone):
+    #Darcy-Forchheimer d, f in global axes: sum of d_i e_i e_i over the zone axes e1, e2, e3 = e1 x e2
+    e1 = np.array(zone['e1'], dtype=float)
+    e1 /= np.linalg.norm(e1)
+    e3 = np.cross(e1, np.array(zone['e2'], dtype=float))
+    e3 /= np.linalg.norm(e3)
+    e2 = np.cross(e3, e1)
+    axes = [e1, e2, e3]
+    tensors = []
+    for coeffs in (zone['d'], zone['f']):
+        t = sum(c*np.outer(e, e) for c, e in zip(coeffs, axes))
+        tensors.append('tensor(%s)' % (', '.join('%.9g' % v for v in t.flatten())))
+    return tensors
+
+
+def porousDragCoeff(zone, props, incompressible, nu):
+    #C++ lines: tensors Dt, Ft and the per-cell drag tensor C (force on the gas = -C & (U - Umat)) from rho, mu, |Ur|
+    dT, fT = porousTensors(zone)
+    lines = ['            const tensor Dt(%s);' % (dT), '            const tensor Ft(%s);' % (fT)]
+    if incompressible:
+        cell = ['                const scalar rhoC = 1;', '                const scalar muC = %.9g;' % (nu)]
+    else:
+        lines.append('            const volScalarField& rhoF = m.lookupObject<volScalarField>("rho");')
+        cell = ['                const scalar rhoC = rhoF[c];']
+        if props['TRANSPORT'] == 'sutherland':
+            lines.append('            const volScalarField& TF = m.lookupObject<volScalarField>("T");')
+            cell.append('                const scalar muC = %.9g*sqrt(TF[c])/(1 + %.9g/TF[c]);' % (props['AS'], props['TS']))
+        else:
+            cell.append('                const scalar muC = %.9g;' % (props['MU']))
+    cell.append('                const tensor C(muC*Dt + (0.5*rhoC*mag(Ur))*Ft);')
+    return '\n'.join(lines), '\n'.join(cell)
+
+
+def porousDragSource(zone, props, incompressible, nu, rhoInf):
+    #vectorCodedSource on U for a porous zone moving with a body (MOVES_WITH): Darcy-Forchheimer drag on the velocity
+    #relative to the matrix (explicitPorositySource uses the absolute U), implicit part on the diagonal as ESI does.
+    #Umat_<zone> = mean motion of the cell points over the step (the zone moves rigidly with the body),
+    #porDrag_<zone> = force of the gas on the matrix (N/m3), added to the body force by the crank drive and logged
+    name = zone['name'].replace('-', '_')
+    constants, cell = porousDragCoeff(zone, props, incompressible, nu)
+    head = '\n'.join([
+        '            const fvMesh& m = mesh_;',
+        '            const word zoneName("%s");' % (zone['name']),
+        '            const labelList& zoneCells = this->cells();',
+        constants])
+    lookups = '\n'.join(['            volVectorField& %s = const_cast<volVectorField&>(m.lookupObject<volVectorField>'
+                         '("%s_" + zoneName));' % (f, f) for f in ('Umat', 'porDrag')])
+    addSup = '''        #{
+%s
+            if (!m.foundObject<volVectorField>("Umat_" + zoneName))
+            {
+                const word now(m.time().timeName());
+                (new volVectorField(IOobject("Umat_" + zoneName, now, m), m, dimensionedVector(dimVelocity, Zero)))->store();
+                (new volVectorField(IOobject("porDrag_" + zoneName, now, m), m,
+                    dimensionedVector(dimForce/dimVolume, Zero)))->store();
+            }
+%s
+            //new time step: matrix velocity from the motion of the cell points (rigid with the body)
+            static label lastIndex = -1;
+            if (m.time().timeIndex() != lastIndex)
+            {
+                lastIndex = m.time().timeIndex();
+                const scalar dt = m.time().deltaTValue();
+                const pointField& pts = m.points();
+                const pointField& pts0 = m.moving() ? m.oldPoints() : m.points();
+                const labelListList& cellPoints = m.cellPoints();
+                forAll(zoneCells, i)
+                {
+                    const label c = zoneCells[i];
+                    vector d(Zero);
+                    for (const label pointi : cellPoints[c])
+                    {
+                        d += pts[pointi] - pts0[pointi];
+                    }
+                    Umat[c] = d/(cellPoints[c].size()*dt);
+                }
+            }
+            //drag -C & (U - Umat): -iso*U implicit, the rest explicit
+            const vectorField& U = eqn.psi();
+            const scalarField& V = m.V();
+            scalarField& diag = eqn.diag();
+            vectorField& source = eqn.source();
+            forAll(zoneCells, i)
+            {
+                const label c = zoneCells[i];
+                const vector Ur(U[c] - Umat[c]);
+%s
+                const scalar iso = tr(C)/3;
+                diag[c] -= iso*V[c];
+                source[c] -= ((C & Umat[c]) - ((C - iso*I) & U[c]))*V[c];
+            }
+        #};''' % (head, lookups.split('\n')[0], cell)
+    correct = '''        codeCorrect
+        #{
+%s
+            if (!m.foundObject<volVectorField>("Umat_" + zoneName))
+            {
+                return;
+            }
+%s
+            //force of the gas on the matrix with the solved U (N/m3)
+            forAll(zoneCells, i)
+            {
+                const label c = zoneCells[i];
+                const vector Ur(fld[c] - Umat[c]);
+%s
+                porDrag[c] = %s(C & Ur);
+            }
+        #};''' % (head, lookups, cell, '%.9g*' % (rhoInf) if incompressible else '')
+    hooks = ['        codeAddSup%s' % ('' if incompressible else 'Rho'), addSup, '',
+             '        codeAddSup%s #{ #};' % ('Rho' if incompressible else '')]
+    lines = ['%sDrag' % (name), '{', '    type            vectorCodedSource;', '    name            %sDrag;' % (name),
+             '    vectorCodedSourceCoeffs', '    {', '        selectionMode   cellZone;',
+             '        cellZone        %s;' % (zone['name']), '        fields          (U);', '',
+             '        codeInclude', '        #{', '            #include "fvCFD.H"', '        #};', '',
+             correct, '', '        codeConstrain #{ #};', ''] + hooks + ['    }', '}']
+    return '\n'.join(lines)
+
+
+def fiberCellCode(zone, props, incompressible, nu):
+    #C++ for random-fibre zones: per cell drag coefficient cDrag (force on the gas = -cDrag*(U - Umat)) and h*a (haC)
+    #from the cell's solid fraction and its velocity relative to the fibres Ur, as fiberCoeffs (felt / single fibres,
+    #blended by porosity). Needs solidFrac, c, Ur in scope
+    consts = ['            const scalar dw = %.9g;' % (zone['fiber']['dw']),
+              '            const scalar Pr = %.9g;' % (props['PR']),
+              '            const scalar cpGas = %.9g;' % (props['CP']),
+              '            const scalar pi = constant::mathematical::pi;']
+    if incompressible:
+        cell = ['                const scalar rhoC = 1;', '                const scalar muC = %.9g;' % (nu)]
+    else:
+        consts.append('            const volScalarField& rhoF = m.lookupObject<volScalarField>("rho");')
+        cell = ['                const scalar rhoC = rhoF[c];']
+        if props['TRANSPORT'] == 'sutherland':
+            consts.append('            const volScalarField& TF = m.lookupObject<volScalarField>("T");')
+            cell.append('                const scalar muC = %.9g*sqrt(TF[c])/(1 + %.9g/TF[c]);' % (props['AS'], props['TS']))
+        else:
+            cell.append('                const scalar muC = %.9g;' % (props['MU']))
+    cell += ['                const scalar phiC = min(max(solidFrac[c], scalar(0)), scalar(0.5));',
+             '                const scalar eps = 1 - phiC;',
+             '                scalar cDrag = 0;',
+             '                scalar haC = 0;',
+             '                if (phiC > 1e-9)',
+             '                {',
+             '                    const scalar up = mag(Ur)/eps;',
+             '                    const scalar dh = eps*dw/phiC;',
+             '                    const scalar kC = muC*cpGas/Pr;',
+             '                    //Gedeon-Wood metal felts: f = 192/Re + 4.53 Re^-0.067, Nu = (1 + 1.16 Pe^0.66) eps^2.61',
+             '                    const scalar Re = max(rhoC*up*dh/muC, scalar(1e-6));',
+             '                    const scalar cFelt = muC*96/(eps*sqr(dh)) + 0.5*rhoC*mag(Ur)*4.53*pow(Re, -0.067)/(sqr(eps)*dh);',
+             '                    const scalar haFelt = (1 + 1.16*pow(Re*Pr, 0.66))*pow(eps, 2.61)*kC/dh*4*phiC/dw;',
+             '                    //single fibres in cross flow: Cd White (Lamb below Re_d 1), Nu_d Churchill-Bernstein',
+             '                    const scalar ReD = max(rhoC*up*dw/muC, scalar(1e-6));',
+             '                    scalar Cd = 1 + 10*pow(ReD, -2.0/3.0);',
+             '                    if (ReD < 1)',
+             '                    {',
+             '                        Cd = max(Cd, 8*pi/(ReD*(2.002 - Foam::log(ReD))));',
+             '                    }',
+             '                    const scalar cCyl = 0.5*rhoC*up*dw*Cd*4*phiC/(pi*sqr(dw))/eps;',
+             '                    const scalar NuD = 0.3 + 0.62*sqrt(ReD)*cbrt(Pr)/pow(1 + pow(0.4/Pr, 2.0/3.0), 0.25);',
+             '                    const scalar haCyl = NuD*kC/dw*4*phiC/dw;',
+             '                    //felt up to eps %g (tested), single fibres from %g, log-linear between' % (fiberEpsFelt, fiberEpsCyl),
+             '                    const scalar w = min(max((eps - %.9g)/%.9g, scalar(0)), scalar(1));' % (fiberEpsFelt, fiberEpsCyl - fiberEpsFelt),
+             '                    cDrag = pow(cFelt, 1 - w)*pow(cCyl, w);',
+             '                    haC = pow(haFelt, 1 - w)*pow(haCyl, w);',
+             '                }']
+    return '\n'.join(consts), '\n'.join(cell)
+
+
+def porousFiberDragSource(zone, props, incompressible, nu, rhoInf):
+    #vectorCodedSource on U for a random-fibre zone: drag -cDrag*(U - Umat) per cell, implicit in U.
+    #solidFrac_<zone> (written, restarts and remeshing maps): fibre volume fraction per cell, follows the cell volume
+    #(each cell keeps its fibres when the zone deforms with the mesh: solidFrac *= V0/V every step); with SOLID_MASS it is
+    #scaled at every (re)start so the zone holds exactly that much fibre. Umat_<zone> from the motion of the cell points
+    #(zero for a static zone), porDrag_<zone> = force of the gas on the fibres (N/m3)
+    name = zone['name'].replace('-', '_')
+    fiber = zone['fiber']
+    consts, cell = fiberCellCode(zone, props, incompressible, nu)
+    solidVol = fiber['mass']/fiber['rhos'] if fiber['mass'] is not None else -1.0
+    phiInit = 1.0 if fiber['mass'] is not None else 1.0 - fiber['porosity']
+    head = '\n'.join([
+        '            const fvMesh& m = mesh_;',
+        '            const word zoneName("%s");' % (zone['name']),
+        '            const labelList& zoneCells = this->cells();',
+        consts])
+    lookups = '\n'.join(['            volVectorField& %s = const_cast<volVectorField&>(m.lookupObject<volVectorField>'
+                         '("%s_" + zoneName));' % (f, f) for f in ('Umat', 'porDrag')] +
+                        ['            volScalarField& solidFrac = const_cast<volScalarField&>(m.lookupObject<volScalarField>'
+                         '("solidFrac_" + zoneName));'])
+    addSup = '''        #{
+%s
+            const scalarField& V = m.V();
+            static label lastIndex = -1;
+            if (!m.foundObject<volScalarField>("solidFrac_" + zoneName))
+            {
+                const word now(m.time().timeName());
+                (new volVectorField(IOobject("Umat_" + zoneName, now, m), m, dimensionedVector(dimVelocity, Zero)))->store();
+                (new volVectorField(IOobject("porDrag_" + zoneName, now, m), m,
+                    dimensionedVector(dimForce/dimVolume, Zero)))->store();
+                //fibre fraction from the start (restart) time, else uniform
+                const word startName(m.time().timeName(m.time().startTime().value()));
+                IOobject fIO("solidFrac_" + zoneName, startName, m, IOobject::READ_IF_PRESENT, IOobject::AUTO_WRITE);
+                const bool found = fIO.typeHeaderOk<volScalarField>(true);
+                volScalarField* f = new volScalarField(fIO, m, dimensionedScalar(dimless, Zero));
+                f->store();
+                if (!found)
+                {
+                    forAll(zoneCells, i)
+                    {
+                        (*f)[zoneCells[i]] = %.9g;
+                    }
+                }
+                //with SOLID_MASS: exactly that much fibre in the zone (also after a remeshing map)
+                const scalar solidVol = %.9g;
+                scalar vZone = 0, vSolid = 0;
+                forAll(zoneCells, i)
+                {
+                    vZone += V[zoneCells[i]];
+                    vSolid += (*f)[zoneCells[i]]*V[zoneCells[i]];
+                }
+                reduce(vZone, sumOp<scalar>());
+                reduce(vSolid, sumOp<scalar>());
+                if (solidVol > 0 && vSolid > 0)
+                {
+                    forAll(zoneCells, i)
+                    {
+                        (*f)[zoneCells[i]] *= solidVol/vSolid;
+                    }
+                }
+                Info<< "    solidFrac_" << zoneName << ": " << (found ? "read" : "uniform start") << ", zone volume " << vZone
+                    << " m3, fibre volume " << vSolid << (solidVol > 0 ? " -> " : "") << (solidVol > 0 ? solidVol : vSolid)
+                    << " m3, mean porosity " << 1 - (solidVol > 0 ? solidVol : vSolid)/max(vZone, VSMALL) << endl;
+                lastIndex = m.time().timeIndex();
+            }
+%s
+            //new time step: fibres stay in their cells (fraction follows the cell volume), matrix velocity from the
+            //motion of the cell points
+            if (m.time().timeIndex() != lastIndex)
+            {
+                lastIndex = m.time().timeIndex();
+                if (m.moving())
+                {
+                    const scalarField& V0 = m.V0();
+                    forAll(zoneCells, i)
+                    {
+                        solidFrac[zoneCells[i]] *= V0[zoneCells[i]]/V[zoneCells[i]];
+                    }
+                }
+            }
+            {
+                const scalar dt = m.time().deltaTValue();
+                const pointField& pts = m.points();
+                const pointField& pts0 = m.moving() ? m.oldPoints() : m.points();
+                const labelListList& cellPoints = m.cellPoints();
+                forAll(zoneCells, i)
+                {
+                    const label c = zoneCells[i];
+                    vector d(Zero);
+                    for (const label pointi : cellPoints[c])
+                    {
+                        d += pts[pointi] - pts0[pointi];
+                    }
+                    Umat[c] = d/(cellPoints[c].size()*dt);
+                }
+            }
+            //drag -cDrag*(U - Umat): implicit in U
+            const vectorField& U = eqn.psi();
+            scalarField& diag = eqn.diag();
+            vectorField& source = eqn.source();
+            forAll(zoneCells, i)
+            {
+                const label c = zoneCells[i];
+                const vector Ur(U[c] - Umat[c]);
+%s
+                diag[c] -= cDrag*V[c];
+                source[c] -= cDrag*Umat[c]*V[c];
+            }
+        #};''' % (head, phiInit, solidVol, lookups, cell)
+    correct = '''        codeCorrect
+        #{
+%s
+            if (!m.foundObject<volScalarField>("solidFrac_" + zoneName))
+            {
+                return;
+            }
+%s
+            //force of the gas on the fibres with the solved U (N/m3)
+            forAll(zoneCells, i)
+            {
+                const label c = zoneCells[i];
+                const vector Ur(fld[c] - Umat[c]);
+%s
+                porDrag[c] = %scDrag*Ur;
+            }
+        #};''' % (head, lookups, cell, '%.9g*' % (rhoInf) if incompressible else '')
+    hooks = ['        codeAddSup%s' % ('' if incompressible else 'Rho'), addSup, '',
+             '        codeAddSup%s #{ #};' % ('Rho' if incompressible else '')]
+    lines = ['%sDrag' % (name), '{', '    type            vectorCodedSource;', '    name            %sDrag;' % (name),
+             '    vectorCodedSourceCoeffs', '    {', '        selectionMode   cellZone;',
+             '        cellZone        %s;' % (zone['name']), '        fields          (U);', '',
+             '        codeInclude', '        #{', '            #include "fvCFD.H"', '        #};', '',
+             correct, '', '        codeConstrain #{ #};', ''] + hooks + ['    }', '}']
+    return '\n'.join(lines)
+
+
+def fiberConductionCode(zone):
+    #C++ (codeCorrect of the fibre heat source, after the gas-fibre exchange): heat through the fibre bed, conduction
+    #along the fibres k_s*phi/3 plus radiation 16 sigma Ts^3 dw/(3 phi), between neighbouring zone cells (processor faces
+    #included, conservative) and from the walls whose patch names contain a WALL_CONTACT_PIDS keyword (wall T, contact
+    #factor on the conductance over the cell-centre distance). Explicit, sub-cycled to dt*sum(G)/C <= 0.4.
+    #Qwall_<zone> = heat from the walls (W/m3, an extra heat input for energy balances). Ts is reset from TsOld before
+    #this on every call (outer correctors), so the step is not applied twice
+    fiber = zone['fiber']
+    if zone['heat'] != 'solved' or (fiber['ks'] <= 0 and not fiber['radiation'] and not fiber['contactPids']):
+        return ''
+    keys = '\n'.join('                contactKeys.append(word("%s"));' % (k.lower()) for k in fiber['contactPids'])
+    return '''            //heat through the fibre bed and from the walls it touches
+            {
+                volScalarField& kEff = const_cast<volScalarField&>(m.lookupObject<volScalarField>("kEff_" + zoneName));
+                volScalarField& Qwall = const_cast<volScalarField&>(m.lookupObject<volScalarField>("Qwall_" + zoneName));
+                const volScalarField& Tgas = m.lookupObject<volScalarField>("T");
+                const scalar dw = %.9g;
+                const scalar ks = %.9g;
+                const scalar contact = %.9g;
+                const bool radiation = %s;
+                const scalar sigma = 5.670374e-8;
+                wordList contactKeys;
+%s
+                const scalarField& V = m.V();
+                const labelUList& own = m.owner();
+                const labelUList& nei = m.neighbour();
+                const surfaceScalarField& magSf = m.magSf();
+                const volVectorField& C = m.C();
+                kEff.primitiveFieldRef() = 0;
+                Qwall.primitiveFieldRef() = 0;
+                scalarField Cs(m.nCells(), 0);
+                forAll(zoneCells, i)
+                {
+                    const label c = zoneCells[i];
+                    const scalar phiC = max(solidFrac[c], scalar(0));
+                    if (phiC > 1e-9)
+                    {
+                        kEff[c] = ks*phiC/3 + (radiation ? 16*sigma*pow3(Ts[c])*dw/(3*phiC) : 0);
+                        Cs[c] = phiC*rhoCs*V[c];
+                    }
+                }
+                kEff.correctBoundaryConditions();
+                //face conductances (W/K): between zone cells (harmonic k), processor faces, wall contact
+                scalarField Gi(own.size(), 0);
+                forAll(own, f)
+                {
+                    const scalar kP = kEff[own[f]];
+                    const scalar kN = kEff[nei[f]];
+                    if (kP > 0 && kN > 0)
+                    {
+                        Gi[f] = 2*kP*kN/(kP + kN)*magSf[f]/mag(C[nei[f]] - C[own[f]]);
+                    }
+                }
+                const fvBoundaryMesh& patches = m.boundary();
+                List<scalarField> Gb(patches.size());
+                boolList isContact(patches.size(), false);
+                forAll(patches, p)
+                {
+                    const fvPatch& pp = patches[p];
+                    const labelUList& fc = pp.faceCells();
+                    Gb[p].setSize(pp.size(), 0);
+                    const scalarField kP(kEff.boundaryField()[p].patchInternalField());
+                    const vectorField d(pp.delta());
+                    if (pp.coupled())
+                    {
+                        const scalarField kN(kEff.boundaryField()[p].patchNeighbourField());
+                        forAll(fc, i)
+                        {
+                            if (kP[i] > 0 && kN[i] > 0)
+                            {
+                                Gb[p][i] = 2*kP[i]*kN[i]/(kP[i] + kN[i])*pp.magSf()[i]/mag(d[i]);
+                            }
+                        }
+                        continue;
+                    }
+                    std::string pn(pp.name());
+                    for (char& ch : pn)
+                    {
+                        ch = (ch >= 'A' && ch <= 'Z') ? char(ch + 32) : ch;
+                    }
+                    for (const word& k : contactKeys)
+                    {
+                        if (pn.find(k) != std::string::npos)
+                        {
+                            isContact[p] = true;
+                        }
+                    }
+                    if (isContact[p])
+                    {
+                        forAll(fc, i)
+                        {
+                            if (kP[i] > 0)
+                            {
+                                Gb[p][i] = contact*kP[i]*pp.magSf()[i]/mag(d[i]);
+                            }
+                        }
+                    }
+                }
+                //stable explicit sub-steps
+                scalarField sumG(m.nCells(), 0);
+                forAll(own, f)
+                {
+                    sumG[own[f]] += Gi[f];
+                    sumG[nei[f]] += Gi[f];
+                }
+                forAll(patches, p)
+                {
+                    const labelUList& fc = patches[p].faceCells();
+                    forAll(fc, i)
+                    {
+                        sumG[fc[i]] += Gb[p][i];
+                    }
+                }
+                scalar rMax = 0;
+                forAll(zoneCells, i)
+                {
+                    const label c = zoneCells[i];
+                    if (Cs[c] > 0)
+                    {
+                        rMax = max(rMax, sumG[c]/Cs[c]);
+                    }
+                }
+                reduce(rMax, maxOp<scalar>());
+                const label nSub = max(label(1), label(std::ceil(dt*rMax/0.4)));
+                const scalar dtSub = dt/nSub;
+                scalarField dE(m.nCells(), 0);
+                for (label s = 0; s < nSub; ++s)
+                {
+                    Ts.correctBoundaryConditions();
+                    dE = 0;
+                    forAll(own, f)
+                    {
+                        if (Gi[f] > 0)
+                        {
+                            const scalar q = Gi[f]*(Ts[nei[f]] - Ts[own[f]]);
+                            dE[own[f]] += q;
+                            dE[nei[f]] -= q;
+                        }
+                    }
+                    forAll(patches, p)
+                    {
+                        const labelUList& fc = patches[p].faceCells();
+                        if (patches[p].coupled())
+                        {
+                            const scalarField TN(Ts.boundaryField()[p].patchNeighbourField());
+                            forAll(fc, i)
+                            {
+                                if (Gb[p][i] > 0)
+                                {
+                                    dE[fc[i]] += Gb[p][i]*(TN[i] - Ts[fc[i]]);
+                                }
+                            }
+                        }
+                        else if (isContact[p])
+                        {
+                            const scalarField& Tw = Tgas.boundaryField()[p];
+                            forAll(fc, i)
+                            {
+                                if (Gb[p][i] > 0)
+                                {
+                                    const scalar q = Gb[p][i]*(Tw[i] - Ts[fc[i]]);
+                                    dE[fc[i]] += q;
+                                    Qwall[fc[i]] += q/V[fc[i]]/nSub;
+                                }
+                            }
+                        }
+                    }
+                    forAll(zoneCells, i)
+                    {
+                        const label c = zoneCells[i];
+                        if (Cs[c] > 0)
+                        {
+                            Ts[c] += dtSub*dE[c]/Cs[c];
+                        }
+                    }
+                }
+                Ts.correctBoundaryConditions();
+            }''' % (fiber['dw'], fiber['ks'], fiber['contact'], 'true' if fiber['radiation'] else 'false', keys)
+
+
+def porousFiberHeatSource(zone, props, cv):
+    #scalarCodedSource on e for a random-fibre zone: as porousHeatSource (gas and fibres implicit together, heat into the
+    #gas = heat the fibres give), with h*a per cell from the fibre fraction and the velocity relative to the fibres
+    #(solidFrac_/Umat_ of the drag source) and the fibre heat capacity per cell solidFrac*rhos*cs; hEff_<zone> keeps the
+    #per-cell coefficient of the step for the correct hook
+    name = zone['name'].replace('-', '_')
+    fiber = zone['fiber']
+    consts, cell = fiberCellCode(zone, props, False, 0.0)
+    rhoCs = fiber['rhos']*fiber.get('cs', 0.0) if zone['heat'] == 'solved' else 0.0
+    head = '\n'.join([
+        '            const fvMesh& m = mesh_;',
+        '            const scalar Cv = %.9g;' % (cv),
+        '            const scalar rhoCs = %.9g;' % (rhoCs),
+        '            const scalar dt = m.time().deltaTValue();',
+        '            const word zoneName("%s");' % (zone['name']),
+        '            const labelList& zoneCells = this->cells();'])
+    lookups = '\n'.join(['            volScalarField& %s = const_cast<volScalarField&>(m.lookupObject<volScalarField>'
+                         '("%s_" + zoneName));' % (f, f) for f in ('Ts', 'TsOld', 'Qs', 'eLin', 'TLin', 'hEff')])
+    addSup = '''        codeAddSupRho
+        #{
+%s
+%s
+            if (!m.foundObject<volScalarField>("solidFrac_" + zoneName))
+            {
+                return;
+            }
+            const volScalarField& solidFrac = m.lookupObject<volScalarField>("solidFrac_" + zoneName);
+            const volVectorField& Umat = m.lookupObject<volVectorField>("Umat_" + zoneName);
+            const volVectorField& Ugas = m.lookupObject<volVectorField>("U");
+            const volScalarField& T = m.lookupObject<volScalarField>("T");
+            if (!m.foundObject<volScalarField>("Ts_" + zoneName))
+            {
+                const word startName(m.time().timeName(m.time().startTime().value()));
+                IOobject TsIO("Ts_" + zoneName, startName, m, IOobject::READ_IF_PRESENT, IOobject::AUTO_WRITE);
+                volScalarField* TsPtr = new volScalarField(TsIO, m, dimensionedScalar(dimTemperature, %.9g));
+                TsPtr->store();
+                const word now(m.time().timeName());
+                (new volScalarField(IOobject("TsOld_" + zoneName, now, m), *TsPtr))->store();
+                (new volScalarField(IOobject("Qs_" + zoneName, now, m), m,
+                    dimensionedScalar(dimPower/dimVolume, Zero)))->store();
+                (new volScalarField(IOobject("eLin_" + zoneName, now, m), m,
+                    dimensionedScalar(dimEnergy/dimMass, Zero)))->store();
+                (new volScalarField(IOobject("TLin_" + zoneName, now, m), m,
+                    dimensionedScalar(dimTemperature, Zero)))->store();
+                (new volScalarField(IOobject("hEff_" + zoneName, now, m), m,
+                    dimensionedScalar(dimPower/dimVolume/dimTemperature, Zero)))->store();
+                (new volScalarField(IOobject("kEff_" + zoneName, now, m), m,
+                    dimensionedScalar(dimPower/dimLength/dimTemperature, Zero)))->store();
+                (new volScalarField(IOobject("Qwall_" + zoneName, now, m), m,
+                    dimensionedScalar(dimPower/dimVolume, Zero)))->store();
+            }
+%s
+            static label lastIndex = -1;
+            if (m.time().timeIndex() != lastIndex)
+            {
+                lastIndex = m.time().timeIndex();
+                forAll(zoneCells, i)
+                {
+                    TsOld[zoneCells[i]] = Ts[zoneCells[i]];
+                }
+            }
+            const scalarField& V = m.V();
+            const scalarField& e = eqn.psi();
+            scalarField& diag = eqn.diag();
+            scalarField& source = eqn.source();
+            forAll(zoneCells, i)
+            {
+                const label c = zoneCells[i];
+                const vector Ur(Ugas[c] - Umat[c]);
+%s
+                const scalar Cs = solidFrac[c]*rhoCs;
+                hEff[c] = (Cs > 0 ? haC*Cs/(Cs + haC*dt) : haC);
+                const scalar k = hEff[c]/Cv;
+                eLin[c] = e[c];
+                TLin[c] = T[c];
+                diag[c] -= k*V[c];
+                source[c] -= (hEff[c]*(TsOld[c] - T[c]) + k*e[c])*V[c];
+            }
+        #};''' % (head, consts, zone['Ts'][0], lookups, cell)
+    correct = '''        codeCorrect
+        #{
+%s
+            if (!m.foundObject<volScalarField>("Ts_" + zoneName))
+            {
+                return;
+            }
+            const volScalarField& solidFrac = m.lookupObject<volScalarField>("solidFrac_" + zoneName);
+%s
+            forAll(zoneCells, i)
+            {
+                const label c = zoneCells[i];
+                const scalar T1 = TLin[c] + (fld[c] - eLin[c])/Cv;
+                Qs[c] = hEff[c]*(TsOld[c] - T1);
+                const scalar Cs = solidFrac[c]*rhoCs;
+                if (Cs > 0)
+                {
+                    Ts[c] = TsOld[c] - Qs[c]*dt/Cs;
+                }
+            }
+%s
+        #};''' % (head, lookups, fiberConductionCode(zone))
+    lines = ['%sHeat' % (name), '{', '    type            scalarCodedSource;', '    name            %sHeat;' % (name),
+             '    scalarCodedSourceCoeffs', '    {', '        selectionMode   cellZone;',
+             '        cellZone        %s;' % (zone['name']), '        fields          (e);', '',
+             '        codeInclude', '        #{', '            #include "fvCFD.H"', '        #};', '',
+             correct, '', '        codeAddSup #{ #};', '        codeConstrain #{ #};', '', addSup,
+             '    }', '}']
+    return '\n'.join(lines)
+
+
+def porousDragHeatSource(zone, props, moving):
+    #scalarCodedSource on e: drag work Ur & C & Ur (W/m3) into the gas, the porosity sources drop it
+    #Ur = U - Umat for a zone moving with a body (Umat_<zone> from its drag source), else U
+    name = zone['name'].replace('-', '_')
+    constants, cell = porousDragCoeff(zone, props, False, 0.0)
+    head = '\n'.join([
+        '            const fvMesh& m = mesh_;',
+        '            const word zoneName("%s");' % (zone['name']),
+        '            const labelList& zoneCells = this->cells();',
+        constants])
+    umat = ('m.lookupObject<volVectorField>("Umat_" + zoneName)[c]' if moving else 'vector(Zero)')
+    addSup = '''        codeAddSupRho
+        #{
+%s
+            if (!m.foundObject<volScalarField>("porDragHeat_" + zoneName))
+            {
+                (new volScalarField(IOobject("porDragHeat_" + zoneName, m.time().timeName(), m), m,
+                    dimensionedScalar(dimPower/dimVolume, Zero)))->store();
+            }
+            volScalarField& heat = const_cast<volScalarField&>(m.lookupObject<volScalarField>("porDragHeat_" + zoneName));
+            if (%s)
+            {
+                return;
+            }
+            const volVectorField& U = m.lookupObject<volVectorField>("U");
+            const scalarField& V = m.V();
+            scalarField& source = eqn.source();
+            forAll(zoneCells, i)
+            {
+                const label c = zoneCells[i];
+                const vector Ur(U[c] - %s);
+%s
+                heat[c] = Ur & (C & Ur);
+                source[c] -= heat[c]*V[c];
+            }
+        #};''' % (head, '!m.foundObject<volVectorField>("Umat_" + zoneName)' if moving else 'false', umat, cell)
+    lines = ['%sDragHeat' % (name), '{', '    type            scalarCodedSource;', '    name            %sDragHeat;' % (name),
+             '    scalarCodedSourceCoeffs', '    {', '        selectionMode   cellZone;',
+             '        cellZone        %s;' % (zone['name']), '        fields          (e);', '',
+             '        codeInclude', '        #{', '            #include "fvCFD.H"', '        #};', '',
+             '        codeCorrect #{ #};', '        codeAddSup #{ #};', '        codeConstrain #{ #};', '', addSup,
+             '    }', '}']
+    return '\n'.join(lines)
+
+
+def getWarmStart(fullCaseSetupDict, porous):
+    #INIT_T_FIELD: uniform (INIT_T everywhere) | matrix (the only POR zone with a linear SOLID_T) | <POR zone>
+    #warm start: gas T along z as the matrix start (SOLID_T over the zone's z range, constant beyond its ends), so the
+    #hot and cold end spaces start at the end temperatures; p uniform, raised so the gas mass is that of the charge state
+    #(CHARGE_PRESSURE at INIT_T). Done at run time by remeshMassFix -warmStart before the first solve
+    setting = fullCaseSetupDict['GLOBAL_MATERIAL'].get('INIT_T_FIELD', ['uniform'])[0]
+    if setting == 'uniform':
+        return None
+    if getFlow(fullCaseSetupDict) == 'incompressible':
+        print('\t\tNOTE: incompressible run, INIT_T_FIELD %s ignored (no T)' % (setting))
+        return None
+    linear = [zone for zone in porous if zone.get('heat', 'none') != 'none' and zone['Ts'][0] != zone['Ts'][1]]
+    if setting == 'matrix':
+        if len(linear) != 1:
+            sys.exit('ERROR! GLOBAL_MATERIAL INIT_T_FIELD matrix needs exactly one POR zone with HEAT and two SOLID_T '
+                     'values (found %d): give the zone name instead' % (len(linear)))
+        zone = linear[0]
+    else:
+        match = [zone for zone in porous if zone['name'] == setting]
+        if not match or match[0].get('heat', 'none') == 'none':
+            sys.exit('ERROR! GLOBAL_MATERIAL INIT_T_FIELD must be uniform, matrix or a POR zone with HEAT (zones: %s)'
+                     % (' '.join(zone['name'] for zone in porous) or 'none'))
+        zone = match[0]
+    warm = {'zone': zone['name'], 'T': list(zone['Ts'])}
+    print('\n\tWarm start: gas T %g K (-z) to %g K (+z) along %s, constant beyond its ends; p raised to keep the gas '
+          'mass of %s Pa at %s K (remeshMassFix -warmStart before the first solve)'
+          % (warm['T'][0], warm['T'][1], zone['name'], getVal(fullCaseSetupDict, 'GLOBAL_MATERIAL', 'CHARGE_PRESSURE'),
+             getVal(fullCaseSetupDict, 'GLOBAL_MATERIAL', 'INIT_T')))
+    return warm
+
+
+def writeFvOptionsInternal(porous, fullCaseSetupDict, porOwners=None):
+    #constant/fvOptions: per POR zone explicitPorositySource (static) or the coded relative-velocity drag (moving with a
+    #body), the heat source when HEAT is fixed or solved, the drag work (DISSIPATION); viscous dissipation for the gas
     path = os.path.join('constant', 'fvOptions')
-    if not porous:
+    dissipation = getDissipation(fullCaseSetupDict)
+    if not porous and not dissipation:
         if os.path.isfile(path):
             os.remove(path)
         return
-    print('\n\tWriting fvOptions (porous zones)...')
+    print('\n\tWriting fvOptions...')
     props = getGasProperties(fullCaseSetupDict)
     cv = props['CP'] - 8314.46/props['MOL_WEIGHT']
+    incompressible = getFlow(fullCaseSetupDict) == 'incompressible'
+    nu = getNu(fullCaseSetupDict) if incompressible else 0.0
+    rhoInf = getGasDensity(fullCaseSetupDict)
     entries = []
+    coded = False
     for zone in porous:
         name = zone['name'].replace('-', '_')
-        entries.append('\n'.join([
-            '%sPorosity' % (name), '{', '    type            explicitPorositySource;',
-            '    explicitPorositySourceCoeffs', '    {', '        selectionMode   cellZone;',
-            '        cellZone        %s;' % (zone['name']), '        type            DarcyForchheimer;',
-            '        DarcyForchheimerCoeffs', '        {',
-            '            d   (%s);' % (' '.join('%.9g' % v for v in zone['d'])),
-            '            f   (%s);' % (' '.join('%.9g' % v for v in zone['f'])),
-            '            coordinateSystem',
-            '            {', '                origin  (0 0 0);',
-            '                rotation { type axes; e1 (%s); e2 (%s); }' % (' '.join('%g' % v for v in zone['e1']),
-                                                                          ' '.join('%g' % v for v in zone['e2'])),
-            '            }', '        }', '    }', '}']))
+        moving = zone['name'] in (porOwners or {})
+        if 'fiber' in zone:
+            entries.append(porousFiberDragSource(zone, props, incompressible, nu, rhoInf))
+            print('\t\t%s: random-fibre drag and heat per cell (porosity from the fibre fraction, velocity relative to '
+                  'the fibres)' % (zone['name']))
+            if zone['heat'] != 'none':
+                entries.append(porousFiberHeatSource(zone, props, cv))
+            coded = True
+            continue
+        if moving:
+            entries.append(porousDragSource(zone, props, incompressible, nu, rhoInf))
+            print('\t\t%s: drag on the velocity relative to the matrix (moves with %s), force added to the body'
+                  % (zone['name'], porOwners[zone['name']].name))
+            coded = True
+        else:
+            entries.append('\n'.join([
+                '%sPorosity' % (name), '{', '    type            explicitPorositySource;',
+                '    explicitPorositySourceCoeffs', '    {', '        selectionMode   cellZone;',
+                '        cellZone        %s;' % (zone['name']), '        type            DarcyForchheimer;',
+                '        DarcyForchheimerCoeffs', '        {',
+                '            d   (%s);' % (' '.join('%.9g' % v for v in zone['d'])),
+                '            f   (%s);' % (' '.join('%.9g' % v for v in zone['f'])),
+                '            coordinateSystem',
+                '            {', '                origin  (0 0 0);',
+                '                rotation { type axes; e1 (%s); e2 (%s); }' % (' '.join('%g' % v for v in zone['e1']),
+                                                                              ' '.join('%g' % v for v in zone['e2'])),
+                '            }', '        }', '    }', '}']))
         if zone['heat'] != 'none':
             entries.append(porousHeatSource(zone, cv))
+            coded = True
+        if dissipation:
+            entries.append(porousDragHeatSource(zone, props, moving))
+            coded = True
+    if dissipation:
+        #ESI fvOption: -devRhoReff && grad(U) into the energy equation (he from the thermo), effective viscosity
+        entries.append('viscousDissipation\n{\n    type            viscousDissipation;\n    enabled         true;\n}')
+        print('\t\tviscous dissipation%s into the gas energy (DISSIPATION yes)' % (' and porous drag work' if porous else ''))
     with open(path, 'w') as f:
         f.write('FoamFile { version 2.0; format ascii; class dictionary; object fvOptions; }\n\n')
-        f.write('//porous zones (written by internalSetup)\n\n%s\n' % ('\n\n'.join(entries)))
-    if any(zone['heat'] != 'none' for zone in porous):
-        print('\t\tthe heat source is compiled at run time (needs a C++ compiler where the solver runs)')
+        f.write('//written by internalSetup\n\n%s\n' % ('\n\n'.join(entries)))
+    if coded:
+        print('\t\tthe coded sources are compiled at run time (needs a C++ compiler where the solver runs)')
 
 
 def writeTurbulenceInternal(templateLoc, fullCaseSetupDict):
@@ -967,8 +1846,11 @@ def writeControlDictInternal(templateLoc, fullCaseSetupDict):
 
 
 def getRelaxation(fullCaseSetupDict):
-    #under-relaxation: always for the steady solvers, transient only with outer correctors (N_OUTER_CORR > 1)
-    #the last outer iteration (Final) is not relaxed
+    #under-relaxation: steady solvers always, transient only with outer correctors (N_OUTER_CORR > 1)
+    #the last outer iteration (Final) is not relaxed. RELAX_* auto: 0.3/0.7/0.7 steady, 1 (none) transient: with p
+    #relaxed, rho = psi p lags continuity in the relaxed iterations and the final e solve still uses that rho, so the gas
+    #energy goes wrong by about the lag times rho e every step (half the compression heating lost in a closed-cylinder
+    #test with 3 outer correctors and p 0.3; within 0.2 % without relaxation, same cost)
     simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
     nOuter = int(simControl['N_OUTER_CORR'][0])
     if nOuter < 1:
@@ -978,13 +1860,25 @@ def getRelaxation(fullCaseSetupDict):
         return ''
     relax = {}
     for key, default in (('RELAX_P', '0.3'), ('RELAX_U', '0.7'), ('RELAX_E', '0.7')):
+        value = simControl.get(key, ['auto'])[0]
+        if value == 'auto':
+            value = default if steady else '1'
         try:
-            relax[key] = float(simControl.get(key, [default])[0])
+            relax[key] = float(value)
         except ValueError:
             relax[key] = -1.0
         if not 0 < relax[key] <= 1:
-            sys.exit('ERROR! GLOBAL_SIM_CONTROL %s must be > 0 and <= 1!' % (key))
+            sys.exit('ERROR! GLOBAL_SIM_CONTROL %s must be auto or > 0 and <= 1!' % (key))
     compressible = getFlow(fullCaseSetupDict) == 'compressible'
+    if not steady:
+        if all(relax[key] == 1 for key in relax):
+            print('		%d outer correctors, no under-relaxation' % (nOuter))
+            return ''
+        #p relaxed: the gas energy error per process is about the p lag left after the relaxed outer iterations
+        if compressible and relax['RELAX_P'] < 1:
+            print('		WARNING: p relaxed in a transient compressible run: rho lags p in the relaxed outer iterations '
+                  'and the gas energy change (compression, heating) is off by about (1 - RELAX_P)^(N_OUTER_CORR - 1) '
+                  '= %.1f %%; use RELAX_P auto (= 1), or more outer correctors' % (100*(1 - relax['RELAX_P'])**(nOuter - 1)))
     pName = 'p_rgh' if isBuoyant(fullCaseSetupDict) else 'p'
     equations = ['        "(U|k|omega|epsilon)" %g;' % (relax['RELAX_U'])]
     if compressible:
@@ -1142,8 +2036,24 @@ def writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo=None,
         fields = ['p'] if incompressible else ['p', 'T']
         if zone.get('heat', 'none') != 'none':
             fields.append('Ts_%s' % (zone['name']))
-            fos.append(functionObject('porHeat_%s' % (zone['name']), cellZone + [('operation', 'volIntegrate;'),
+            fos.append(functionObject('porHeatToGas_%s' % (zone['name']), cellZone + [('operation', 'volIntegrate;'),
                                                                                ('fields', '(Qs_%s);' % (zone['name']))]))
+        #drag work into the gas (W) and, for a matrix moving with a body, the gas force on the matrix (N)
+        if getDissipation(fullCaseSetupDict):
+            fos.append(functionObject('porDragHeat_%s' % (zone['name']), cellZone + [('operation', 'volIntegrate;'),
+                                                                              ('fields', '(porDragHeat_%s);' % (zone['name']))]))
+        if motionInfo and zone['name'] in motionInfo.get('porOwners', {}) or 'fiber' in zone:
+            fos.append(functionObject('porDrag_%s' % (zone['name']), cellZone + [('operation', 'volIntegrate;'),
+                                                                          ('fields', '(porDrag_%s);' % (zone['name']))]))
+        #random fibres: fibre volume in the zone (constant: the fibres stay in their cells) and the mean fraction
+        if 'fiber' in zone:
+            fos.append(functionObject('fiber_%s' % (zone['name']), cellZone + [('operation', 'volIntegrate;'),
+                                                                        ('fields', '(solidFrac_%s);' % (zone['name']))]))
+            #heat from the walls the fibres touch (W, into the fibres; the gas gets it through porHeatToGas)
+            if zone['heat'] == 'solved' and zone['fiber']['contactPids']:
+                fos.append(functionObject('porWallToFiber_%s' % (zone['name']),
+                                          cellZone + [('operation', 'volIntegrate;'),
+                                                      ('fields', '(Qwall_%s);' % (zone['name']))]))
         fos.append(functionObject('por_%s' % (zone['name']), cellZone + [('operation', 'volAverage;'),
                                                                        ('fields', '(%s);' % (' '.join(fields)))]))
     #steady: initial residuals per iteration for the convergence plot
@@ -1435,6 +2345,11 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
     if ratio > maxDeformation and segments is None:
         sys.exit('ERROR! Squash/stretch %.2fx exceeds MAX_DEFORMATION %.2f: increase TDC_CLEARANCE or the limit'
                  % (ratio, maxDeformation))
+    #very flat cells near TDC: a run with a 76x squashed piston bore diverged at TDC without p under-relaxation
+    if ratio > 20 and segments is None:
+        print('\t\tWARNING: cells are squashed/stretched %.0fx over the cycle: runs can diverge where the gap is '
+              'smallest; use START_ANGLE auto (meshes at the geometric mean gap), REMESH auto or a larger TDC_CLEARANCE'
+              % (ratio))
     meshAngles = [startAngle] + ([a0 for a0, a1 in segments[1:]] if segments else [])
     print('\t\tzones in z order at the start angle:')
     order = motionUtilities.sortedZones(zones, step)
@@ -1464,17 +2379,39 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
                     sys.exit('ERROR! %s does not seal at the meshing angle %.1f deg: %s'
                              % (zone.patch, np.mod(angle, 360.0), '; '.join(problems)))
 
-    #LOC_IN_MESH must stay in the gas at every meshing angle: warn when it falls inside the box of a body of its own
+    #per meshing angle: LOC_IN_MESH moved with the mesh (segments only, the case mesh keeps the given point) and z-only
+    #refinement of end spaces that would get fewer than GAP_CELLS_Z cells across (a 3 mm end gap at the stroke end
+    #got one 2 mm cell, the deformed mesh had about 8 flat ones)
     try:
         loc = np.array([float(v) for v in fullCaseSetupDict['GLOBAL_REFINEMENT']['LOC_IN_MESH'] if v != ''])
     except (KeyError, ValueError):
         loc = None
+    gapCellsZ = float(''.join(meshMotion.get('GAP_CELLS_Z', ['6'])) or 0)
+    levels = dict((geomName, int(geomDict[geom]['refinement'])) for geomName, geom in geomFiles.items())
+    def cellOf(zone):
+        geomName = [g for g in geomFiles if zone.patch.startswith(g + '_')]
+        return baseCell/2**(levels[max(geomName, key=len)] if geomName else 0)
+    meshSetups = []
+    for k, angle in enumerate(meshAngles):
+        point = list(loc) if k == 0 or loc is None or len(loc) != 3 else motionUtilities.locationAt(loc, zones, startAngle, angle, step)
+        bands = motionUtilities.gapBands(zones, angle, step, cellOf, gapCellsZ)
+        for lower, upper, zLo, zHi, splits, before, after in bands:
+            print('\t\t%.1f deg: %s - %s gap %.4g m, %.1f cells across -> %d z splits, %.1f cells'
+                  % (np.mod(angle, 360.0), lower.name, upper.name, zHi - zLo, before, splits, after))
+            if after < gapCellsZ:
+                print('\t\tWARNING: fewer than GAP_CELLS_Z %g cells across that gap (at most 4 z splits)' % (gapCellsZ))
+        meshSetups.append({'angle': angle, 'loc': point,
+                           'bands': [(zLo - 0.5*max(cellOf(lower), cellOf(upper)), zHi + 0.5*max(cellOf(lower), cellOf(upper)), splits)
+                                     for lower, upper, zLo, zHi, splits, before, after in bands]})
+
+    #LOC_IN_MESH must stay in the gas at every meshing angle: warn when it falls inside the box of a body of its own
     if loc is not None and len(loc) == 3:
         for body in bodies:
             if not body.source.startswith('MOVE'):
                 continue
             allTris = np.vstack([t.reshape(-1, 3) for t in tris[body.source].values()])
-            for angle in meshAngles:
+            for angle, meshSetup in zip(meshAngles, meshSetups):
+                loc = np.array(meshSetup['loc'])
                 dz = float(body.shift(angle))
                 lo, hi = allTris.min(axis=0) + [0.0, 0.0, dz], allTris.max(axis=0) + [0.0, 0.0, dz]
                 if np.all(loc > lo) and np.all(loc < hi):
@@ -1497,14 +2434,24 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
         print('\t\tWARNING: %s has horizontal faces at z %.6g..%.6g m inside a stretching band: they will move '
               'with the mesh. Add them to ANCHOR_PIDS if they are fixed steps or port ends' % (label, zLo, zHi))
 
-    #porous zones inside a moving body (regenerator in the displacer) are moved with it (MOVES_WITH = <body>)
+    #porous zones inside a moving body (regenerator in the displacer) are moved with it (MOVES_WITH = <body>);
+    #MOVES_WITH mesh: the matrix deforms with the mesh (steel wool in an end space, squashed by the displacer), its
+    #geometry is deformed in z like the mesh to every meshing angle
     bodyNames = dict((body.name, body) for body in bodies)
     porOwners = {}
+    porDeform = {}
     for geomName in geomFiles:
         if not geomName.startswith('POR'):
             continue
         owner = fullCaseSetupDict[geomName].get('MOVES_WITH', ['none'])[0]
         if owner == 'none':
+            continue
+        if owner == 'mesh':
+            porDeform[geomName] = tris[geomName]
+            z = np.vstack(list(tris[geomName].values()))[:, :, 2]
+            dz = motionUtilities.meshDisplacementZ(z, zones, startAngle)
+            print('\t\t%s deforms with the mesh: z %.6g..%.6g m at the start angle (geometry %.6g..%.6g m)'
+                  % (geomName, float((z + dz).min()), float((z + dz).max()), float(z.min()), float(z.max())))
             continue
         if owner not in bodyNames:
             sys.exit('ERROR! [%s] MOVES_WITH %s is not a MOVE body (bodies: %s)' % (geomName, owner, list(bodyNames)))
@@ -1541,7 +2488,7 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
     return {'zones': order, 'bodies': bodies, 'startAngle': startAngle, 'step': step, 'freq': freq,
             'nCycles': nCycles, 'movingPids': movingPids, 'gapRefs': gapRefs, 'geomFiles': geomFiles,
             'scales': scales, 'porOwners': porOwners, 'porPids': dict((g, list(pidDict[g])) for g in porOwners),
-            'segments': segments}
+            'porDeform': porDeform, 'segments': segments, 'meshSetups': meshSetups}
 
 
 def motionShifts(motionInfo, angle):
@@ -1574,6 +2521,23 @@ def writeMotionGeometry(motionInfo, mshDir, angle=None, triDir=os.path.join('con
         if verbose:
             print('\t\t%s shifted to the start angle: %s' % (geom, ', '.join('%s %+.4g' % (pid, s[2])
                                                                               for pid, s in pidShift.items())))
+    #porous zones deforming with the mesh (MOVES_WITH mesh): z of every vertex moved as the mesh moves it
+    for geomName, pidTris in motionInfo.get('porDeform', {}).items():
+        geom = motionInfo['geomFiles'][geomName]
+        dest = os.path.join(triDir, geom.replace('.gz', ''))
+        for path in (dest, os.path.join(triDir, geom)):
+            if os.path.islink(path) or os.path.isfile(path):
+                os.remove(path)
+        scale = motionInfo['scales'][geomName]
+        deformed = {}
+        for pid, t in pidTris.items():
+            t = np.array(t, dtype=float)
+            t[:, :, 2] += motionUtilities.meshDisplacementZ(t[:, :, 2], motionInfo['zones'], angle)
+            deformed[pid] = t/scale
+        motionUtilities.writeStlTriangles(dest, deformed)
+        written.append(os.path.basename(dest))
+        if verbose:
+            print('\t\t%s deformed with the mesh to the start angle' % (geom))
     for gapRef in motionInfo['gapRefs']:
         dz = np.array([0.0, 0.0, float(gapRef['body'].shift(angle))])
         motionUtilities.writeStlTriangles(os.path.join(triDir, gapRef['file']),
@@ -1738,9 +2702,12 @@ def writeCrankDict(templateLoc, motionInfo, crank, angle, dest, tableDir, stopAn
     bodyLines = []
     for body in motionInfo['bodies']:
         patches = ' '.join('"%s_%s"' % (body.source, pid) for pid in body.movedPids)
-        bodyLines.append('        %s\n        {\n            patches (%s);\n            position { type tableFile; '
+        #porous zones moving with the body: the gas drag on the matrix (porDrag_<zone>) is part of the body force
+        porZones = sorted(name for name, owner in motionInfo.get('porOwners', {}).items() if owner is body)
+        porLine = '            porousZones (%s);\n' % (' '.join(porZones)) if porZones else ''
+        bodyLines.append('        %s\n        {\n            patches (%s);\n%s            position { type tableFile; '
                          'file "%s/%sCrank"; outOfBounds repeat; }\n        }'
-                         % (body.name, patches, tableDir, body.name))
+                         % (body.name, patches, porLine, tableDir, body.name))
     zoneLines = ['        (%s %s)' % (zone.name, 'none' if zone.body is None else zone.body.name)
                  for zone in motionInfo['zones']]
     copyTemplate(templateLoc, 'constant/dynamicMeshDictCrank', dest,
@@ -1755,6 +2722,7 @@ def writeMeshSignature():
     #geometry as meshed); the run scripts keep an existing mesh only while it matches the copy in .meshDone
     files = [os.path.join('system', name) for name in ['blockMeshDict', 'snappyHexMeshDict', 'snappyRefinementDict',
                                                        'surfaceFeatureExtractDict', 'topoSetDict', 'remeshSegments']]
+    files += sorted(glob.glob(os.path.join('meshes', 'seg*', 'snappyHexMeshDict')))
     surfDir = os.path.join('constant', 'triSurface')
     if os.path.isdir(surfDir):
         files += [os.path.join(surfDir, name) for name in sorted(os.listdir(surfDir))
@@ -1772,7 +2740,8 @@ def writeMeshSignature():
         f.write('\n'.join(lines) + '\n')
 
 
-def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None, fanNames=None, motionInfo=None):
+def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None, fanNames=None, motionInfo=None,
+                        warmStart=None):
     #writing runScript, postScript, motionCheckScript and submitScript from clusterDict
     print('\n\tWriting scripts...')
     os.makedirs('system', exist_ok=True)
@@ -1791,7 +2760,12 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     if motionInfo and motionInfo.get('segments'):
         skipSteps.append('solve')
     else:
-        skipSteps += ['remeshMesh', 'remeshSolve', 'compileMassFix']
+        skipSteps += ['remeshMesh', 'remeshSolve']
+    #remeshMassFix also does the warm start (gas T profile, p for the charge mass) before the first solve
+    if not (motionInfo and motionInfo.get('segments')) and not warmStart:
+        skipSteps.append('compileMassFix')
+    if not warmStart:
+        skipSteps.append('warmStart')
     export = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('EXPORT', ['ensight'])[0].lower()
     if export not in ('ensight', 'none'):
         sys.exit('ERROR! GLOBAL_COMPUTE_SETUP EXPORT must be ensight or none!')
@@ -1829,7 +2803,10 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     replaceDict = {'<SET_DECOMP>': setDecomp, '<CHECK_TIMES>': checkTimes,
                    '<ZERO_TEMPLATES>': os.path.join(execDir, 'zeroTemplates'), '<EXEC_DIR>': execDir,
                    '<SOLVER>': solver, '<MOTION_ZONES>': ' '.join(motionZones or []),
-                   '<MASS_FIX>': 'yes' if getFlow(fullCaseSetupDict) == 'compressible' else 'no'}
+                   '<MASS_FIX>': 'yes' if getFlow(fullCaseSetupDict) == 'compressible' else 'no',
+                   '<REMESH_DT>': ''.join(fullCaseSetupDict.get('MESH_MOTION', {}).get('REMESH_DT', [''])),
+                   '<WARM_ZONE>': warmStart['zone'] if warmStart else '',
+                   '<WARM_T>': '%.9g %.9g' % tuple(warmStart['T']) if warmStart else ''}
     #slurm header from GLOBAL_COMPUTE_SETUP, job name defaults to the case directory name
     compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
     for key in compute:
@@ -1839,11 +2816,25 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
         replaceDict['<MPI_RUN>'] = 'srun'
     if replaceDict.get('<JOB_NAME>', 'auto') == 'auto':
         replaceDict['<JOB_NAME>'] = os.path.basename(os.getcwd())
+    #clusters without an account, with a partition / fixed node, or without environment modules (OpenFOAM from the
+    #submitting shell, e.g. MPI_RUN = mpirun .../foamExec): ACCOUNT, MODULES, POST_MODULES blank, PARTITION, NODELIST
+    extraHeader = ['#SBATCH --%s=%s' % (option, ' '.join(compute.get(key, ['']))) for key, option in
+                   (('PARTITION', 'partition'), ('NODELIST', 'nodelist')) if ''.join(compute.get(key, [''])).strip()]
     for section, scriptName in scripts:
         lines = [clusterDict[section][key] for key in clusterDict[section] if key not in skipSteps]
         script = '\n'.join(lines)
         for key, val in replaceDict.items():
             script = script.replace(key, val)
+        script = script.replace('module --force purge; module load ;', '').replace('module load ;', '')
+        script = '\n'.join(line for line in script.split('\n') if line.strip() not in ('#SBATCH --account=',))
+        if extraHeader:
+            out, added = [], False
+            for line in script.split('\n'):
+                out.append(line)
+                if not added and line.startswith('#SBATCH --job-name='):
+                    out += extraHeader
+                    added = True
+            script = '\n'.join(out)
         with open(scriptName, 'w', newline='\n') as f:
             f.write(script + '\n')
         os.chmod(scriptName, 0o755)

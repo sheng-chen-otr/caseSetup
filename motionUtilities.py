@@ -371,6 +371,51 @@ def remeshAngles(zones, startAngle, step, limit):
     return segments
 
 
+def meshDisplacementZ(z, zones, angle):
+    #z displacement of points from the geometry (STL) position to a crank angle as the motion solver moves the mesh:
+    #linear in z between neighbouring zones (sorted at the STL position), constant beyond the outermost ones
+    order = sorted(zones, key=lambda zn: zn.zRef)
+    zRef = np.array([zn.zRef for zn in order])
+    dz = np.array([float(zoneZ(zn, angle)) - zn.zRef for zn in order])
+    return np.interp(np.asarray(z, dtype=float), zRef, dz)
+
+
+def gapBands(zones, angle, step, cellOf, nCells, maxSplits=4):
+    #z bands between neighbouring zones with fewer than nCells cells across at a meshing angle (end spaces at the
+    #stroke ends), refined in z only. cellOf(zone) = cell size at the zone's surface level
+    #returns [(lower, upper, zLo, zHi, splits, cells across before, after)]
+    bands = []
+    if nCells <= 0:
+        return bands
+    order = sortedZones(zones, step)
+    for lower, upper in zip(order[:-1], order[1:]):
+        if lower.body is upper.body and lower.body is not None:
+            continue
+        zLo, zHi = float(zoneZ(lower, angle)), float(zoneZ(upper, angle))
+        cell = max(cellOf(lower), cellOf(upper))
+        across = (zHi - zLo)/cell
+        if across >= nCells:
+            continue
+        splits = min(int(np.ceil(np.log2(nCells/across))), maxSplits)
+        bands.append((lower, upper, zLo, zHi, splits, across, across*2**splits))
+    return bands
+
+
+def locationAt(loc, zones, angle0, angle1, step, keep=(0.5, 0.5)):
+    #LOC_IN_MESH at a meshing angle: in the same gap between zones as at angle0 (a point in an end space stays in it),
+    #at the keep fraction of that gap (default the middle: snappy picks the region on the castellated mesh, before the
+    #end-gap z refinement, so a point 1 mm from a face in a 3 mm gap of 2 mm cells landed in a one-cell pocket)
+    order = sortedZones(zones, step)
+    z = float(loc[2])
+    for lower, upper in zip(order[:-1], order[1:]):
+        lo0, hi0 = float(zoneZ(lower, angle0)), float(zoneZ(upper, angle0))
+        if lo0 <= z <= hi0:
+            frac = min(max((z - lo0)/(hi0 - lo0), keep[0]), keep[1])
+            lo1, hi1 = float(zoneZ(lower, angle1)), float(zoneZ(upper, angle1))
+            return [float(loc[0]), float(loc[1]), lo1 + frac*(hi1 - lo1)]
+    return [float(v) for v in loc]
+
+
 def autoStartAngle(zones, step):
     #start (= meshing) angle that minimises the worst squash/stretch ratio
     best = (None, None)
