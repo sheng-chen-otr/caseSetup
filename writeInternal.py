@@ -2467,6 +2467,9 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
         loc = np.array([float(v) for v in fullCaseSetupDict['GLOBAL_REFINEMENT']['LOC_IN_MESH'] if v != ''])
     except (KeyError, ValueError):
         loc = None
+    if loc is None or len(loc) != 3:
+        sys.exit('ERROR! GLOBAL_REFINEMENT LOC_IN_MESH must be a point x y z in the gas (got: %s)'
+                 % (' '.join(fullCaseSetupDict.get('GLOBAL_REFINEMENT', {}).get('LOC_IN_MESH', ['missing']))))
     gapCellsZ = float(''.join(meshMotion.get('GAP_CELLS_Z', ['6'])) or 0)
     levels = dict((geomName, int(geomDict[geom]['refinement'])) for geomName, geom in geomFiles.items())
     def cellOf(zone):
@@ -2474,7 +2477,7 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
         return baseCell/2**(levels[max(geomName, key=len)] if geomName else 0)
     meshSetups = []
     for k, angle in enumerate(meshAngles):
-        point = list(loc) if k == 0 or loc is None or len(loc) != 3 else motionUtilities.locationAt(loc, zones, startAngle, angle, step)
+        point = list(loc) if k == 0 else motionUtilities.locationAt(loc, zones, startAngle, angle, step)
         bands = motionUtilities.gapBands(zones, angle, step, cellOf, gapCellsZ)
         for lower, upper, zLo, zHi, splits, before, after in bands:
             print('\t\t%.1f deg: %s - %s gap %.4g m, %.1f cells across -> %d z splits, %.1f cells'

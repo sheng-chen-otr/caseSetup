@@ -352,7 +352,7 @@ def test_post_script_and_chaining(tmp_path, monkeypatch, repo_root):
     assert "pvPostInternal.py' --mesh > log.pvPostMesh" in post and '--imageDir postProcessing/meshImages' in post
     assert post.index('"--mesh"') < post.index('log.postInternal')
     #no post environment set: nothing activated, settings from the default folder
-    assert 'if [ -n "" ]; then source /bin/activate; fi; export CASESETUP_CONFIG=;' in post
+    assert post.count('(if [ -n "" ]; then source /bin/activate; fi; export CASESETUP_CONFIG=;') == 2
     assert subprocess.run(['bash', '-n', str(case / 'postScript')]).returncode == 0
     submit = (case / 'submitScript').read_text()
     assert submit.index('motionCheckScript)') < submit.index('postScript --mesh)') < submit.index('"--post"')
@@ -1219,10 +1219,10 @@ def test_copy_back_step(tmp_path, monkeypatch, repo_root):
     monkeypatch.chdir(tmp_path)
     writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
     post = (tmp_path / 'postScript').read_text()
-    assert post.index("imagesToMovies.py' > log.imagesToMovies") < post.index("copyBackInternal.py' > log.copyBackInternal")
+    assert post.index("imagesToMovies.py' > log.imagesToMovies") < post.index("copyBackInternal.py') > log.copyBackInternal")
     full['GLOBAL_COMPUTE_SETUP']['COPY_BACK'] = ['False']
     writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)
-    assert "copyBackInternal.py' > log.copyBackInternal" not in (tmp_path / 'postScript').read_text()
+    assert "copyBackInternal.py') > log.copyBackInternal" not in (tmp_path / 'postScript').read_text()
     full['GLOBAL_COMPUTE_SETUP']['COPY_BACK'] = ['sometimes']
     with pytest.raises(SystemExit):
         writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', None)

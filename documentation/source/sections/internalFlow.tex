@@ -358,7 +358,7 @@ Not supported yet with remeshing: \codeword{FAN} baffles.
     \item \codeword{POST_CPUS}, \codeword{POST_TIME} - the post-processing job (one task with \codeword{POST_CPUS} cores).
     \item \codeword{ACCOUNT}, \codeword{MODULES}, \codeword{PARTITION} - Slurm account, environment modules and partition. Blank drops the line (clusters without accounts or modules, where OpenFOAM comes from the shell that submits).
     \item \codeword{POST_MODULES}, \codeword{POST_MEM} - modules and memory of the post job. The modules must provide \codeword{python3} with numpy, \codeword{pvbatch} and \codeword{ffmpeg}. \codeword{POST_MEM} blank: no memory request (nodes without a memory size in the Slurm configuration reject any \codeword{--mem}).
-    \item \codeword{POST_ENV} - a Python virtual environment folder that \codeword{postScript} activates (blank: none). \codeword{POST_CONFIG} - the folder with the gsheet and Drive settings (blank: \codeword{~/.config/caseSetup}); on clusters whose compute nodes do not share the home directory it has to be on a shared disk.
+    \item \codeword{POST_ENV} - a Python virtual environment folder that \codeword{postScript} activates for the gsheet and Drive steps only, e.g. \codeword{~/gdrive_env} with \codeword{gspread} and \codeword{google-auth} installed (blank: none). \codeword{POST_CONFIG} - the folder with the gsheet and Drive settings (blank: \codeword{~/.config/caseSetup}); on clusters whose compute nodes do not share the home directory it has to be on a shared disk.
     \item \codeword{PVBATCH} - the pvbatch command (a full path for a local ParaView install; without a display it must be an offscreen build, e.g. OSMesa or EGL).
     \item \codeword{GSHEET} - \codeword{True}: \codeword{postScript} pushes the summary to the database sheet (needs \codeword{gspread} and the sheet settings, see Section \ref{sec:internalPost}). \codeword{COPY_BACK} - \codeword{True}: \codeword{postScript} copies the run data to Google Drive.
 \end{itemize}
@@ -560,7 +560,16 @@ Fifty 100-mesh screens, $d_w = 0.1$\,mm, stainless steel ($\rho_s = 7900$, $c_s 
 These are the values the setup prints for \codeword{POROSITY = 0.6908}, \codeword{WIRE_DIA = 1e-4}, \codeword{REF_VELOCITY = 1}.
 
 \subsubsection{Random-Fibre Model (Steel Wool)}\label{sec:fiberModel}
-\codeword{RESISTANCE = randomFiber} models a loose bed of thin, randomly oriented fibres, such as steel wool stuffed into an end space. Compared with a plate, the bed puts a large area of hot metal into the gas (thousands of m$^2$ per m$^3$), and it can be squashed and expanded by a moving body. Drag, heat transfer and the fibre heat capacity are worked out in every cell and time step from the local fibre fraction and the gas velocity relative to the fibres. The equations are in \codeword{writeInternal.fiberCoeffs} (the values the setup prints) and in the coded sources it writes to \codeword{constant/fvOptions}.
+\codeword{RESISTANCE = randomFiber} models a loose tangle of thin fibres, such as steel wool stuffed into the hot end space. The idea is simple: a flat hot plate only touches the gas next to it, but wool spreads a huge metal surface through the whole space, so the gas picks up heat much faster. The wool also gets squashed and released as the displacer moves.
+
+The model does four things in every cell, every time step:
+\begin{enumerate}
+    \item keeps track of how much fibre is in the cell,
+    \item slows the gas down (drag),
+    \item swaps heat between the gas and the fibres,
+    \item spreads heat through the wool itself, and from the hot plate into the wool.
+\end{enumerate}
+
 \begin{lstlisting}
     [POR-wool]
     RESISTANCE = randomFiber
@@ -579,81 +588,49 @@ These are the values the setup prints for \codeword{POROSITY = 0.6908}, \codewor
     REF_VELOCITY = 0.5
 \end{lstlisting}
 \begin{itemize}
-    \item \codeword{WIRE_DIA} - fibre diameter $d_w$ (m).
-    \item \codeword{SOLID_MASS} - fibre mass in the zone (kg). The fibre fraction then follows from the zone volume and is kept as a field (below). Without \codeword{SOLID_MASS}, \codeword{POROSITY} gives a uniform fixed porosity; \codeword{MOVES_WITH = mesh} needs \codeword{SOLID_MASS}.
-    \item \codeword{SOLID_RHO}, \codeword{SOLID_CP} - fibre density and specific heat. \codeword{SOLID_K} - conductivity of the fibre material (W/m\,K; default 50, plain carbon steel; stainless steel is about 15). \codeword{RADIATION} - \codeword{yes} (default) adds radiation through the bed.
-    \item \codeword{WALL_CONTACT_PIDS} - keywords of the wall patches the fibres touch (e.g. the hot plate); \codeword{WALL_CONTACT} - factor 0 to 1 on the conductance between those walls and the bed (default 1). Blank = no wall contact.
-    \item \codeword{MOVES_WITH = mesh} - the fibres move and deform with the mesh. The \codeword{POR} solid is a closed box of the end space at the geometry position (top at the moving face, sides and bottom inside the walls). The setup moves its points in $z$ like the mesh to every meshing angle, so the cell zone is the end space in every segment mesh.
-    \item \codeword{HEAT} - \codeword{solved} (fibre temperature solved) or \codeword{fixed}; \codeword{HA} must be \codeword{auto}; one \codeword{SOLID_T} value (uniform start).
-    \item \codeword{REF_VELOCITY} - only sets the table the setup prints: drag coefficient, $h a$ and bed conductivity at porosities 0.90, 0.95, 0.98 and 0.99.
+    \item \codeword{WIRE_DIA} - fibre thickness (m).
+    \item \codeword{SOLID_MASS} - how much wool is in the space (kg). Or give \codeword{POROSITY} for a fixed, evenly packed bed. Wool that moves with the mesh needs \codeword{SOLID_MASS}.
+    \item \codeword{SOLID_RHO}, \codeword{SOLID_CP}, \codeword{SOLID_K} - density, specific heat and conductivity of the fibre metal. \codeword{SOLID_K} defaults to 50\,W/m\,K (ordinary steel); stainless steel is about 15.
+    \item \codeword{RADIATION} - \codeword{yes} lets heat also travel through the wool as radiation.
+    \item \codeword{WALL_CONTACT_PIDS} - the walls the wool touches, e.g. the hot plate. \codeword{WALL_CONTACT} (0 to 1) says how good that contact is; 1 = perfect.
+    \item \codeword{MOVES_WITH = mesh} - the wool is squashed and stretched with the mesh. Draw the \codeword{POR} solid as a box filling the end space.
+    \item \codeword{HEAT = solved}, \codeword{HA = auto}, one \codeword{SOLID_T} (start temperature of the wool).
+    \item \codeword{REF_VELOCITY} - only used for the table the setup prints; the run itself uses the real local gas speed.
 \end{itemize}
 
-\paragraph{Fibre fraction.}
-Each cell of the zone carries a fibre volume fraction $\varphi$ (field \codeword{solidFrac_<zone>}, written at write times, restarted from and mapped at remeshing); the porosity is $\varepsilon = 1 - \varphi$. The fibres stay in their cell when the mesh moves, so every time step
-\begin{equation}
-\varphi^{n+1} = \varphi^{n}\,\frac{V^{n}}{V^{n+1}} ,
-\end{equation}
-with $V$ the cell volume: squashing an end space to a fifth of its height raises $\varphi$ five times. At every start and restart (including after each remeshing map) $\varphi$ is scaled so that the zone holds exactly \codeword{SOLID_MASS}, $\sum \varphi V = M/\rho_s$, which keeps the fibre mass exact across maps. The fibres move with the mesh: their velocity $\mathbf{U}_m$ in a cell is the mean motion of its points over the time step, and all correlations use the gas velocity relative to the fibres, $\mathbf{U}_r = \mathbf{U} - \mathbf{U}_m$ (superficial). The pore velocity is $u = |\mathbf{U}_r|/\varepsilon$. For numerical safety $\varphi$ is capped at 0.5 in the correlations.
+\paragraph{1. How much fibre is in each cell.}
+Each cell stores its fibre fraction $\varphi$: the share of its volume that is metal (field \codeword{solidFrac_<zone>}); the rest, $\varepsilon = 1 - \varphi$, is gas. The fibres stay in their cell, so when the displacer squashes a cell to half its size, $\varphi$ doubles. At every (re)start the total is reset to exactly \codeword{SOLID_MASS}, so no wool is gained or lost, also not when the mesh is remade. The fibres move with the mesh, and everything below uses the gas speed \emph{relative to the fibres}.
 
-\paragraph{Two limits, blended.}
-Steel wool is far more open than the materials the porous-media correlations were measured on, so two models are combined:
+\paragraph{2. Drag.}
+Gas flowing through the wool is slowed down, more so the denser the wool and the faster the flow. No measured data exist for wool as loose as steel wool (95--99\,\% empty), so two textbook cases are combined:
 \begin{itemize}
-    \item \textbf{Metal felt} (dense random fibres): Gedeon and Wood (1996, NASA CR-198442, eqs.~2.5 and 2.10), measured up to $\varepsilon = 0.84$. With $d_h = \varepsilon d_w/\varphi$ and $Re = \rho u d_h/\mu$,
-    \begin{equation}
-    f = \frac{192}{Re} + 4.53\,Re^{-0.067}, \qquad Nu = \frac{h d_h}{k} = \left(1 + 1.16\,(Re\,Pr)^{0.66}\right)\varepsilon^{2.61} .
-    \end{equation}
-    \item \textbf{Single fibres in cross flow} (the very open limit, where each fibre sees the flow on its own). The fibre length per unit volume is $\ell = 4\varphi/(\pi d_w^2)$ and the fibre Reynolds number $Re_d = \rho u d_w/\mu$. Drag coefficient from White's cylinder correlation, $C_d = 1 + 10\,Re_d^{-2/3}$, and below $Re_d = 1$ at least Lamb's Oseen-flow result $C_d = 8\pi/\left(Re_d\,(2.002 - \ln Re_d)\right)$. Heat transfer from Churchill and Bernstein (1977),
-    \begin{equation}
-    Nu_d = \frac{h d_w}{k} = 0.3 + \frac{0.62\,Re_d^{1/2}\,Pr^{1/3}}{\left(1 + (0.4/Pr)^{2/3}\right)^{1/4}} .
-    \end{equation}
+    \item \textbf{Dense metal felt} - correlations measured on packed fibre mats by Gedeon and Wood (NASA CR-198442), valid up to about 84\,\% empty.
+    \item \textbf{Single fibres} - each fibre treated as a thin wire in the flow, on its own (wire drag from White, and from Lamb at very low speed). This is the right picture when the fibres are far apart.
 \end{itemize}
-The felt forms fall off as $(1-\varepsilon)^2$ at high porosity and give 4 to 10 times less $h a$ than the single-fibre model at steel-wool porosities (0.97 to 0.99), where they were never measured. Both drag coefficients $c$ and both $h a$ are therefore blended log-linearly in porosity,
-\begin{equation}
-c = c_{felt}^{\,1-w}\, c_{fibre}^{\,w}, \qquad h a = (h a)_{felt}^{\,1-w}\, (h a)_{fibre}^{\,w}, \qquad w = \min\!\left(\max\!\left(\frac{\varepsilon - 0.84}{0.97 - 0.84}, 0\right), 1\right) ,
-\end{equation}
-so the felt model holds up to its tested porosity, single fibres hold above 0.97, and a squashed bed moves smoothly from one to the other.
+The model uses the felt data for dense wool, the single-wire picture for loose wool (above 97\,\% empty), and blends smoothly between the two. So as the displacer squashes the wool, the model moves from one to the other. The drag force on the fibres is logged as \codeword{porDrag_<zone>}.
 
-\paragraph{Drag.}
-The force on the gas per unit volume is $\mathbf{f} = -c\,\mathbf{U}_r$, implicit in $\mathbf{U}$, with
-\begin{equation}
-c_{felt} = \mu\,\frac{96}{\varepsilon d_h^2} + \frac{1}{2}\rho\,|\mathbf{U}_r|\,\frac{4.53\,Re^{-0.067}}{\varepsilon^2 d_h},
-\qquad
-c_{fibre} = \frac{1}{2}\rho\, u\, d_w\, C_d\,\frac{\ell}{\varepsilon} .
-\end{equation}
-$c_{felt}$ is the Gedeon--Wood $f$ written for the superficial velocity, as for the screens (section~\ref{sec:regenModel}); $c_{fibre}$ is the drag of $\ell$ metres of cylinder per m$^3$, each with $\frac{1}{2}\rho u^2 d_w C_d$ per metre. The reaction on the fibres, $c\,\mathbf{U}_r$, is stored as \codeword{porDrag_<zone>} and integrated by the \codeword{porDrag_} function object. The fibres' spring force on a moving body is not modelled.
+\paragraph{3. Heat between gas and fibres.}
+How fast heat moves between gas and fibres depends on the total fibre surface ($4\varphi/d_w$ per m$^3$: thinner and denser wool has more) and on how fast the gas flows past it. The same two cases are used and blended in the same way (felt: Gedeon and Wood; single wires: Churchill and Bernstein). The heat that leaves the gas is exactly the heat that enters the fibres, and vice versa, so no energy is lost. The fibre temperature is the field \codeword{Ts_<zone>}; the heat from the fibres into the gas is logged as \codeword{porHeatToGas_<zone>}.
 
-\paragraph{Gas--fibre heat exchange.}
-$h a$ per unit volume from the blend above, with $a = 4\varphi/d_w$ and $k = \mu c_p/Pr$:
+\paragraph{4. Heat through the wool and from the hot plate.}
+This step lets the wool work like the fins of a radiator. Without it, the wool could only take heat from the gas and never directly from the hot plate. Heat travels through the wool in two ways, added together:
 \begin{equation}
-(h a)_{felt} = Nu\,\frac{k}{d_h}\,\frac{4\varphi}{d_w}, \qquad (h a)_{fibre} = Nu_d\,\frac{k}{d_w}\,\frac{4\varphi}{d_w} .
-\end{equation}
-Gas and fibres are coupled exactly as for the screens (implicit together, heat into the gas = heat the fibres give up, see section~\ref{sec:regenModel}), with $h_{eff}$ per cell and the fibre heat capacity per unit volume $C_s = \varphi\,\rho_s c_s$, which rises when the bed is squashed. The fibre temperature is the field \codeword{Ts_<zone>}; the heat into the gas is integrated by \codeword{porHeatToGas_<zone>}.
-
-\paragraph{Heat through the bed.}
-Without conduction through the bed, the fibres could only store heat that has first crossed the gas boundary layer on the hot plate. Fibres touching the plate instead act as fins. After the gas--fibre exchange of each step, the fibre temperature diffuses through the bed with the effective conductivity
-\begin{equation}
-k_{eff} = \underbrace{\frac{k_s\,\varphi}{3}}_{\textrm{conduction}} + \underbrace{\frac{16\,\sigma\,T_s^3\, d_w}{3\,\varphi}}_{\textrm{radiation}} .
+k_{eff} = \underbrace{\frac{k_s\,\varphi}{3}}_{\textrm{along the fibres}} + \underbrace{\frac{16\,\sigma\,T_s^3\, d_w}{3\,\varphi}}_{\textrm{radiation}} .
 \end{equation}
 \begin{itemize}
-    \item \textbf{Conduction} is the orientation average for a network of straight fibres. A fibre conducts along its axis only; under a temperature gradient $G$ at angle $\theta$ to the fibre it carries $k_s G\cos\theta$ along itself, of which $k_s G\cos^2\theta$ is in the direction of $G$. Averaged over random 3D orientations, $\langle\cos^2\theta\rangle = 1/3$, and the fibres fill the fraction $\varphi$ of any cross-section, so $k_c = \varphi k_s/3$ (fibres lying in a plane give $\varphi k_s/2$ in that plane). This is an \textbf{upper bound}: it assumes continuous, straight fibres joined without resistance. Real steel wool is crimped, the strands are short, and heat has to cross point contacts between fibres, which usually dominate, so measured conductivities of fibre beds are well below it. \codeword{SOLID_K} can be lowered to account for that.
-    \item \textbf{Radiation} uses the Rosseland diffusion approximation for an optically thick medium (e.g. Siegel and Howell), $k_r = 16\sigma T^3/(3\beta)$, with the extinction coefficient of randomly oriented opaque fibres from geometric optics: the mean projected area of a convex body over all orientations is a quarter of its surface (Cauchy's formula), and the fibres have $4\varphi/d_w$ of surface per unit volume, so $\beta = \varphi/d_w$. Diffraction, the scattering pattern and the emissivities of fibres and walls are ignored (black fibres). Rosseland needs a bed many mean free paths $1/\beta = d_w/\varphi$ thick (2.5\,mm for 50\,$\mu$m fibres at $\varphi = 0.02$); a bed squashed to a few millimetres is only marginally thick, and the radiation near its walls is overestimated.
+    \item \textbf{Along the fibres.} Only the metal conducts, and only along each fibre. A fibre pointing in the direction of the heat flow carries it fully, a fibre lying across carries none. Averaged over fibres pointing every which way, one third of the metal is effectively in line, hence $\varphi k_s/3$. This assumes the fibres are long and touch each other perfectly, so it is the \emph{best case}. Real wool is crinkled and the fibres only touch at points, so the true value is lower. Lower \codeword{SOLID_K} if you know the wool conducts worse.
+    \item \textbf{Radiation.} Hot fibres glow (in infrared) and pass heat on to their neighbours. The formula is the standard one for a dense, cloudy material (Rosseland). It works when a ray of light can only get a few millimetres before hitting a fibre. In wool squashed very flat this is no longer quite true, and the formula then overestimates the radiation.
 \end{itemize}
-At 600\,K, with 50\,$\mu$m steel fibres, $k_{eff}$ is about 0.5\,W/m\,K for an expanded bed ($\varphi \approx 0.01$, mostly radiation) and about 0.9\,W/m\,K at $\varphi = 0.05$ (mostly conduction), compared with 0.045\,W/m\,K for air. The setup prints both parts for the porosities in its table.
+For scale: at 600\,K, wool of 50\,$\mu$m steel conducts about 0.5 to 0.9\,W/m\,K, ten to twenty times better than still air (0.045\,W/m\,K).
 
-The diffusion is explicit and conservative: between neighbouring zone cells (also across processor boundaries) the face conductance is $G = \bar k\, A/\delta$ with the harmonic mean $\bar k$ of the two cells, the face area $A$ and the distance $\delta$ between the cell centres. The step is split into sub-steps so that $\Delta t \sum G / C \le 0.4$ in every cell (with $C = \varphi\rho_s c_s V$). Cells on a wall patch whose name contains a \codeword{WALL_CONTACT_PIDS} keyword exchange heat with the wall temperature through
-\begin{equation}
-G_{wall} = c_w\, k_{eff}\,\frac{A}{\delta_w} ,
-\end{equation}
-with $c_w$ = \codeword{WALL_CONTACT} and $\delta_w$ the distance from the cell centre to the wall face. This heat is stored as \codeword{Qwall_<zone>} (W/m$^3$) and integrated by \codeword{porWallToFiber_<zone>}; it is an extra heat input to the gas and fibres, and must be counted in energy balances along with the wall heat flux into the gas. \codeword{WALL_CONTACT} describes how well the wool touches the wall; it is not known from first principles, so it is worth bounding with runs at a lower and a higher value.
+Wool cells that touch a \codeword{WALL_CONTACT_PIDS} wall also take heat straight from it, scaled by \codeword{WALL_CONTACT}. Nobody can predict how well wool touches a plate, so treat \codeword{WALL_CONTACT} as a knob: run with a lower and a higher value to see how much it matters. This heat is logged as \codeword{porWallToFiber_<zone>}. Count it as heat input in energy balances.
 
-\paragraph{Function objects.} \codeword{porHeatToGas_<zone>} (W, fibres to gas), \codeword{porDrag_<zone>} (N, force on the fibres), \codeword{porWallToFiber_<zone>} (W, walls to fibres), \codeword{fiber_<zone>} (fibre volume, constant when the mass is kept) and \codeword{por_<zone>} (zone averages, including \codeword{Ts}).
-
-\paragraph{Limitations.}
+\paragraph{What to keep in mind.}
 \begin{itemize}
-    \item The correlations are not validated in the steel-wool porosity range (0.97 to 0.99): the felt data stop at 0.84 and the single-fibre model ignores the interaction between fibres. The two limits differ by 4 to 10 times in $h a$ there, so the blend is a modelling choice; measured pressure-drop or heat-transfer data on the actual wool would pin it down.
-    \item Bed conductivity: conduction is an upper bound (no contact resistance between fibres), and radiation is rough in a thin, squashed bed.
-    \item The wall contact (\codeword{WALL_CONTACT}) is a model input, not a prediction.
-    \item Not modelled: the spring force of the wool on a moving body, gaps between the wool and the walls, uneven packing (the fibre fraction starts uniform), and the gas volume taken up by the fibres (as for the screens, the whole zone counts as gas).
+    \item The drag and heat-transfer numbers are uncertain for loose steel wool: there is no measured data at 95--99\,\% empty, and the two textbook cases differ by 4 to 10 times there. Measurements on the actual wool would fix this.
+    \item Heat conduction through the wool is a best case; radiation is rough when the wool is squashed flat.
+    \item How well the wool touches the hot plate (\codeword{WALL_CONTACT}) is a guess you supply.
+    \item Not modelled: the springiness of the wool pushing on the displacer, gaps between wool and walls, uneven packing (the wool starts evenly spread), and the small volume the fibres take away from the gas.
 \end{itemize}
 
 \subsection{Function Objects}
