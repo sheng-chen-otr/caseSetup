@@ -1,0 +1,12 @@
+[CLUSTER_ENVIRONMENT]
+ACCOUNT = def-account
+MODULES = StdEnv/2023 gcc/12.3 openmpi/4.1.5 openfoam/v2412
+MPI_RUN = srun
+PARTITION = 
+POST_MODULES = StdEnv/2023 python/3.11 scipy-stack paraview/5.13.1 ffmpeg
+POST_MEM = 32G
+POST_ENV = 
+POST_CONFIG = 
+PVBATCH = pvbatch
+GSHEET = True
+COPY_BACK = True

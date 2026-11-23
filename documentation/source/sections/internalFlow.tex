@@ -325,31 +325,42 @@ Not supported yet with remeshing: \codeword{FAN} baffles.
     LOCAL_PROCS = 4
     DECOMP_METHOD = scotch
     DECOMP = auto
-    ACCOUNT = def-xxxx
-    MODULES = StdEnv/2023 gcc/12.3 openmpi/4.1.5 openfoam/v2412
-    MPI_RUN = srun
+    NODELIST =
     NODES = 1
     JOB_NAME = auto
     RUN_TIME = 0-12:00
     MOTION_TIME = 0-02:00
     EXPORT = ensight
-    POST_MODULES = StdEnv/2023 python scipy-stack paraview/5.13.1 ffmpeg
-    POST_CPUS = 4
-    POST_MEM = 32G
+    POST_CPUS = 8
     POST_TIME = 0-03:00
+
+    [CLUSTER_ENVIRONMENT]
+    ACCOUNT = def-xxxx
+    MODULES = StdEnv/2023 gcc/12.3 openmpi/4.1.5 openfoam/v2412
+    MPI_RUN = srun
+    PARTITION =
+    POST_MODULES = StdEnv/2023 python/3.11 scipy-stack paraview/5.13.1 ffmpeg
+    POST_MEM = 32G
+    POST_ENV =
+    POST_CONFIG =
     PVBATCH = pvbatch
     GSHEET = True
+    COPY_BACK = True
 \end{lstlisting}
+\codeword{GLOBAL_COMPUTE_SETUP} holds the settings of a run, \codeword{CLUSTER_ENVIRONMENT} those of the cluster it runs on. \codeword{CLUSTER_ENVIRONMENT} is in \codeword{DEFAULT_MODULES}, so it does not appear in \codeword{internalSetup}: take \codeword{defaultClusterEnvironment} out of \codeword{DEFAULT_MODULES} to change it. A case file from before this split keeps its cluster keys in \codeword{GLOBAL_COMPUTE_SETUP}; they are still used (the setup prints a note).
 \begin{itemize}
     \item \codeword{NUM_PROCS} - Slurm tasks (192 = one full node on a 192-core cluster). \codeword{LOCAL_PROCS} - cores for a local run.
     \item \codeword{DECOMP_METHOD} - \codeword{scotch} (default), or \codeword{hierarchical} / \codeword{simple} for clusters without scotch.
     \item \codeword{DECOMP} - split for \codeword{hierarchical}/\codeword{simple}. \codeword{auto}: the scripts choose \codeword{n (nx ny nz)} for the task count of each run, with subdomains of the background mesh box as close to cubes as possible. \codeword{nx ny nz}: that split is used, and \codeword{nx}$\cdot$\codeword{ny}$\cdot$\codeword{nz} must equal \codeword{NUM_PROCS} (and \codeword{LOCAL_PROCS} for a local run). Ignored for other methods.
     \item \codeword{MPI_RUN} - how the parallel tools are started inside a Slurm job: \codeword{srun} (default), or e.g. \codeword{/usr/bin/mpirun} on clusters where Open MPI was not built to start under srun (all ranks then abort in \codeword{MPI_Init}). Outside Slurm the scripts always use \codeword{mpirun -np LOCAL_PROCS}.
-    \item \codeword{ACCOUNT}, \codeword{MODULES}, \codeword{NODES}, \codeword{JOB_NAME} (\codeword{auto} = case directory name), \codeword{RUN_TIME}, \codeword{MOTION_TIME} - Slurm header and environment.
+    \item \codeword{NODES}, \codeword{NODELIST} (a fixed node, \codeword{--nodelist}), \codeword{JOB_NAME} (\codeword{auto} = case directory name), \codeword{RUN_TIME}, \codeword{MOTION_TIME} - Slurm header of the run.
     \item \codeword{EXPORT} - \codeword{ensight} (\codeword{foamToEnsight} at the end of the run) or \codeword{none}. The images and videos need the EnSight export.
-    \item \codeword{POST_MODULES}, \codeword{POST_CPUS}, \codeword{POST_MEM}, \codeword{POST_TIME} - the post-processing job (one task). The modules must provide \codeword{python3} with numpy, \codeword{pvbatch} and \codeword{ffmpeg}.
+    \item \codeword{POST_CPUS}, \codeword{POST_TIME} - the post-processing job (one task with \codeword{POST_CPUS} cores).
+    \item \codeword{ACCOUNT}, \codeword{MODULES}, \codeword{PARTITION} - Slurm account, environment modules and partition. Blank drops the line (clusters without accounts or modules, where OpenFOAM comes from the shell that submits).
+    \item \codeword{POST_MODULES}, \codeword{POST_MEM} - modules and memory of the post job. The modules must provide \codeword{python3} with numpy, \codeword{pvbatch} and \codeword{ffmpeg}. \codeword{POST_MEM} blank: no memory request (nodes without a memory size in the Slurm configuration reject any \codeword{--mem}).
+    \item \codeword{POST_ENV} - a Python virtual environment folder that \codeword{postScript} activates (blank: none). \codeword{POST_CONFIG} - the folder with the gsheet and Drive settings (blank: \codeword{~/.config/caseSetup}); on clusters whose compute nodes do not share the home directory it has to be on a shared disk.
     \item \codeword{PVBATCH} - the pvbatch command (a full path for a local ParaView install).
-    \item \codeword{GSHEET} - \codeword{True}: \codeword{postScript} pushes the summary to the database sheet (needs \codeword{gspread} and the sheet settings, see Section \ref{sec:internalPost}).
+    \item \codeword{GSHEET} - \codeword{True}: \codeword{postScript} pushes the summary to the database sheet (needs \codeword{gspread} and the sheet settings, see Section \ref{sec:internalPost}). \codeword{COPY_BACK} - \codeword{True}: \codeword{postScript} copies the run data to Google Drive.
 \end{itemize}
 The scripts set \codeword{numberOfSubdomains} (and the hierarchical split) every time they run, so the same case can be run on the cluster and locally.
 

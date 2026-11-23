@@ -1,3 +1,3 @@
 [DEFAULTS]
-DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultGlobalMaterial defaultGlobalDecomposition defaultMeshMotion
+DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultGlobalMaterial defaultGlobalDecomposition defaultClusterEnvironment defaultMeshMotion
 ADDON_MODULES = 

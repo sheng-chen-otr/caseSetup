@@ -23,7 +23,7 @@ and limitations.
 #usage: python3 gsheetInternal.py [case ...] [--comment "text"] [--dryRun] [--config file] [--sheetId id] [--worksheet name]
 #
 #settings (arguments override environment variables, which override the file):
-#  ~/.config/caseSetup/gsheet.ini (or --config)   [gsheet] sheetID = ..., worksheet = ... (optional, default first
+#  <CASESETUP_CONFIG or ~/.config/caseSetup>/gsheet.ini (or --config)   [gsheet] sheetID = ..., worksheet = ... (optional, default first
 #                                                 sheet), credentials = ... (optional)
 #  INTERNAL_GSHEET_ID, INTERNAL_GSHEET_WORKSHEET, INTERNAL_GSHEET_CREDENTIALS
 #  credentials default: ~/.config/caseSetup/internal_cfd_credentials.json (do not upload this to git!)
@@ -37,8 +37,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import postInternal
 
-CONFIG_FILE = os.path.join('~', '.config', 'caseSetup', 'gsheet.ini')
-DEFAULT_CREDENTIALS = os.path.join('~','.config', 'caseSetup', 'internal_cfd_credentials.json')
+#settings folder: CASESETUP_CONFIG (set by postScript from POST_CONFIG, e.g. a folder on a disk the compute nodes
+#share), else ~/.config/caseSetup
+CONFIG_DIR = os.getenv('CASESETUP_CONFIG') or os.path.join('~', '.config', 'caseSetup')
+CONFIG_FILE = os.path.join(CONFIG_DIR, 'gsheet.ini')
+DEFAULT_CREDENTIALS = os.path.join(CONFIG_DIR, 'internal_cfd_credentials.json')
 HEADER_ROW = 1
 KEY_COLUMNS = ['JOB', 'NAME']
 

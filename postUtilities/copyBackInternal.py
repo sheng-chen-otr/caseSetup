@@ -22,7 +22,7 @@ and limitations.
 #usage: python3 copyBackInternal.py [case ...] [--dryRun] [--noImages] [--config file] [--folderId id]
 #
 #settings (arguments override environment variables, which override the file):
-#  ~/.config/caseSetup/drive.ini (or --config)   [drive] folderID = ... (id or folder URL), credentials = ... (optional)
+#  <CASESETUP_CONFIG or ~/.config/caseSetup>/drive.ini (or --config)   [drive] folderID = ... (id or folder URL), credentials = ... (optional)
 #  INTERNAL_DRIVE_FOLDER, INTERNAL_DRIVE_CREDENTIALS
 #  credentials default: ~/.config/caseSetup/internal_cfd_credentials.json (do not upload this to git!)
 #the folder has to be on a Shared Drive (service accounts have no storage of their own) and shared with the service
@@ -36,8 +36,11 @@ import hashlib
 import argparse
 import configparser
 
-CONFIG_FILE = os.path.join('~', '.config', 'caseSetup', 'drive.ini')
-DEFAULT_CREDENTIALS = os.path.join('~', '.config', 'caseSetup', 'internal_cfd_credentials.json')
+#settings folder: CASESETUP_CONFIG (set by postScript from POST_CONFIG, e.g. a folder on a disk the compute nodes
+#share), else ~/.config/caseSetup
+CONFIG_DIR = os.getenv('CASESETUP_CONFIG') or os.path.join('~', '.config', 'caseSetup')
+CONFIG_FILE = os.path.join(CONFIG_DIR, 'drive.ini')
+DEFAULT_CREDENTIALS = os.path.join(CONFIG_DIR, 'internal_cfd_credentials.json')
 FOLDER_TYPE = 'application/vnd.google-apps.folder'
 
 #files of a case to copy back, relative to the case directory

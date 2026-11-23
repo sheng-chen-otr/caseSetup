@@ -595,6 +595,26 @@ def test_copy_back_uploads_only_changes(tmp_path, monkeypatch):
     assert sorted(files.uploads) == [('create', 'summary.csv'), ('update', 'log.rhoPimpleFoam')]
 
 
+def test_settings_folder_from_environment(tmp_path, monkeypatch):
+    #compute nodes without the head node's home: postScript points CASESETUP_CONFIG at a shared settings folder
+    import importlib
+    import copyBackInternal
+    (tmp_path / 'gsheet.ini').write_text('[gsheet]\nsheetID = shared1\n')
+    (tmp_path / 'drive.ini').write_text('[drive]\nfolderID = shared2\n')
+    for key in ('INTERNAL_GSHEET_ID', 'INTERNAL_GSHEET_CREDENTIALS', 'INTERNAL_DRIVE_FOLDER', 'INTERNAL_DRIVE_CREDENTIALS'):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv('CASESETUP_CONFIG', str(tmp_path))
+    try:
+        g = importlib.reload(gsheetInternal).getSettings()
+        d = importlib.reload(copyBackInternal).getSettings()
+        assert g['sheetID'] == 'shared1' and g['credentials'] == str(tmp_path / 'internal_cfd_credentials.json')
+        assert d['folderID'] == 'shared2' and d['credentials'] == str(tmp_path / 'internal_cfd_credentials.json')
+    finally:
+        monkeypatch.delenv('CASESETUP_CONFIG')
+        importlib.reload(gsheetInternal)
+        importlib.reload(copyBackInternal)
+
+
 def test_copy_back_settings(tmp_path, monkeypatch):
     for key in ['INTERNAL_DRIVE_FOLDER', 'INTERNAL_DRIVE_CREDENTIALS']:
         monkeypatch.delenv(key, raising=False)

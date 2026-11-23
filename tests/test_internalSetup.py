@@ -20,6 +20,7 @@ and limitations.
 import gzip
 import os
 import re
+import subprocess
 import types
 
 import numpy as np
@@ -298,10 +299,12 @@ def test_scripts_without_account_or_modules(tmp_path, monkeypatch, repo_root):
     #in-house cluster: partition and node fixed, no account, no environment modules, mpirun through foamExec
     templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
     full = setupCore.getGlobalDefaults(templateLoc)
-    compute = full['GLOBAL_COMPUTE_SETUP']
-    compute['ACCOUNT'], compute['MODULES'], compute['POST_MODULES'] = [''], [''], ['']
-    compute['PARTITION'], compute['NODELIST'] = ['solve2'], ['cfd07']
-    compute['MPI_RUN'] = ['/usr/bin/mpirun', '/of/bin/tools/foamExec']
+    #cluster settings in their own module, the node in the per-run compute settings
+    env = full['CLUSTER_ENVIRONMENT']
+    env['ACCOUNT'], env['MODULES'], env['POST_MODULES'] = [''], [''], ['']
+    env['PARTITION'], env['MPI_RUN'], env['POST_MEM'] = ['solve2'], ['/usr/bin/mpirun', '/of/bin/tools/foamExec'], ['']
+    full['GLOBAL_COMPUTE_SETUP']['NODELIST'] = ['cfd07']
+    assert 'ACCOUNT' not in full['GLOBAL_COMPUTE_SETUP'] and 'NODELIST' not in env
     case = tmp_path / '008'
     case.mkdir()
     monkeypatch.chdir(case)
@@ -311,13 +314,35 @@ def test_scripts_without_account_or_modules(tmp_path, monkeypatch, repo_root):
         assert '--account' not in text and 'module' not in text
         assert '#SBATCH --job-name=008' in text and '#SBATCH --partition=solve2\n#SBATCH --nodelist=cfd07\n' in text
     assert 'RUN="/usr/bin/mpirun /of/bin/tools/foamExec"' in (case / 'runScript').read_text()
+    post = (case / 'postScript').read_text()
+    assert '--mem' not in post and '#SBATCH --ntasks=1\n#SBATCH --cpus-per-task=8\n' in post
+    #no if left empty by the removed module line (bash syntax error, the post job would stop at once)
+    for name in ['runScript', 'motionCheckScript', 'postScript', 'submitScript']:
+        if (case / name).exists():
+            assert not re.search(r'then\s*(fi|else)', (case / name).read_text())
+            assert subprocess.run(['bash', '-n', str(case / name)]).returncode == 0
+
+
+def test_cluster_keys_in_old_compute_section(tmp_path, monkeypatch, repo_root, capsys):
+    #case files from before CLUSTER_ENVIRONMENT: cluster keys left in GLOBAL_COMPUTE_SETUP are still used
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    full['GLOBAL_COMPUTE_SETUP']['MODULES'] = ['openfoam/old']
+    full['GLOBAL_COMPUTE_SETUP']['GSHEET'] = ['False']
+    case = tmp_path / 'old'
+    case.mkdir()
+    monkeypatch.chdir(case)
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    run, post = (case / 'runScript').read_text(), (case / 'postScript').read_text()
+    assert 'module load openfoam/old' in run and 'gsheetInternal.py' not in post
+    assert 'belong in CLUSTER_ENVIRONMENT now' in capsys.readouterr().out
 
 
 def test_post_script_and_chaining(tmp_path, monkeypatch, repo_root):
     case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a'])
     post = (case / 'postScript').read_text()
     assert '#SBATCH --job-name=engineRun01_post' in post and '#SBATCH --ntasks=1' in post
-    assert '#SBATCH --cpus-per-task=4' in post and '#SBATCH --mem=32G' in post and '#SBATCH --time=0-03:00' in post
+    assert '#SBATCH --cpus-per-task=8' in post and '#SBATCH --mem=32G' in post and '#SBATCH --time=0-03:00' in post
     assert 'module load StdEnv/2023 python/3.11 scipy-stack paraview/5.13.1 ffmpeg' in post
     #summary, gsheet, images, videos in order, from the repo
     assert (post.index("/opt/caseSetup/postUtilities/postInternal.py'") < post.index("/opt/caseSetup/postUtilities/gsheetInternal.py'")
@@ -326,6 +351,9 @@ def test_post_script_and_chaining(tmp_path, monkeypatch, repo_root):
     #motion cases: postScript --mesh makes the mesh images and videos of the dry run, submitScript --check chains it
     assert "pvPostInternal.py' --mesh > log.pvPostMesh" in post and '--imageDir postProcessing/meshImages' in post
     assert post.index('"--mesh"') < post.index('log.postInternal')
+    #no post environment set: nothing activated, settings from the default folder
+    assert 'if [ -n "" ]; then source /bin/activate; fi; export CASESETUP_CONFIG=;' in post
+    assert subprocess.run(['bash', '-n', str(case / 'postScript')]).returncode == 0
     submit = (case / 'submitScript').read_text()
     assert submit.index('motionCheckScript)') < submit.index('postScript --mesh)') < submit.index('"--post"')
     motion = (case / 'motionCheckScript').read_text()

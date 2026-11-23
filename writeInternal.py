@@ -2740,6 +2740,23 @@ def writeMeshSignature():
         f.write('\n'.join(lines) + '\n')
 
 
+#settings of the cluster (environment, launcher, post job), kept out of GLOBAL_COMPUTE_SETUP (per run settings)
+CLUSTER_KEYS = ['ACCOUNT', 'MODULES', 'MPI_RUN', 'PARTITION', 'POST_MODULES', 'POST_MEM', 'POST_ENV', 'POST_CONFIG',
+                'PVBATCH', 'GSHEET', 'COPY_BACK']
+
+
+def clusterSettings(fullCaseSetupDict):
+    #GLOBAL_COMPUTE_SETUP and CLUSTER_ENVIRONMENT together; a cluster key still in GLOBAL_COMPUTE_SETUP (case files
+    #from before the split) wins, so those cases keep their values
+    settings = dict(fullCaseSetupDict.get('CLUSTER_ENVIRONMENT', {}))
+    compute = fullCaseSetupDict.get('GLOBAL_COMPUTE_SETUP', {})
+    old = [key for key in CLUSTER_KEYS if key in compute]
+    if old and 'CLUSTER_ENVIRONMENT' in fullCaseSetupDict:
+        print('		NOTE: %s set in GLOBAL_COMPUTE_SETUP (used); they belong in CLUSTER_ENVIRONMENT now' % (' '.join(old)))
+    settings.update(compute)
+    return settings
+
+
 def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=None, fanNames=None, motionInfo=None,
                         warmStart=None):
     #writing runScript, postScript, motionCheckScript and submitScript from clusterDict
@@ -2772,15 +2789,16 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     if export == 'none':
         skipSteps.append('export')
     #post job: summary, gsheet, images and videos (images need the EnSight export)
-    gsheet = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('GSHEET', ['True'])[0].lower()
+    cluster = clusterSettings(fullCaseSetupDict)
+    gsheet = cluster.get('GSHEET', ['True'])[0].lower()
     if gsheet not in ('true', 'false'):
-        sys.exit('ERROR! GLOBAL_COMPUTE_SETUP GSHEET must be True or False!')
+        sys.exit('ERROR! CLUSTER_ENVIRONMENT GSHEET must be True or False!')
     if gsheet == 'false':
         skipSteps.append('gsheet')
     #copy the run data back to Google Drive at the end of the post job (copyBackInternal.py)
-    copyBack = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP'].get('COPY_BACK', ['True'])[0].lower()
+    copyBack = cluster.get('COPY_BACK', ['True'])[0].lower()
     if copyBack not in ('true', 'false'):
-        sys.exit('ERROR! GLOBAL_COMPUTE_SETUP COPY_BACK must be True or False!')
+        sys.exit('ERROR! CLUSTER_ENVIRONMENT COPY_BACK must be True or False!')
     if copyBack == 'false':
         skipSteps.append('copyBack')
     if export == 'none':
@@ -2807,8 +2825,8 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
                    '<REMESH_DT>': ''.join(fullCaseSetupDict.get('MESH_MOTION', {}).get('REMESH_DT', [''])),
                    '<WARM_ZONE>': warmStart['zone'] if warmStart else '',
                    '<WARM_T>': '%.9g %.9g' % tuple(warmStart['T']) if warmStart else ''}
-    #slurm header from GLOBAL_COMPUTE_SETUP, job name defaults to the case directory name
-    compute = fullCaseSetupDict['GLOBAL_COMPUTE_SETUP']
+    #slurm header from GLOBAL_COMPUTE_SETUP and CLUSTER_ENVIRONMENT, job name defaults to the case directory name
+    compute = cluster
     for key in compute:
         replaceDict['<%s>' % key] = ' '.join(compute[key])
     #parallel launcher inside a Slurm job (srun, or e.g. mpirun where Open MPI cannot start under srun)
@@ -2818,6 +2836,7 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
         replaceDict['<JOB_NAME>'] = os.path.basename(os.getcwd())
     #clusters without an account, with a partition / fixed node, or without environment modules (OpenFOAM from the
     #submitting shell, e.g. MPI_RUN = mpirun .../foamExec): ACCOUNT, MODULES, POST_MODULES blank, PARTITION, NODELIST
+    #POST_MEM blank: no memory request for the post job (nodes without RealMemory in slurm.conf reject any --mem)
     extraHeader = ['#SBATCH --%s=%s' % (option, ' '.join(compute.get(key, ['']))) for key, option in
                    (('PARTITION', 'partition'), ('NODELIST', 'nodelist')) if ''.join(compute.get(key, [''])).strip()]
     for section, scriptName in scripts:
@@ -2826,7 +2845,9 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
         for key, val in replaceDict.items():
             script = script.replace(key, val)
         script = script.replace('module --force purge; module load ;', '').replace('module load ;', '')
-        script = '\n'.join(line for line in script.split('\n') if line.strip() not in ('#SBATCH --account=',))
+        #an if with nothing left in it (postScript: only the module line) is a bash syntax error
+        script = script.replace('if [ -n "$SLURM_JOB_ID" ]; then  fi;', '').replace('if [ -n "$SLURM_JOB_ID" ]; then fi;', '')
+        script = '\n'.join(line for line in script.split('\n') if line.strip() not in ('#SBATCH --account=', '#SBATCH --mem='))
         if extraHeader:
             out, added = [], False
             for line in script.split('\n'):
