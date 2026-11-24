@@ -422,6 +422,11 @@ def meshImages(pvs, caseDir, caseName, setup, motion, locInMesh, size, every=Non
 
 
 def main(argv=None):
+    #line by line into the log (redirected output is block-buffered: the log stayed empty for hours of rendering)
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
     args = parseArgs(argv)
     begin = time.time()
     caseDir = os.getcwd()
