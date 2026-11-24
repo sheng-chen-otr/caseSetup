@@ -323,6 +323,31 @@ def test_scripts_without_account_or_modules(tmp_path, monkeypatch, repo_root):
             assert subprocess.run(['bash', '-n', str(case / name)]).returncode == 0
 
 
+def test_scripts_shared_node(tmp_path, monkeypatch, repo_root):
+    #EXCLUSIVE False: no --exclusive, --mem=0 replaced by MEM_PER_CPU (blank: no memory line), post job unchanged
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    assert full['GLOBAL_COMPUTE_SETUP']['EXCLUSIVE'] == ['True']
+    case = tmp_path / '002'
+    case.mkdir()
+    monkeypatch.chdir(case)
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    assert '#SBATCH --mem=0\n' in (case / 'runScript').read_text() and '#SBATCH --exclusive' in (case / 'runScript').read_text()
+    full['GLOBAL_COMPUTE_SETUP']['EXCLUSIVE'], full['GLOBAL_COMPUTE_SETUP']['MEM_PER_CPU'] = ['False'], ['4G']
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    for name in ['runScript', 'motionCheckScript']:
+        text = (case / name).read_text()
+        assert '--exclusive' not in text and '--mem=0' not in text and '#SBATCH --mem-per-cpu=4G\n' in text
+        assert subprocess.run(['bash', '-n', str(case / name)]).returncode == 0
+    assert '#SBATCH --mem=32G' in (case / 'postScript').read_text()
+    full['GLOBAL_COMPUTE_SETUP']['MEM_PER_CPU'] = ['']
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    assert '--mem' not in (case / 'runScript').read_text()
+    full['GLOBAL_COMPUTE_SETUP']['EXCLUSIVE'] = ['maybe']
+    with pytest.raises(SystemExit):
+        writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+
+
 def test_cluster_keys_in_old_compute_section(tmp_path, monkeypatch, repo_root, capsys):
     #case files from before CLUSTER_ENVIRONMENT: cluster keys left in GLOBAL_COMPUTE_SETUP are still used
     templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')

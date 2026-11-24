@@ -1926,6 +1926,18 @@ def writeControlDictInternal(templateLoc, fullCaseSetupDict):
             f.write(text)
 
 
+def getPMaxIter(fullCaseSetupDict):
+    #cap on GAMG iterations for p: a near-static gas (very slow piston) stalls at a round-off floor of the normalised
+    #residual (~2e-4) far above the 1e-8 tolerance, and every solve then ran the 1000 default
+    val = ''.join(fullCaseSetupDict['GLOBAL_SIM_CONTROL'].get('P_MAX_ITER', ['1000'])).strip() or '1000'
+    try:
+        if int(val) < 1:
+            raise ValueError
+    except ValueError:
+        sys.exit('ERROR! GLOBAL_SIM_CONTROL P_MAX_ITER must be a whole number >= 1 (got "%s")' % (val))
+    return val
+
+
 def getRelaxation(fullCaseSetupDict):
     #under-relaxation: steady solvers always, transient only with outer correctors (N_OUTER_CORR > 1)
     #the last outer iteration (Final) is not relaxed. RELAX_* auto: 0.3/0.7/0.7 steady, 1 (none) transient: with p
@@ -2038,7 +2050,8 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict, pressureBC=False):
                   % (templateLoc, slot))
     copyTemplate(templateLoc, 'system/fvSolution', 'system/fvSolution',
                  {'ALGORITHM': getAlgorithm(fullCaseSetupDict, pRef, pressureBC), 'RELAXATION': relaxation,
-                  'P_RELTOL': '0.05' if steady else '0.01', 'U_RELTOL': '0.1' if steady else '0'})
+                  'P_RELTOL': '0.05' if steady else '0.01', 'U_RELTOL': '0.1' if steady else '0',
+                  'P_MAX_ITER': getPMaxIter(fullCaseSetupDict)})
     method, decomp = getDecomp(fullCaseSetupDict)
     nProcs, coeffs = compute['NUM_PROCS'][0], ''
     if decomp:
@@ -2927,6 +2940,15 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     #POST_MEM blank: no memory request for the post job (nodes without RealMemory in slurm.conf reject any --mem)
     extraHeader = ['#SBATCH --%s=%s' % (option, ' '.join(compute.get(key, ['']))) for key, option in
                    (('PARTITION', 'partition'), ('NODELIST', 'nodelist')) if ''.join(compute.get(key, [''])).strip()]
+    #EXCLUSIVE False: share the node (small meshes on few cores), --mem=0 (all node memory) replaced by MEM_PER_CPU
+    #(blank: the cluster default per core)
+    exclusive = ''.join(compute.get('EXCLUSIVE', ['True'])).strip().lower() or 'true'
+    if exclusive not in ('true', 'false'):
+        sys.exit('ERROR! GLOBAL_COMPUTE_SETUP EXCLUSIVE must be True or False!')
+    memPerCpu = ''.join(compute.get('MEM_PER_CPU', [''])).strip()
+    shareLines = {'#SBATCH --exclusive': [], '#SBATCH --mem=0': ['#SBATCH --mem-per-cpu=%s' % (memPerCpu)] if memPerCpu else []}
+    if exclusive == 'false':
+        print('\t\tshared nodes (EXCLUSIVE False), memory %s' % ('%s per core' % (memPerCpu) if memPerCpu else 'cluster default per core'))
     for section, scriptName in scripts:
         lines = [clusterDict[section][key] for key in clusterDict[section] if key not in skipSteps]
         script = '\n'.join(lines)
@@ -2936,6 +2958,8 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
         #an if with nothing left in it (postScript: only the module line) is a bash syntax error
         script = script.replace('if [ -n "$SLURM_JOB_ID" ]; then  fi;', '').replace('if [ -n "$SLURM_JOB_ID" ]; then fi;', '')
         script = '\n'.join(line for line in script.split('\n') if line.strip() not in ('#SBATCH --account=', '#SBATCH --mem='))
+        if exclusive == 'false':
+            script = '\n'.join(new for line in script.split('\n') for new in shareLines.get(line.strip(), [line]))
         if extraHeader:
             out, added = [], False
             for line in script.split('\n'):
