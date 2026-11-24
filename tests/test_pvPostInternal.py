@@ -197,3 +197,10 @@ def test_movies_frames_and_command(tmp_path, monkeypatch):
     calls.clear()
     (tmp_path / 'pvPostInternalSetup').write_text('[MOVIES]\nENABLE = False\n')
     assert imagesToMovies.main([]) == 0 and calls == []
+
+
+def test_zone_blocks():
+    #porous cellZones are separate EnSight parts ('-' removed); patches and internalMesh are not zones
+    blocks = ['internalMesh', 'PORwool', 'PORmatrix', 'REGNmatrix', 'WALLchamber_hot', 'MOVEdisplacer_top']
+    assert pvPostInternal.zoneBlocks(blocks) == ['PORwool', 'PORmatrix', 'REGNmatrix']
+    assert pvPostInternal.zoneBlocks(['internalMesh', 'WALLchamber_liner']) == []

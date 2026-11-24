@@ -345,8 +345,8 @@ def meshImages(pvs, caseDir, caseName, setup, motion, locInMesh, size, every=Non
     print('\t\t%d meshes from %.6g to %.6g s' % (len(times), times[0], times[-1]))
     reader.UpdatePipeline(times[0])
     blocks = getBlocks(reader)
-    volume = pvs.ExtractBlock(Input=reader)
-    volume.Selectors = ['/Root/internalMesh']
+    zones = zoneBlocks(blocks)
+    volume = gasVolume(pvs, reader, zones, points=False)
     volume.UpdatePipeline(times[0])
     bounds = volume.GetDataInformation().GetBounds()
 
@@ -365,7 +365,7 @@ def meshImages(pvs, caseDir, caseName, setup, motion, locInMesh, size, every=Non
                        'follow': s['follow'], 'origin': origin, 'label': s['name']})
     keywords = setup['SURFACE']['PATCHES'].split()
     selectors = ['/Root/%s' % (b) for b in blocks
-                 if b != 'internalMesh' and any(k.replace('-', '').lower() in b.lower() for k in keywords)]
+                 if b != 'internalMesh' and b not in zones and any(k.replace('-', '').lower() in b.lower() for k in keywords)]
     if selectors:
         surface = pvs.ExtractBlock(Input=reader)
         surface.Selectors = selectors
@@ -483,9 +483,14 @@ def main(argv=None):
     reader.UpdatePipeline(times[0])
     blocks = getBlocks(reader)
     print('\t\tblocks: %s' % (' '.join(blocks)))
-    volume = pvs.ExtractBlock(Input=points)
-    volume.Selectors = ['/Root/internalMesh']
+    zones = zoneBlocks(blocks)
+    if zones:
+        print('\t\tporous zones in the gas: %s' % (' '.join(zones)))
+    volume = gasVolume(pvs, reader, zones)
     volume.UpdatePipeline(times[0])
+    #zone outlines on the slices (SLICE ZONE_OUTLINE, default True)
+    outlineZones = setup['SLICE'].get('ZONE_OUTLINE', 'True').strip().lower() == 'true'
+    zoneSurf = zoneSurface(pvs, reader, zones) if outlineZones else None
     bounds = volume.GetDataInformation().GetBounds()
     print('\t\tmesh box: %s' % (' '.join('%.4g' % b for b in bounds)))
 
@@ -504,6 +509,12 @@ def main(argv=None):
             if s['follow']:
                 motion.dz(s['follow'], times[0])
             camera = sliceCamera(s['normal'], origin, bounds, size)
+            outline = None
+            if zoneSurf is not None:
+                outline = pvs.Slice(Input=zoneSurf)
+                outline.SliceType = 'Plane'
+                outline.SliceType.Origin = origin
+                outline.SliceType.Normal = normalVectors[s['normal']]
             for variable in sliceVars:
                 if variable not in varDict['sliceVariables']:
                     print('\t\t%s is not in the slice variable dict, skipping' % (variable))
@@ -513,11 +524,11 @@ def main(argv=None):
                     continue
                 panels.append({'name': '%s_%s' % (s['name'], variable), 'source': cut, 'variable': variable,
                                'spec': varDict['sliceVariables'][variable], 'camera': camera, 'kind': 'slice',
-                               'follow': s['follow'], 'origin': origin, 'label': s['name']})
+                               'follow': s['follow'], 'origin': origin, 'label': s['name'], 'outline': outline})
     if 'surface' in kinds:
         keywords = setup['SURFACE']['PATCHES'].split()
         selectors = ['/Root/%s' % (b) for b in blocks
-                     if b != 'internalMesh' and any(k.replace('-', '').lower() in b.lower() for k in keywords)]
+                     if b != 'internalMesh' and b not in zones and any(k.replace('-', '').lower() in b.lower() for k in keywords)]
         if not selectors:
             print('\t\tno patches match SURFACE PATCHES %s, no surface images' % (keywords))
         else:
@@ -541,7 +552,7 @@ def main(argv=None):
     if 'volume' in kinds:
         keywords = setup['VOLUME'].get('CONTEXT_PATCHES', '').split()
         selectors = ['/Root/%s' % (b) for b in blocks
-                     if b != 'internalMesh' and any(k.replace('-', '').lower() in b.lower() for k in keywords)]
+                     if b != 'internalMesh' and b not in zones and any(k.replace('-', '').lower() in b.lower() for k in keywords)]
         if selectors:
             context = pvs.ExtractBlock(Input=reader)
             context.Selectors = selectors
@@ -662,6 +673,12 @@ def main(argv=None):
                 outline.ColorArrayName = ['POINTS', '']
                 outline.AmbientColor = [0.3, 0.3, 0.3]
                 outline.DiffuseColor = [0.3, 0.3, 0.3]
+        if panel.get('outline') is not None:
+            outlineDisplay = pvs.Show(panel['outline'], view)
+            outlineDisplay.ColorArrayName = ['POINTS', '']
+            outlineDisplay.AmbientColor = [0.0, 0.0, 0.0]
+            outlineDisplay.DiffuseColor = [0.0, 0.0, 0.0]
+            outlineDisplay.LineWidth = 2.5
         display.SetScalarBarVisibility(view, scalarBar)
         if scalarBar:
             bar = pvs.GetScalarBar(lut, view)
@@ -701,6 +718,8 @@ def main(argv=None):
                 origin = list(panel['origin'])
                 origin[2] += motion.dz(panel['follow'], t)
                 panel['source'].SliceType.Origin = origin
+                if panel.get('outline') is not None:
+                    panel['outline'].SliceType.Origin = origin
             panel['lut'].RescaleTransferFunction(*panel['range'])
             if panel['pwf'] is not None:
                 panel['pwf'].Points = panel['pwfPoints']
@@ -760,6 +779,34 @@ def volumeOpacity(pvs, display, panel, volumeSetup, bounds):
     pwf.Points = panel['pwfPoints']
     pwf.AllowDuplicateScalars = 1
     return pwf
+
+
+#porous cellZones (POR-<name>, REGN-<name>): foamToEnsight writes each cellZone as its own part and leaves only the
+#unzoned cells in internalMesh, so the gas is internalMesh plus these
+ZONE_PREFIXES = ('POR', 'REGN')
+
+
+def zoneBlocks(blocks):
+    #block names of the porous cellZones ('-' removed by the reader, e.g. PORwool)
+    return [b for b in blocks if b != 'internalMesh' and b.upper().startswith(ZONE_PREFIXES)]
+
+
+def gasVolume(pvs, reader, zones, points=True):
+    #the whole gas as one dataset: internalMesh and the porous zones merged (shared points joined, so point values
+    #blend across the zone edges), cell data to point data for the colours
+    cells = pvs.ExtractBlock(Input=reader)
+    cells.Selectors = ['/Root/internalMesh'] + ['/Root/%s' % (z) for z in zones]
+    merged = pvs.MergeBlocks(Input=cells)
+    return pvs.CellDatatoPointData(Input=merged) if points else merged
+
+
+def zoneSurface(pvs, reader, zones):
+    #outer surface of the porous zones, sliced with each slice plane for the zone outlines
+    if not zones:
+        return None
+    cells = pvs.ExtractBlock(Input=reader)
+    cells.Selectors = ['/Root/%s' % (z) for z in zones]
+    return pvs.ExtractSurface(Input=pvs.MergeBlocks(Input=cells))
 
 
 def getBlocks(source):

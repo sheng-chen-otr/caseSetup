@@ -14,6 +14,7 @@ NAMES = yMid xMid zMid
 NORMALS = Y X Z
 ORIGINS = center center center
 FOLLOW = none none none
+ZONE_OUTLINE = True
 VARIABLES = Umag Uz p T
 
 [SURFACE]

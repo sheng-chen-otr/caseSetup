@@ -192,7 +192,7 @@ label combineFields
 // zone of a matrix field: Ts_<zone> (matrix temperature) or solidFrac_<zone> (fibre fraction of a random-fibre zone)
 word matrixZone(const word& name)
 {
-    for (const word prefix : {word("Ts_"), word("solidFrac_")})
+    for (const word& prefix : {word("Ts_"), word("solidFrac_")})
     {
         if (name.size() > prefix.size() && name.substr(0, prefix.size()) == prefix)
         {
