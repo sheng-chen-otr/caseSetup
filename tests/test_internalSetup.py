@@ -348,6 +348,29 @@ def test_scripts_shared_node(tmp_path, monkeypatch, repo_root):
         writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
 
 
+def test_scripts_cpus_per_task(tmp_path, monkeypatch, repo_root):
+    #CPUS_PER_TASK 4: ranks spread over the node, srun told explicitly, post job unchanged
+    templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
+    full = setupCore.getGlobalDefaults(templateLoc)
+    assert full['GLOBAL_COMPUTE_SETUP']['CPUS_PER_TASK'] == ['1']
+    case = tmp_path / 'engine'
+    case.mkdir()
+    monkeypatch.chdir(case)
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    assert 'SRUN_CPUS_PER_TASK' not in (case / 'runScript').read_text()
+    full['GLOBAL_COMPUTE_SETUP']['NUM_PROCS'], full['GLOBAL_COMPUTE_SETUP']['CPUS_PER_TASK'] = ['48'], ['4']
+    writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+    for name in ['runScript', 'motionCheckScript']:
+        text = (case / name).read_text()
+        assert '#SBATCH --ntasks=48\n#SBATCH --cpus-per-task=4\n' in text
+        assert 'export SRUN_CPUS_PER_TASK=4 OMP_NUM_THREADS=1;' in text
+        assert subprocess.run(['bash', '-n', str(case / name)]).returncode == 0
+    assert '#SBATCH --cpus-per-task=8' in (case / 'postScript').read_text()
+    full['GLOBAL_COMPUTE_SETUP']['CPUS_PER_TASK'] = ['0']
+    with pytest.raises(SystemExit):
+        writeInternal.makeScriptsInternal(templateLoc, full, '/opt/caseSetup', ['motion_a'])
+
+
 def test_cluster_keys_in_old_compute_section(tmp_path, monkeypatch, repo_root, capsys):
     #case files from before CLUSTER_ENVIRONMENT: cluster keys left in GLOBAL_COMPUTE_SETUP are still used
     templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')

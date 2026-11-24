@@ -330,6 +330,7 @@ Not supported yet with remeshing: \codeword{FAN} baffles.
     NODELIST =
     NODES = 1
     EXCLUSIVE = True
+    CPUS_PER_TASK = 1
     MEM_PER_CPU = 4G
     JOB_NAME = auto
     RUN_TIME = 0-12:00
@@ -359,6 +360,7 @@ Not supported yet with remeshing: \codeword{FAN} baffles.
     \item \codeword{MPI_RUN} - how the parallel tools are started inside a Slurm job: \codeword{srun} (default), or e.g. \codeword{/usr/bin/mpirun} on clusters where Open MPI was not built to start under srun (all ranks then abort in \codeword{MPI_Init}). Outside Slurm the scripts always use \codeword{mpirun -np LOCAL_PROCS}.
     \item \codeword{NODES}, \codeword{NODELIST} (a fixed node, \codeword{--nodelist}), \codeword{JOB_NAME} (\codeword{auto} = case directory name), \codeword{RUN_TIME}, \codeword{MOTION_TIME} - Slurm header of the run.
     \item \codeword{EXCLUSIVE} - \codeword{True} (default): the run and motion-check jobs take whole nodes with all their memory (\codeword{--exclusive}, \codeword{--mem=0}). \codeword{False}: the jobs share the node, for small meshes on a few cores (aim for about 5000 to 10000 cells per core; far more cores than that makes a run slower, not faster). A shared job asks for \codeword{MEM_PER_CPU} per core (e.g. \codeword{4G}; blank: the cluster's default, which can be small).
+    \item \codeword{CPUS_PER_TASK} - cores given to each MPI rank (default 1). OpenFOAM runs one thread per rank and is limited by memory bandwidth, so on large nodes fewer ranks spread evenly over the node can be nearly as fast as one rank per core. With \codeword{NUM_PROCS = 48} and \codeword{CPUS_PER_TASK = 4} on a 192-core node, the ranks sit two per 8-core group (shared L3 cache) instead of filling the first 48 cores. Works with \codeword{MPI_RUN = srun} (the scripts pass it to srun with \codeword{SRUN_CPUS_PER_TASK}); \codeword{MEM_PER_CPU} counts every core, so the memory per rank is \codeword{CPUS_PER_TASK} times it.
     \item \codeword{EXPORT} - \codeword{ensight} (\codeword{foamToEnsight} at the end of the run) or \codeword{none}. The images and videos need the EnSight export.
     \item \codeword{POST_CPUS}, \codeword{POST_TIME} - the post-processing job (one task with \codeword{POST_CPUS} cores).
     \item \codeword{ACCOUNT}, \codeword{MODULES}, \codeword{PARTITION} - Slurm account, environment modules and partition. Blank drops the line (clusters without accounts or modules, where OpenFOAM comes from the shell that submits).

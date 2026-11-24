@@ -386,7 +386,7 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
                       ' '.join('xyz'[axis] for axis in axes), ' '.join('%.6g' % v for v in suggest)))
         if onGrid:
             sys.exit('ERROR! ' + message)
-        print('		WARNING: %s, if its cell is refined that far' % (message))
+        print('\t\tWARNING: %s, if its cell is refined that far' % (message))
     #feature edges: surfaceFeatureExtract writes constant/triSurface/<geom>.eMesh (run before snappy),
     #refined at each geometry's surface level (FEATURE_LEVEL surface) or a fixed level
     featureLevel = refinement.get('FEATURE_LEVEL', ['surface'])[0]
@@ -2984,6 +2984,15 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
     shareLines = {'#SBATCH --exclusive': [], '#SBATCH --mem=0': ['#SBATCH --mem-per-cpu=%s' % (memPerCpu)] if memPerCpu else []}
     if exclusive == 'false':
         print('\t\tshared nodes (EXCLUSIVE False), memory %s' % ('%s per core' % (memPerCpu) if memPerCpu else 'cluster default per core'))
+    #CPUS_PER_TASK > 1: each MPI rank gets that many cores, so fewer ranks are spread evenly over the node (one per
+    #L3 cache group instead of all on the first cores; OpenFOAM is memory-bandwidth bound). srun does not take
+    #--cpus-per-task from the job (Slurm 22.05+): SRUN_CPUS_PER_TASK. OpenFOAM runs one thread per rank
+    cpusPerTask = ''.join(compute.get('CPUS_PER_TASK', ['1'])).strip() or '1'
+    if not cpusPerTask.isdigit() or int(cpusPerTask) < 1:
+        sys.exit('ERROR! GLOBAL_COMPUTE_SETUP CPUS_PER_TASK must be a whole number >= 1!')
+    if int(cpusPerTask) > 1:
+        print('\t\t%s ranks x %s cores each = %d cores per job' % (' '.join(compute['NUM_PROCS']), cpusPerTask,
+                                                                  int(compute['NUM_PROCS'][0])*int(cpusPerTask)))
     for section, scriptName in scripts:
         lines = [clusterDict[section][key] for key in clusterDict[section] if key not in skipSteps]
         script = '\n'.join(lines)
@@ -2995,6 +3004,11 @@ def makeScriptsInternal(templateLoc, fullCaseSetupDict, execDir, motionZones=Non
         script = '\n'.join(line for line in script.split('\n') if line.strip() not in ('#SBATCH --account=', '#SBATCH --mem='))
         if exclusive == 'false':
             script = '\n'.join(new for line in script.split('\n') for new in shareLines.get(line.strip(), [line]))
+        if int(cpusPerTask) > 1 and section in ('run', 'motionCheck'):
+            script = '\n'.join(new for line in script.split('\n') for new in
+                               ([line, '#SBATCH --cpus-per-task=%s' % (cpusPerTask)] if line.startswith('#SBATCH --ntasks=') else [line]))
+            script = script.replace('export UCX_VFS_ENABLE=n;', 'export UCX_VFS_ENABLE=n; export SRUN_CPUS_PER_TASK=%s OMP_NUM_THREADS=1;'
+                                    % (cpusPerTask))
         if extraHeader:
             out, added = [], False
             for line in script.split('\n'):
