@@ -48,7 +48,7 @@ CASE_FILES = ['log.*', '*.out', 'internalSetup', 'fullCaseSetupDict', 'pvPostInt
  '*.png',
  os.path.join('constant','triSurface','*.stl*',),
  os.path.join('constant','triSurface','*.obj*',)]
-DATA_FILES = [os.path.join('postProcessing', '**', '*.dat')]
+DATA_FILES = [os.path.join('postProcessing', '**', '*.dat','system')]
 IMAGE_FILES = [os.path.join('postProcessing', 'images', '**', '*.png'),
                os.path.join('postProcessing', 'meshImages', '**', '*.png')]
 MOVIE_FILES = [os.path.join('postProcessing', 'movies', '*.mp4'), os.path.join('postProcessing', 'meshMovies', '*.mp4')]
