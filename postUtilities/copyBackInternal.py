@@ -18,7 +18,7 @@ and limitations.
 
 #copies the run data of internal cases back to a Google Drive folder: <folder>/<JOB>/<case>/ with the case's own
 #sub-paths (postProcessing/<fo>/<time>/*.dat keep their folders). logs, Slurm .out files, setup files, summary and
-#plots, function object .dat files, images and videos. only new or changed files are uploaded (md5 against Drive)
+#plots, function object .dat files, the system folder, images and videos. only new or changed files are uploaded (md5 against Drive)
 #usage: python3 copyBackInternal.py [case ...] [--dryRun] [--noImages] [--config file] [--folderId id]
 #
 #settings (arguments override environment variables, which override the file):
@@ -48,7 +48,8 @@ CASE_FILES = ['log.*', '*.out', 'internalSetup', 'fullCaseSetupDict', 'pvPostInt
  '*.png',
  os.path.join('constant','triSurface','*.stl*',),
  os.path.join('constant','triSurface','*.obj*',)]
-DATA_FILES = [os.path.join('postProcessing', '**', '*.dat','system')]
+DATA_FILES = [os.path.join('postProcessing', '**', '*.dat'),
+              os.path.join('system', '**', '*')]
 IMAGE_FILES = [os.path.join('postProcessing', 'images', '**', '*.png'),
                os.path.join('postProcessing', 'meshImages', '**', '*.png')]
 MOVIE_FILES = [os.path.join('postProcessing', 'movies', '*.mp4'), os.path.join('postProcessing', 'meshMovies', '*.mp4')]

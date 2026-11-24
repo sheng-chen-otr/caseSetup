@@ -577,6 +577,16 @@ def test_copy_back_uploads_only_changes(tmp_path, monkeypatch):
     (case / 'postProcessing' / 'gasAvg' / '0').mkdir(parents=True)
     (case / 'log.rhoPimpleFoam').write_text('run 1')
     (case / 'postProcessing' / 'gasAvg' / '0' / 'volFieldValue.dat').write_text('1 2 3')
+    #the system folder goes too, sub-folders included
+    (case / 'system' / 'include').mkdir(parents=True)
+    (case / 'system' / 'controlDict').write_text('endTime 1;')
+    (case / 'system' / 'include' / 'functions').write_text('{}')
+    assert copyBackInternal.collectFiles(str(case)) == ['log.rhoPimpleFoam', 'postProcessing/gasAvg/0/volFieldValue.dat',
+                                                        'system/controlDict', 'system/include/functions']
+    (case / 'system' / 'controlDict').unlink()
+    (case / 'system' / 'include' / 'functions').unlink()
+    (case / 'system' / 'include').rmdir()
+    (case / 'system').rmdir()
     drive, files = _fakeDrive(monkeypatch)
     #dry run: nothing made on Drive
     assert copyBackInternal.copyCase(drive, str(case), dryRun=True) == 0 and len(files.items) == 1
