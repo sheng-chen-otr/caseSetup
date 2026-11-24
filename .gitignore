@@ -171,4 +171,7 @@ cython_debug/
 *.snm
 *.toc
 *.dvi
+*.md
+
+test/
 credentials.json
