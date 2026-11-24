@@ -283,6 +283,20 @@ def flowLabel(flow):
     return '%s %g' % (flow['type'], flow['value'])
 
 
+def sameTokens(a, b):
+    #two BC settings equal word by word, numbers compared as numbers (fixed 295 = fixed 295.0)
+    if len(a) != len(b):
+        return False
+    for x, y in zip(a, b):
+        try:
+            if float(x) != float(y):
+                return False
+        except ValueError:
+            if x.lower() != y.lower():
+                return False
+    return True
+
+
 def getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids=None):
     #wallGroups[geomName] = groups for WALL and MOVE geometry, prints the PID -> group -> U, T table
     #movingPids[geomName] = PIDs that move with a body (U becomes movingWallVelocity)
@@ -310,6 +324,22 @@ def getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids=None):
                     tLabel = ' '.join(str(t) for t in group['T'])
                 print('\t\t%-32s %-20s %-14s %s' % ('%s_%s' % (geomName, pid), group['name'], uLabel, tLabel))
         wallGroups[geomName] = groups
+    #FROM bodies have no file of their own: their faces get U and T from the groups of the file they are in, the
+    #body's own U_DEFAULT / T_DEFAULT are not used (an adiabatic crown in a fixed-T wall file silently got fixed T)
+    for section, body in fullCaseSetupDict.items():
+        if not section.startswith('MOVE') or not ''.join(body.get('FROM', [''])).strip():
+            continue
+        source = ''.join(body['FROM']).strip()
+        for group in wallGroups.get(source, []):
+            if not group.get('moving') or group['flow']:
+                continue
+            tOwn = ' '.join(body.get('T_DEFAULT', [''])).strip()
+            tUsed = ' '.join(str(t) for t in group['T'])
+            if tOwn and sameTokens(tOwn.split(), tUsed.split()) is False:
+                print('\t\tWARNING: [%s] T_DEFAULT %s is not used (FROM %s): its faces %s get T %s from [%s] group %s. '
+                      'Give them their own group there, e.g. BC_GROUPS = %s with %s = PIDS %s T %s'
+                      % (section, tOwn, source, ' '.join(group['moving']), tUsed, source, group['name'],
+                         section.split('-', 1)[-1], section.split('-', 1)[-1], ' '.join(group['moving']), tOwn))
     return wallGroups
 
 

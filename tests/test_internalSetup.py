@@ -1303,3 +1303,23 @@ def test_static_walls_slide_in_a_moving_mesh(tmp_path, monkeypatch, repo_root):
     assert 'libs            (stirlingMotion);' in control and control.index('libs') < control.index('functions')
     options = open(os.path.join(repo_root, 'zeroTemplates', 'boundaryConditions', 'fluid', 'wallOptions')).read()
     assert 'slidingMesh' in options and 'slidingWallVelocity' in options
+
+
+def test_from_body_thermal_setting_warning(capsys):
+    #a FROM body's own T_DEFAULT is not used: warned when its faces get another T from the wall file's groups
+    geomDict = {'WALL-cyl.stl': {}}
+    pidDict = {'WALL-cyl': ['MOVE-crown', 'WALL-liner', 'WALL-bottom']}
+    full = {'WALL-cyl': {'U_DEFAULT': ['noSlip'], 'T_DEFAULT': ['fixed', '295'], 'BC_GROUPS': ['']},
+            'MOVE-crown': {'FROM': ['WALL-cyl'], 'T_DEFAULT': ['adiabatic']}}
+    groups = writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})
+    out = capsys.readouterr().out
+    assert 'WARNING: [MOVE-crown] T_DEFAULT adiabatic is not used' in out and 'crown = PIDS MOVE-crown T adiabatic' in out
+    #own group for the crown in the wall file: no warning
+    full['WALL-cyl']['BC_GROUPS'], full['WALL-cyl']['crown'] = ['crown'], ['PIDS', 'crown', 'T', 'adiabatic']
+    writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})
+    assert 'WARNING' not in capsys.readouterr().out
+    #same value written differently: no warning
+    full['WALL-cyl']['BC_GROUPS'] = ['']
+    full['MOVE-crown']['T_DEFAULT'] = ['fixed', '295.0']
+    writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})
+    assert 'WARNING' not in capsys.readouterr().out
