@@ -1,5 +1,32 @@
 # caseSetup-dev: OpenFOAM Case Setup & Suspension Kinematics Framework
 
+## Contents
+
+- [Overview](#overview)
+- [Compatibility](#compatibility)
+- Aero (caseSetup)
+  - [Quick Start](#quick-start)
+  - [Demo Cases](#demo-cases)
+  - [Usage Workflow](#usage-workflow)
+  - [Setup & Configuration](#setup--configuration)
+  - [Additional Features](#additional-features)
+  - [Per-Component Transform System](#per-component-transform-system)
+  - [Cornering (SRF) Simulation](#cornering-srf-simulation)
+  - [Customizing post-processing views and variables](#customizing-post-processing-views-and-variables)
+- Internal flow (internalSetup)
+  - [Internal Flow (internalSetup)](#internal-flow-internalsetup)
+- Reference
+  - [Directory Structure](#directory-structure)
+  - [Core Modules](#core-modules)
+  - [Compilation](#compilation)
+  - [Troubleshooting](#troubleshooting)
+  - [Performance & Scalability](#performance--scalability)
+  - [Version History](#version-history)
+  - [License & Attribution](#license--attribution)
+  - [Support & Contact](#support--contact)
+
+---
+
 ## Overview
 
 caseSetup is a python framework that sets up OpenFOAM cases for external automotive aero. it handles the mesh config, boundary conditions, solver setup, cluster scripts and post-processing so you don't have to hand edit every dict.
@@ -11,8 +38,327 @@ two bigger features beyond the basic straight-line case:
 
 v5.0 adds a second tool, `internalSetup.py`, for closed internal flows (Stirling engines): moving displacer and power piston, heated/cooled walls, crank drive with a generator load. see [Internal Flow (internalSetup)](#internal-flow-internalsetup) below.
 
-### Fan pressure-jump condition
+---
 
+## Compatibility
+
+| Aspect | Support |
+|--------|---------|
+| **OpenFOAM Versions** | v2012 - v2606 (newer versions untested, should work though) |
+| **internalSetup** | ESI OpenFOAM v2412 and v2606 (tested); `foamLibs` and the porous sources need a compiler (wmake) where the job runs |
+| **Operating Systems** | Ubuntu 22.XX (preferred); Windows/macOS untested |
+| **Python** | 3.8+ |
+
+---
+
+## Quick Start
+
+1. Ensure your preferred version of OpenFOAM (v2012+) is installed
+2. Create a directory structure as such:
+```
+projectDirectory/
+├── 02_reference/                    # Location where reference files reside
+│    └── MSH/                        # Where geometry files reside (.obj,.stl)
+│
+└── CASES/                           # Run directories reside in here
+    ├── 001/                         # Run directory, where your simulation case resides
+    │   ├── system/
+    │   ├── constant/
+    ├── 002/                        
+    │   ├── system/
+    │   ├── constant/
+    ...
+```
+3. Navigate into your case directory and run the following:
+```bash
+python /path/to/caseSetup.py --new
+```
+This will generate a new caseSetup file that looks like this:
+```
+[DEFAULTS]
+DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultBCSetup defaultGlobalDecomposition defaultGlobalMaterial defaultGlobalRefinement defaultRideHeight defaultCornering defaultPost
+ADDON_MODULES =
+
+[TITLES]
+CASENAME = casename
+CASEDESCRP = default description
+JOBCODE = TS
+
+[GEOMETRY]
+GEOM = default.stl,1,8,5,1.1,high
+```
+The `DEFAULT_MODULES` line consists of the modules that are set to default values. To edit, remove that module from the line and re-run `caseSetup.py` to reveal the hidden module for editing. The coordinate system follows SAEJ1594. Remove `defaultBCSetup` to expose the settings for the inlet velocity and reference values, and to set the center of rotation for pitching moment.
+
+4. Specifying your geometry can be done easily in the `[GEOMETRY]` section, for example:
+```
+[GEOMETRY]
+GEOM = frontWing.obj.gz,1,8,5,1.1,high
+  rearWing.obj.gz,1,8,5,1.1,high
+  body.obj.gz,1,8,5,1.1,high
+  ROTA-front-wheel-lhs.obj.gz,1,8,5,1.1,high
+  ROTA-front-wheel-rhs.obj.gz,1,8,5,1.1,high
+  ROTA-rear-wheel-lhs.obj.gz,1,8,5,1.1,high
+  ROTA-rear-wheel-rhs.obj.gz,1,8,5,1.1,high
+```
+The `GEOM` columns are as follows:
+
+`GEOMETRY_FILE, SCALE_FACTOR, REFINEMENT_LEVEL, NLAYERS, EXPANSION_RATIO, WALL_MODELLING`
+
+`GEOMETRY_FILE` - Geometry file name (.obj/.stl, .gz compression is fine, must be ASCII format!)
+
+`SCALE_FACTOR` - Scale factor to scale the geometry, unit conversion (Only works with snappyHexMesh)
+
+`REFINEMENT_LEVEL` - Base refinement level for specified geometry, additional curvature and edge refinements added on where required, global settings exposed with `defaultGlobalRefinement`
+
+`NLAYERS` - Number of inflation layers 
+
+`EXPANSION_RATIO` - Expansion ratio
+
+`WALL_MODELLING` - high/low, high: uses wall model, low: no wall model
+
+NOTE: the `ROTA` prefix is to specify that part will get a rotating wall boundary condition, more information in the `documentation/source/caseSetupTUG.pdf`!
+
+### Standalone GUI authoring
+
+If you want a separate GUI for authoring `caseSetup` files without modifying the main pipeline, launch:
+
+```bash
+python /path/to/caseSetupGui.py --case-dir /path/to/project/CASES/001 --template default
+```
+
+The GUI is standalone: it reads template defaults from `setupTemplates`, writes an explicit `caseSetup` file in the selected case folder, and can optionally run the existing `caseSetup.py -s <template>` flow as a subprocess. Geometry file pickers store the geometry file name only, matching the existing `caseSetup` format. Geometry prefixes such as `ROTA-`, `POR-`, `FAN-`, `REFX-`, `GEOMX-`, `MRFG-`, `IDOM-`, and `GRND-` create their matching addon sections automatically.
+
+5. When all geometry is setup and your `BC_SETUP` is all done, run `caseSetup.py` to finish setting up the case.
+6. Use the `meshingScript`, `solveScript`, `exportScript` to execute each part of the case. 
+    
+    NOTE: make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` path in this repo in `setupTemplates/default/defaultCluster/slurm/clusterDict`. Likewise replace `/path/to/bin/pvbatch` with the path to your local Paraview `pvbatch` installation, and `/path/to/postUtilities/` with the path to this local repo.
+
+For more information about the options and settings, refer to the `documentation/source/caseSetupTUG.pdf` or reach out to me for clarification!
+
+---
+
+## Demo Cases
+
+A motorbike demo case has been provided in the `motorbikeDemoCase` directory. Copy that file to a desired location and execute `caseSetup.py` in either the `baseDemo` or `cornerDemo` directories. Run the scripts in order of `meshingScript`, `solveScript`, `exportScript`. 
+
+NOTE: Make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` path in this repo in `setupTemplates/default/defaultCluster/slurm/clusterDict`. Likewise replace `/path/to/bin/pvbatch` with the path to your local Paraview `pvbatch` installation, and `/path/to/postUtilities/` with the path to this local repo. An example `clusterDict` has been provided in `setupTemplates/default-local`
+
+![baseDemo](motorbikeDemoCase/CASES/baseDemo-slice.png)
+
+![cornerDemo](motorbikeDemoCase/CASES/cornerDemo-slice.png)
+
+---
+
+## Usage Workflow
+
+### Step 1: Create New Case
+
+```bash
+cd CASES/001
+python ../caseSetup.py --new
+# edit the caseSetup file with your parameters
+```
+
+### Step 2: Enable Kinematic Solver (Optional)
+
+edit `caseSetup` and set up the `[RIDE_HEIGHT_SETUP]` block:
+```ini
+[RIDE_HEIGHT_SETUP]
+RUN_RIDE_HEIGHT = True              # master switch for ride-height study
+RIDE_HEIGHT_FILE = rideHeightConfig # CSV of ride-height points
+RUN_RH_POINTS = 1 2 3 4 5           # subset of point indices to build
+USE_DEPEND = True
+RH_UNIT = mm                        # unit of corner displacements (mm | m)
+INIT_RH =
+RH_REF_WIDTH =
+RH_REF_LEN =
+USE_KINEMATIC_SOLVER = True         # enable double-wishbone + pushrod solver
+HARDPOINT_FILE = /path/to/suspensionHardpoints_template.cfg
+HARDPOINT_SCALE = 0.001             # 0.001 if hardpoints in mm, 1.0 if in m
+SUSP_REQUIRE_ALL_PIDS_MATCHED = False
+```
+
+| Key | Description |
+|-----|-------------|
+| `RUN_RIDE_HEIGHT` | master switch, `True` builds one child case per ride-height point |
+| `RIDE_HEIGHT_FILE` | name/path of the ride-height CSV |
+| `RUN_RH_POINTS` | space-separated list of point indices (from the CSV) to build |
+| `USE_DEPEND` | how `executeAll.sh` submits the child cases: `True` runs them one at a time (each child starts once the previous child's export finishes), `False` submits them all at once |
+| `RH_UNIT` | unit of the corner displacements in the CSV (`mm` or `m`) |
+| `INIT_RH` | optional initial/reference ride-height offset, not operational at this moment |
+| `RH_REF_WIDTH`, `RH_REF_LEN` | optional reference track width / wheelbase, not operational at this moment |
+| `USE_KINEMATIC_SOLVER` | turn on the per-component kinematic deform (otherwise just a vertical wheel shift) |
+| `HARDPOINT_FILE` | path to the suspension hardpoint CFG (needed if the solver's on) |
+| `HARDPOINT_SCALE` | coordinate-to-metre multiplier (`0.001` for mm, `1.0` for m) |
+| `SUSP_REQUIRE_ALL_PIDS_MATCHED` | `True` errors on any unmatched part, `False` leaves it alone with a warning |
+
+prep the hardpoint file (copy the template and update the coordinates):
+```bash
+cp rideHeightUtils/suspensionHardpoints_template.cfg /path/to/suspensionHardpoints.cfg
+# edit the suspension coordinates in the CFG
+```
+
+add the PID keywords to the geometry (any key with `PID` in the hardpoint CFG sections):
+```ini
+[SUSP_FL]
+...
+FL_WHEEL_PID = flwheel
+FL_UCA_PID = fluca
+FL_LCA_PID = fllca
+FL_ROCKER_PID = flrocker
+FL_PUSHROD_PID = flprod
+FL_DAMPER_PID = fldamper
+FL_TIE_PID = fltie
+...
+```
+the keyword has to be a substring of the actual part/group name in the OBJ/STL (e.g. `fllca` matches a part named `body_susp_fllca`).
+
+### Step 3: Setup Case
+
+```bash
+# standard mesh + BC setup. if RUN_RIDE_HEIGHT = True this
+# builds the per-point child cases for you.
+python ../caseSetup.py
+```
+
+> **Note:** `--rideHeightMode` is an internal flag caseSetup passes to itself when it re-runs inside each child case. don't pass it yourself, just set `RUN_RIDE_HEIGHT = True` and run caseSetup normally.
+
+### Step 4: Process Ride-Height Points
+
+if ride-height mode is on, you get one child case per point:
+```
+001_1/     # ride-height point 1
+001_2/     # ride-height point 2
+...
+```
+
+each child case has:
+- the geometry deformed to follow the suspension
+- domain pitch/roll/heave updated
+- its own caseSetup with the point's parameters
+
+### Step 5: Run Solver
+
+```bash
+cd 001_1/
+blockMesh
+snappyHexMesh
+# run the solver (OpenFOAM command or cluster submission)
+# or run the generated bash scripts in order: meshScript, solveScript, exportScript
+# (postScript is called by exportScript when it's done)
+```
+
+for a ride-height study, run every child case at once from the parent case:
+```bash
+cd 001/
+./executeAll.sh
+```
+- **SLURM scripts:** each child's mesh, solve and export are chained with `sbatch --dependency`. With `USE_DEPEND = True` the children run one after another (child N starts once child N-1's export is done, whether or not it succeeded), which keeps the queue open for other jobs. With `USE_DEPEND = False` all children are submitted at once. If a step fails, the rest of that child is cancelled.
+- **plain bash scripts (no `#SBATCH` headers):** the children are run one after another with bash.
+
+### Step 6: Post-Process Results
+
+```bash
+python ../postUtilities/postRun.py
+# gives you:
+# - force convergence plots
+# - pressure/velocity field plots
+# - summary stats
+# - powerpoint report (optional)
+```
+
+---
+
+## Setup & Configuration
+
+### Case Directory Structure
+
+```
+CASES/
+└── 001/
+    ├── caseSetup                      # Configuration file (INI format)
+    ├── constant/
+    │   ├── triSurface/               # Geometry files (OBJ/STL)
+    │   ├── transportProperties
+    │   ├── turbulenceProperties
+    │   └── ...
+    ├── system/
+    │   ├── blockMeshDict
+    │   ├── snappyHexMeshDict
+    │   ├── controlDict
+    │   ├── fvSchemes
+    │   ├── fvSolution
+    │   └── ...
+    ├── 0/                            # Initial conditions (created after mesh)
+    └── postProcessing/               # (Generated after solver run)
+```
+
+
+
+### Ride-Height Input CSV
+
+```csv
+point,fl,fr,rl,rr,yaw,steer
+1,0.05,0.05,0.02,0.02,0.0,0
+2,0.10,0.10,0.05,0.05,0.0,5
+3,-0.05,-0.05,-0.02,-0.02,0.0,0
+```
+
+Where:
+- `fl, fr, rl, rr` = wheel vertical displacements (meters or mm depending on `RH_UNIT`)
+- `yaw` = vehicle yaw angle (degrees, 0 for straight)
+- `steer` = optional front road-wheel steer angle in degrees at the reference (front-left) wheel. the kinematic solver finds the rack travel that gives this angle at the front-left, then applies the same rack to the front-right so the Ackermann difference falls out on its own. the tie-rod inner joint slides along the rack axis (`RACK_AXIS` in the hardpoint file, default lateral `0 1 0`) and the tie-rod length is kept. leave blank or `0` for no steer. rear wheels aren't steered.
+
+---
+
+## Additional Features
+
+### Multi-Point Ride-Height Mapping
+
+one case per ride-height point (e.g. accel, braking, cornering):
+
+```csv
+point,fl,fr,rl,rr,yaw
+1,0.05,0.02,-0.02,-0.05,0.0      # accel
+2,-0.02,-0.05,0.05,0.02,0.0      # braking
+3,0.00,-0.08,0.08,0.00,5.0       # yaw + roll
+```
+
+run with `--rideHeightMode` (only caseSetup itself should pass this!):
+```bash
+python caseSetup.py --rideHeightMode
+```
+
+builds a child case per point with the suspension geometry already deformed.
+
+### Mesh Fidelity Control
+
+refinement regions live in `defaultRefinements/`:
+- surface layers
+- local refinement zones
+- boundary layer y+
+
+### Custom Turbulence Models
+
+drop new models in `zeroTemplates/models/`. already there:
+- k-omega SST
+- Spalart-Allmaras (SA)
+- k-epsilon (standard)
+
+### Cluster Submission
+
+auto-generate the SLURM/PBS scripts:
+```bash
+# edit the defaultCluster/clusterDict templates with your HPC settings.
+# the default setup template just outputs plain bash scripts.
+python caseSetup.py 
+# generates: meshScript, solveScript, exportScript, postScript
+# in setupTemplates/default/defaultCluster/slurm/clusterDict you need to:
+#  - point solveScript at the zeroTemplates dir (in this repo)
+#  - point postScript at the ParaView pvbatch command
+```
+
+### Fan pressure-jump condition
 The `FAN` geometry prefix adds an ESI OpenFOAM `fan` pressure-jump condition for a planar fan disk. This is useful for modelling a fan in front of a radiator without resolving the blades. Use a separate `POR` geometry for the radiator porous region if a radiator pressure drop is also required. The FAN disk must be a single, approximately planar circular ASCII OBJ/STL surface and is currently supported through the snappyHexMesh path.
 
 Example:
@@ -34,6 +380,94 @@ SAMPLE_FAN = True
 ```
 
 `FAN_CENTER` and `FAN_DIAMETER` can be calculated automatically from the disk. With `FAN_DIRECTION = default`, the surface normal is oriented toward `FAN_TARGET_GEOMETRY`; an explicit direction overrides the target. `FAN_PRESSURE_RISE` is in Pa. `SAMPLE_FAN` is retained in the generated setup metadata, but dedicated FAN reporting is not yet implemented. Validate the generated `fan` boundary condition with the installed ESI OpenFOAM release (`of2206` or `of2606`) before production runs.
+
+---
+
+## Per-Component Transform System
+
+### How It Works
+
+ride-height point (corner displacements + yaw) goes in, the kinematic solver works out the wheel position, rotation, rocker angle and damper stroke, then for each component it builds a transform (translation, rotation axis-angle in radians, pivot). those get applied to the matching PIDs in the OBJ/STL, and out comes geometry that follows the suspension motion.
+
+### Component Transform Details
+
+| Component | Translation | Rotation | Pivot |
+|-----------|-------------|----------|-------|
+| **WHEEL** | Wheel center displacement from solver | Rotation vector from solver (camber/toe) | Static wheel center |
+| **UCA** | Outer point moves with wheel | Computed from linkage geometry change | Midpoint of chassis mounts |
+| **LCA** | Outer point moves with wheel | Computed from linkage geometry change | Midpoint of chassis mounts |
+| **ROCKER** | Zero (rotates in place) | Rocker angle × rocker axis | Rocker pivot |
+| **PUSHROD** | Inherits from rocker | Inherits from rocker | Rocker pivot |
+| **DAMPER** | Inherits from rocker | Inherits from rocker | Rocker pivot |
+| **TIE** | Follows wheel translation | Computed from linkage geometry change | TIE_INNER (chassis mount) |
+
+### Rotation Computation (UCA/LCA/TIE)
+
+rigid-body fit off the linkage vectors:
+1. static linkage vector: chassis mount to wheel attachment in the static config
+2. current linkage vector: same thing after the wheel has moved
+3. rotation axis: cross product of the normalised vectors (perpendicular to both)
+4. rotation angle: arccos of the dot product
+5. rotation vector: `axis x angle` (axis-angle, radians)
+
+that way the arms swing the way they actually would while keeping the pivot distances fixed.
+
+---
+
+## Cornering (SRF) Simulation
+
+cornering solves the whole domain in a single rotating frame (SRF) spinning at `omega` about a vertical axis through the corner centre, so the car follows a steady circle of radius `CORNER_RADIUS` at `INLET_MAG`:
+
+```
+|omega| = INLET_MAG / CORNER_RADIUS    (rad/s)
+```
+
+set `RUN_CORNERING = True` and the case reconfigures itself:
+
+- **solver**: the SRF solver (steady `SRFSimpleFoam`, transient auto-upgrades to `SRFPimpleFoam`). it solves the relative velocity `Urel`.
+- **BCs**: the x/y outer walls become `srfFreestream`, the ground becomes an SRF moving wall, the roof stays slip. the inertial freestream `UInf` is zero - all the wind comes from the rotation.
+- **per-wheel rolling speed**: each wheel rolls at `V_local = |omega| * (distance from the corner axis to the wheel centre)`, so inner wheels spin slower and outer wheels faster than `INLET_MAG`.
+- **symmetry**: the flow isn't laterally symmetric, so `SIM_SYM = half` gets forced to `full`.
+- **post**: anything that would read `UMean` switches to `UrelMean` (the rotating-frame average).
+- **domain check**: the box only looks like a curved tunnel when it's narrow next to the radius, so it requires `CORNER_RADIUS >= CORNER_CLEARANCE_FACTOR * (DOMAIN_SIZE_y / 2)` and bails with the min radius otherwise.
+
+### Configuration
+
+edit the `[CORNERING_SETUP]` block in `caseSetup`:
+
+```ini
+[CORNERING_SETUP]
+RUN_CORNERING = False           # master switch
+CORNER_RADIUS =                 # turn radius of REFCOR (m); required when enabled
+CORNER_DIR = left               # turn direction: left | right
+CORNER_CENTER = default         # rotation centre 'x y z', or 'default' to derive from REFCOR
+CORNER_CLEARANCE_FACTOR = 3     # min radius = factor * (DOMAIN_SIZE_y / 2)
+CORNER_SOLVER = SRFSimpleFoam   # SRF solver app
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `RUN_CORNERING` | `False` | master switch, `True` solves the case as an SRF cornering frame |
+| `CORNER_RADIUS` | (empty) | path radius of REFCOR in metres. needed when cornering is on (or supply a per-point `corner_radius` CSV column) |
+| `CORNER_DIR` | `left` | turn direction. `left` puts the centre on the car's left (-y), `right` on the right (+y) |
+| `CORNER_CENTER` | `default` | explicit centre as three floats `x y z`, or `default` to derive it from REFCOR with a `+/- CORNER_RADIUS` offset in y |
+| `CORNER_CLEARANCE_FACTOR` | `3` | sets the min radius relative to the domain half-width, keeps the box-vs-annulus approximation honest |
+| `CORNER_SOLVER` | `SRFSimpleFoam` | SRF solver app. steady uses `SRFSimpleFoam`, transient auto-upgrades to `SRFPimpleFoam` |
+
+### Cornering With Ride-Height Studies
+
+with both `RUN_CORNERING` and `RUN_RIDE_HEIGHT` on, the ride-height CSV can drive the corner per point with two optional columns:
+
+```csv
+point,fl,fr,rl,rr,yaw,steer,corner_radius,corner_dir
+1,0.05,0.05,0.02,0.02,0.0,8,30,left
+2,0.10,0.10,0.05,0.05,0.0,-6,45,right
+```
+
+- `corner_radius` - per-point radius (m), overrides the base `CORNER_RADIUS` for that child case. bad/missing values fall back to the base.
+- `corner_dir` - per-point `left`/`right`, overrides the base `CORNER_DIR`. bad/missing values fall back to the base.
+
+every child case re-runs the domain check, so an out-of-range per-point radius fails fast.
 
 ---
 
@@ -179,115 +613,11 @@ The Cp axis is inverted following the conventional aerodynamic pressure-coeffici
 
 ---
 
-## Compatibility
-
-| Aspect | Support |
-|--------|---------|
-| **OpenFOAM Versions** | v2012 - v2606 (newer versions untested, should work though) |
-| **internalSetup** | ESI OpenFOAM v2412 (tested); the crank drive needs a compiler (wmake) where the job runs |
-| **Operating Systems** | Ubuntu 22.XX (preferred); Windows/macOS untested |
-| **Python** | 3.8+ |
-
----
-
-## Quick Start
-
-1. Ensure your preferred version of OpenFOAM (v2012+) is installed
-2. Create a directory structure as such:
-```
-projectDirectory/
-├── 02_reference/                    # Location where reference files reside
-│    └── MSH/                        # Where geometry files reside (.obj,.stl)
-│
-└── CASES/                           # Run directories reside in here
-    ├── 001/                         # Run directory, where your simulation case resides
-    │   ├── system/
-    │   ├── constant/
-    ├── 002/                        
-    │   ├── system/
-    │   ├── constant/
-    ...
-```
-3. Navigate into your case directory and run the following:
-```bash
-python /path/to/caseSetup.py --new
-```
-This will generate a new caseSetup file that looks like this:
-```
-[DEFAULTS]
-DEFAULT_MODULES = defaultGlobalControl defaultGlobalSimControl defaultBCSetup defaultGlobalDecomposition defaultGlobalMaterial defaultGlobalRefinement defaultRideHeight defaultCornering defaultPost
-ADDON_MODULES =
-
-[TITLES]
-CASENAME = casename
-CASEDESCRP = default description
-JOBCODE = TS
-
-[GEOMETRY]
-GEOM = default.stl,1,8,5,1.1,high
-```
-The `DEFAULT_MODULES` line consists of the modules that are set to default values. To edit, remove that module from the line and re-run `caseSetup.py` to reveal the hidden module for editing. The coordinate system follows SAEJ1594. Remove `defaultBCSetup` to expose the settings for the inlet velocity and reference values, and to set the center of rotation for pitching moment.
-
-4. Specifying your geometry can be done easily in the `[GEOMETRY]` section, for example:
-```
-[GEOMETRY]
-GEOM = frontWing.obj.gz,1,8,5,1.1,high
-  rearWing.obj.gz,1,8,5,1.1,high
-  body.obj.gz,1,8,5,1.1,high
-  ROTA-front-wheel-lhs.obj.gz,1,8,5,1.1,high
-  ROTA-front-wheel-rhs.obj.gz,1,8,5,1.1,high
-  ROTA-rear-wheel-lhs.obj.gz,1,8,5,1.1,high
-  ROTA-rear-wheel-rhs.obj.gz,1,8,5,1.1,high
-```
-The `GEOM` columns are as follows:
-
-`GEOMETRY_FILE, SCALE_FACTOR, REFINEMENT_LEVEL, NLAYERS, EXPANSION_RATIO, WALL_MODELLING`
-
-`GEOMETRY_FILE` - Geometry file name (.obj/.stl, .gz compression is fine, must be ASCII format!)
-
-`SCALE_FACTOR` - Scale factor to scale the geometry, unit conversion (Only works with snappyHexMesh)
-
-`REFINEMENT_LEVEL` - Base refinement level for specified geometry, additional curvature and edge refinements added on where required, global settings exposed with `defaultGlobalRefinement`
-
-`NLAYERS` - Number of inflation layers 
-
-`EXPANSION_RATIO` - Expansion ratio
-
-`WALL_MODELLING` - high/low, high: uses wall model, low: no wall model
-
-NOTE: the `ROTA` prefix is to specify that part will get a rotating wall boundary condition, more information in the `documentation/source/caseSetupTUG.pdf`!
-
-### Standalone GUI authoring
-
-If you want a separate GUI for authoring `caseSetup` files without modifying the main pipeline, launch:
-
-```bash
-python /path/to/caseSetupGui.py --case-dir /path/to/project/CASES/001 --template default
-```
-
-The GUI is standalone: it reads template defaults from `setupTemplates`, writes an explicit `caseSetup` file in the selected case folder, and can optionally run the existing `caseSetup.py -s <template>` flow as a subprocess. Geometry file pickers store the geometry file name only, matching the existing `caseSetup` format. Geometry prefixes such as `ROTA-`, `POR-`, `FAN-`, `REFX-`, `GEOMX-`, `MRFG-`, `IDOM-`, and `GRND-` create their matching addon sections automatically.
-
-5. When all geometry is setup and your `BC_SETUP` is all done, run `caseSetup.py` to finish setting up the case.
-6. Use the `meshingScript`, `solveScript`, `exportScript` to execute each part of the case. 
-    
-    NOTE: make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` path in this repo in `setupTemplates/default/defaultCluster/slurm/clusterDict`. Likewise replace `/path/to/bin/pvbatch` with the path to your local Paraview `pvbatch` installation, and `/path/to/postUtilities/` with the path to this local repo.
-
-For more information about the options and settings, refer to the `documentation/source/caseSetupTUG.pdf` or reach out to me for clarification!
-
-## Demo Cases
-A motorbike demo case has been provided in the `motorbikeDemoCase` directory. Copy that file to a desired location and execute `caseSetup.py` in either the `baseDemo` or `cornerDemo` directories. Run the scripts in order of `meshingScript`, `solveScript`, `exportScript`. 
-
-NOTE: Make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` path in this repo in `setupTemplates/default/defaultCluster/slurm/clusterDict`. Likewise replace `/path/to/bin/pvbatch` with the path to your local Paraview `pvbatch` installation, and `/path/to/postUtilities/` with the path to this local repo. An example `clusterDict` has been provided in `setupTemplates/default-local`
-
-![baseDemo](motorbikeDemoCase/CASES/baseDemo-slice.png)
-
-![cornerDemo](motorbikeDemoCase/CASES/cornerDemo-slice.png)
 ## Internal Flow (internalSetup)
 
 `internalSetup.py` sets up closed internal-flow cases (built for Stirling engines) the same way `caseSetup.py` does aero: an INI file in the case directory, merged with the template defaults, geometry prefixes that add their own sections, then the dicts, BCs and Slurm scripts. it is a separate tool with its own config file (`internalSetup`) and template set (`setupTemplates/internal`). full details are in the "Internal Flow (internalSetup)" section of `documentation/source/caseSetupTUG.pdf`.
 
 ### Quick start
-
 same job layout as aero: geometry in `<job>/02_reference/MSH`, cases in `<job>/CASES/<case>`. run the setup on the machine where the case will run (the scripts hold absolute paths to this repo).
 
 ```bash
@@ -302,11 +632,11 @@ python3 /path/to/caseSetup/internalSetup.py         # stops once if it adds defa
 options: `--new`, `--modules`, `-d` (controlDict only), `-s` (template set, default `internal`).
 
 ### Geometry
-
 the file prefix says what the body is, the PIDs (STL solid names / OBJ groups) are its faces. snappy keeps each PID as the patch `<file>_<pid>`, and the setup picks PIDs by case-insensitive keyword.
 
 - `WALL-<name>` - static walls: BC groups per PID keyword, anchor faces for the mesh motion, wall side of the displacer gap.
-- `MOVE-<name>` - rigid moving body (displacer). `FROM = <file>` makes a body out of PIDs in another file (e.g. the piston crown in the chamber file). a PID named `MOVE-<name>` in a WALL file creates the section `[MOVE-<name>]` for you (FROM = that file, ZONE_PIDS = the PID, MOTION_COLUMN = `<name>`, one body per PID), and the section is dropped again when the PID is gone.
+- `MOVE-<name>` - rigid moving body (displacer). `FROM = <file>` makes a body out of PIDs in another file (e.g. the piston crown in the chamber file). a PID named `MOVE-<name>` in a WALL file creates the section `[MOVE-<name>]` for you (FROM = that file, ZONE_PIDS = the PID, MOTION_COLUMN = `<name>`, one body per PID), and the section is dropped again when the PID is gone. a FROM body's faces are their own BC group: its `T_DEFAULT` / `U_DEFAULT` set them (blank = the defaults of the file they are in), it has no `BC_GROUPS`, and the setup stops if a group in the WALL section also matches them.
+- `POR-<name>` - porous zone (regenerator, heater/cooler core, steel wool), see fans and porous zones below.
 - `REGN` and `SMP` are reserved, not available yet.
 
 ```ini
@@ -344,20 +674,25 @@ MOTION_COLUMN = piston
 REF_ANGLE = 0
 TDC_CLEARANCE = 0.002
 ZONE_PIDS = crown
+T_DEFAULT = adiabatic
 ```
 
-`LOC_IN_MESH` is required and must be inside the gas. T modes: `adiabatic`, `fixed <T>`, `convective <h> <Ta>`, `flux <q>`. moving faces always get `movingWallVelocity`.
+`LOC_IN_MESH` is required and must be inside the gas, and off the cell faces of the background mesh: those sit at multiples of `BASE_CELL/2^level` from 0, so a point on an axis through the origin (x = 0) fails. the setup stops on that and suggests a point. T modes: `adiabatic`, `fixed <T>`, `convective <h> <Ta>`, `flux <q>`. moving faces always get `movingWallVelocity`; static walls of a moving-mesh case get `slidingWallVelocity` (noSlip, points slide along the wall without gas leaking through it). `slip` walls still leak, use `noSlip` with moving meshes.
+
+### Run control, solver, gas
+- `[GLOBAL_CONTROL]`: `FREQ`, `N_CYCLES` (endTime), `WRITE_PER_CYCLE`, `MAX_CO`, `MAX_DT`, `INIT_DT`. `MAX_CO = 0` or blank gives a fixed time step of `MAX_DT` (`adjustTimeStep no`); the setup warns if the write interval is not a whole number of steps.
+- `[GLOBAL_SIM_CONTROL]`: `SOLVER = rhoPimpleFoam` (default: absolute p, energy equation, wall heat flux) or `pimpleFoam` (incompressible, kinematic p, no T: only for the flow through the displacer). `TURB_MODEL = laminar` (default), `kOmegaSST`, `kEpsilon`, `kOmega` (URANS; the GEOM wall column picks `low` = resolved y+ ~ 1 or `high` = wall functions). `N_OUTER_CORR = 1` is PISO (keep the Courant number around 1); for larger time steps use 3+ outer correctors. `RELAX_P/U/E = auto` writes no under-relaxation for transient runs: relaxing the transient compressible loop loses energy (half the compression work in a closed-cylinder test), the setup warns if you set them. `P_MAX_ITER` (default 1000) caps the GAMG iterations of p: a near-static gas (very slow piston) or a fine mesh stalls just above the 1e-8 tolerance and runs every solve to the cap, 50-100 is fine there.
+- `[GLOBAL_MATERIAL]`: `GAS = air | nitrogen | helium | hydrogen | custom`, `CHARGE_PRESSURE`, `INIT_T` (both at the start angle, the gas mass follows from them), `TRANSPORT = const | sutherland`; `MOL_WEIGHT`, `CP`, `MU`, `PR` override the preset. `INIT_T_FIELD = matrix` (or a POR zone name) warm-starts the gas on the matrix temperature profile along z, same gas mass.
 
 ### Mesh motion
-
 - `displacementInterpolation` along z between flat face zones: anchors (`ANCHOR_PIDS`) stay put, each body's `ZONE_PIDS` follow its motion table, points between two zones of one body move rigidly, end spaces stretch. bodies must be in line along z (gamma/beta engines, not alpha).
 - one CSV for the whole engine: `theta` (deg, 0 to 360) plus one position column (m) per body, so the phase between bodies is fixed by the file.
-- the setup moves each body from `REF_ANGLE` to the start angle (`START_ANGLE = auto` picks the least squash/stretch), keeps `TDC_CLEARANCE` (`CLEARANCE_MODE = soft`: only the end of the stroke that comes too close is eased back with a smooth floor, the rest of the CSV profile is kept, a dwell stays flat; `scale` shrinks the whole stroke; `shift` offsets the whole path as before), checks zone order, flatness and deformation over the whole cycle, and prints stroke, peak velocity and acceleration per body. a body made of PIDs in a WALL file (piston crown, `FROM`) must seal at the meshing angle: inside its liner along z and covering the bore, else the setup stops before meshing. `MAX_DEFORMATION` blank or 0 = no limit.
+- the setup moves each body from `REF_ANGLE` to the start angle before meshing (`START_ANGLE = auto` picks the angle with the least squash/stretch, so the bodies are usually shifted from where the STL has them; set `START_ANGLE` to mesh and start at a given angle), keeps `TDC_CLEARANCE` (`CLEARANCE_MODE = soft`: only the end of the stroke that comes too close is eased back with a smooth floor, the rest of the CSV profile is kept, a dwell stays flat; `scale` shrinks the whole stroke; `shift` offsets the whole path as before), checks zone order, flatness and deformation over the whole cycle, and prints stroke, peak velocity and acceleration per body. a body made of PIDs in a WALL file (piston crown, `FROM`) must seal at the meshing angle: inside its liner along z and covering the bore, else the setup stops before meshing. `MAX_DEFORMATION` blank or 0 = no limit.
 - dry run before the flow run: `./runScript --meshOnly`, `./motionCheckScript`, then `./postScript --mesh` (cluster: `./submitScript --check` chains all three). it moves the mesh over one cycle, runs checkMesh every 45 deg, exports the moved meshes (`MESH_MOTION MOTION_FRAMES`, default 24 per cycle = every 15 deg) to `EnSightMotion`, and draws the `pvPostInternalSetup` slices and body surfaces as grey surface-with-edges in `postProcessing/meshImages`, one video per panel in `postProcessing/meshMovies`. `EnSightMotion` holds the whole mesh for every frame: delete it once you have looked at the videos.
 - v2412 zone-order bug: the scripts reorder the face zones after topoSet (`meshUtilities/reorderFaceZones.py`).
+- remeshing for strokes the deformed mesh can't take (piston TDC): `REMESH = auto` splits the cycle into segments, each meshed at its own start angle (`meshes/segNN`), and a new segment starts wherever a gap has been squashed or stretched `REMESH_DEFORMATION` times (2-3; lower = more meshes). at each segment end the run maps onto the next mesh (`mapFieldsPar`, loop in `meshUtilities/remeshRun.py`) and `foamLibs/remeshMassFix` puts the gas mass back (scale of p and rho, about 1e-4 per map). the run restarts at `REMESH_DT` (1e-6 s) after each map and ramps up again, only with an adjustable time step (`MAX_CO > 0`): a fixed step restarts at the full `MAX_DT`. `GAP_CELLS_Z` (6) refines thin end gaps in z at each meshing angle. each map adds a little heat in the restart steps (~0.2-0.4 K mean gas T), so use as few segments as the cells allow.
 
 ### Crank drive
-
 `[MESH_MOTION] DRIVE = crank`: the gas pressure forces turn a flywheel instead of a prescribed speed. the custom motion solver is in `foamLibs/stirlingMotion` and is compiled by the run scripts (`wmake libso`). each step: `I dω/dt = Σ F_body·dz/dθ − load − friction`.
 
 ```ini
@@ -377,53 +712,7 @@ P_BUFFER = charge       # pressure behind the bodies
 
 `FREQ` is the start speed. the crank state is saved at the write times (restarts continue from it), log in `postProcessing/crank/<start>/crank.dat`. endTime is still `N_CYCLES/FREQ`, so a run whose speed changes covers about `N_CYCLES` cycles.
 
-### Run control, solver, gas
-
-- `[GLOBAL_CONTROL]`: `FREQ`, `N_CYCLES` (endTime), `WRITE_PER_CYCLE`, `MAX_CO`, `MAX_DT`, `INIT_DT`. `MAX_CO = 0` or blank gives a fixed time step of `MAX_DT` (`adjustTimeStep no`); the setup warns if the write interval is not a whole number of steps.
-- `[GLOBAL_SIM_CONTROL]`: `SOLVER = rhoPimpleFoam` (default: absolute p, energy equation, wall heat flux) or `pimpleFoam` (incompressible, kinematic p, no T: only for the flow through the displacer). `TURB_MODEL = laminar` (default), `kOmegaSST`, `kEpsilon`, `kOmega`. `N_OUTER_CORR = 1` is PISO (keep `MAX_CO` near 1); for large time steps use 3+ outer correctors, which also writes under-relaxation (`RELAX_P` 0.3, `RELAX_U` 0.7, `RELAX_E` 0.7, none on the last outer iteration).
-- `[GLOBAL_MATERIAL]`: `GAS = air | nitrogen | helium | hydrogen | custom`, `CHARGE_PRESSURE`, `INIT_T`, `TRANSPORT = const | sutherland`; `MOL_WEIGHT`, `CP`, `MU`, `PR` override the preset.
-
-### Decomposition and cluster
-
-`[GLOBAL_COMPUTE_SETUP]` has `NUM_PROCS`, `LOCAL_PROCS`, `ACCOUNT`, `MODULES`, `MPI_RUN` (parallel launcher inside a Slurm job, default `srun`; e.g. `/usr/bin/mpirun` where Open MPI can't start under srun), `RUN_TIME`, `MOTION_TIME`, `EXPORT` and the decomposition. `DECOMP_METHOD = scotch` by default; on clusters without scotch use `hierarchical` (or `simple`) with `DECOMP = auto` (split chosen for the task count of each run, subdomains close to cubes) or `DECOMP = nx ny nz` (the product must equal `NUM_PROCS`). the scripts set numberOfSubdomains on every run, so the same case runs on the cluster and locally.
-
-`runScript` keeps the mesh (`.meshDone`): running it again continues the solve from the latest time. remove `processor*` and `.meshDone` to remesh. the setup writes `system/meshSignature` (meshing dicts, motion zones, geometry as meshed); if a rerun of the setup changes it, `runScript` and `motionCheckScript` stop and ask for a remesh instead of using a mesh that no longer matches (e.g. a new MOVE body without its motion zone).
-
-`submitScript` submits `runScript` and then `postScript` (afterok). `--noPost` skips the post job, `--post` submits only `postScript`, `--check` does the mesh motion dry run. the post job has its own keys: `POST_MODULES` (needs python3 + numpy, pvbatch and ffmpeg), `POST_CPUS`, `POST_MEM`, `POST_TIME`, `PVBATCH`, `GSHEET`.
-
-### Post-processing
-
-`postScript` (Slurm job or `./postScript`) runs the summary, the gsheet push (`GSHEET = True`), the images and the videos; a failed step is logged and the rest still run. by hand:
-
-```bash
-python3 /path/to/caseSetup/postUtilities/postInternal.py [cases ...] [--avgCycles N] [--gsheet]
-python3 /path/to/caseSetup/postUtilities/gsheetInternal.py [cases ...] [--comment "text"] [--dryRun]
-pvbatch --force-offscreen-rendering /path/to/caseSetup/postUtilities/pvPostInternal.py [--every N] [--lastCycles N]
-python3 /path/to/caseSetup/postUtilities/imagesToMovies.py [--fps N]
-```
-
-images are set up like pvPost: `pvPostInternalSetup` in the case (copied there by the setup, kept if it exists) lists the slices (`NAMES`, `NORMALS`, `ORIGINS` = center | loc | x,y,z, `FOLLOW` = a body so a z slice moves with the displacer), the surface patches and views, the variables and `[MOVIES] FPS`. variables (equation, label, range auto | symmetric | [min, max], colour map) are in `postUtilities/default/defaultInternalVariables`; ranges are fixed over the run. output: `postProcessing/images/<panel>/` (one png per written time) and `postProcessing/movies/<case>_<panel>.mp4`.
-
-`summary.csv`, `pV.png` (last cycles overlaid, compressible) and `cycleConvergence.png` (work per body, mean gas T, mass drift, heat per BC group and crank speed per cycle) in the case folder: run info and times, cycles done, work per body and `AVG_ENERGY`/`AVG_POWER` over the last N cycles, gas p/T/rho, face pressures, and for compressible runs mass drift, p-V work and heat per BC group; for the crank drive also speed, load and generator power. `gsheetInternal.py` pushes the summary to the database sheet (settings in `~/.config/caseSetup/gsheet.ini` or `INTERNAL_GSHEET_*`; keep the service account key out of git).
-
-### Copy back to Google Drive
-
-`postUtilities/copyBackInternal.py [cases ...] [--dryRun] [--noImages]` uploads the run data to `<folder>/<JOB>/<case>/` on Google Drive, keeping the case's sub-paths: logs and Slurm `.out` files, `internalSetup`, `fullCaseSetupDict`, `pvPostInternalSetup`, `summary.csv` and plots, every `postProcessing/**/*.dat`, the images and the videos. only new or changed files are uploaded (md5 against Drive), so rerunning it is cheap. it is the last step of `postScript` (`COPY_BACK = True` in `[GLOBAL_COMPUTE_SETUP]`). settings: `~/.config/caseSetup/drive.ini`
-
-```ini
-[drive]
-folderID = <folder id, or the folder URL>
-credentials = ~/.config/caseSetup/internal_cfd_credentials.json
-```
-
-or `INTERNAL_DRIVE_FOLDER` / `INTERNAL_DRIVE_CREDENTIALS`, or `--config` / `--folderId`. the folder has to be on a Shared Drive (service accounts have no storage of their own) and shared with the service account as Content manager. needs `google-api-python-client` and `google-auth`.
-
-### Demo cases
-
-`internalDemoCase/CASES/staticDemo` (heated/cooled box, no motion) and `internalDemoCase/CASES/motionDemo` (displacer with a dwell profile and side gap, plus a piston crown). run `internalSetup.py` in either, then `./runScript`.
-
 ### Through-flow: inlets, outlets, steady solvers
-
 for pipes, ducts and exhaust stacks. `SOLVER = rhoSimpleFoam` (steady compressible), `buoyantSimpleFoam` (steady, gravity `GRAVITY = 0 0 -9.81`, for hot stacks), `simpleFoam` (steady incompressible), or the transient `rhoPimpleFoam` / `pimpleFoam`. steady runs use `N_ITER` / `WRITE_ITER` in `[GLOBAL_CONTROL]` and stop early on residuals. inlets and outlets are BC groups on PIDs:
 
 ```ini
@@ -437,13 +726,63 @@ stackWall = PIDS wall T convective 10 300
 `U massFlow <kg/s>`, `U velocity <m/s>` (normal, into the domain), `U velocity <ux> <uy> <uz>`, `P total <Pa>` (inlet), `P fixed <Pa>` (outlet). pressures are absolute; for incompressible runs they are converted to kinematic gauge p. inlet turbulence from `TURB_INTENSITY` (0.05) and `TURB_LENGTH` (auto = 0.07 x hydraulic diameter). heat flux / convective / fixed T walls as before. `postInternal.py` adds per group `MDOT_<group>` (+ into the domain), `P_<group>`, `T_<group>`, `MDOT_IMBALANCE` and `P_DROP`, and for steady runs `flowConvergence.png` (residuals, flow, p, T vs iteration).
 
 ### Fans and porous zones
-
 - `FAN-<name>.stl`: planar disk across the duct, `[FAN-<name>] FAN_PRESSURE_RISE = <Pa>` in the direction of the disk normal. snappy makes an internal faceZone, `createBaffles` turns it into a cyclic `fan` jump after the zero directory is made.
-- `POR-<name>.stl`: closed solid, its inside becomes a cellZone with a Darcy-Forchheimer pressure drop: `RESISTANCE = coeffs` (`D`, `F` along `E1` `E2`), `wireMesh` (Gedeon-Wood screens from `POROSITY`, `WIRE_DIA`, `REF_VELOCITY`) or `fit` (`DP_DATA = v1 dp1 v2 dp2 ...` over `DP_LENGTH`). `HEAT = none | fixed | solved` exchanges h·a·(Ts − T) with the matrix (`HA` W/m3/K or `auto` from the wire-mesh correlation): `fixed` holds the matrix at `SOLID_T` (heater, cooler, heat exchanger core), `solved` evolves it from (1−ε)·`SOLID_RHO`·`SOLID_CP` (regenerator, transient only). `MOVES_WITH = <body>` for a regenerator inside the displacer. the heat source is compiled at run time (needs a compiler where the solver runs). post: `HEAT_POR-<name>` (W into the gas), `TS_MEAN_POR-<name>`.
+- `POR-<name>.stl`: closed solid, its inside becomes a cellZone with a Darcy-Forchheimer pressure drop: `RESISTANCE = coeffs` (`D`, `F` along `E1` `E2`), `wireMesh` (Gedeon-Wood screens from `POROSITY`, `WIRE_DIA`) or `fit` (`DP_DATA = v1 dp1 v2 dp2 ...` over `DP_LENGTH`). for `wireMesh`, `COEFFS = local` (default) works out the drag and h·a in every cell and step from the local flow (the flow through a regenerator swings from 0 to ~20 m/s, one fixed velocity got h·a half of the cycle mean and 1/7 at peak flow); `COEFFS = ref` takes constants at `REF_VELOCITY`, which is otherwise only used for the table the setup prints. `HEAT = none | fixed | solved` exchanges h·a·(Ts − T) with the matrix (`HA` W/m3/K or `auto` from the wire-mesh correlation): `fixed` holds the matrix at `SOLID_T` (heater, cooler, heat exchanger core), `solved` evolves it from (1−ε)·`SOLID_RHO`·`SOLID_CP` (regenerator, transient only, heat into the gas = heat out of the matrix exactly). `SOLID_T = <T at -z> <T at +z>` starts the matrix linear along z. `MOVES_WITH = <body>` for a regenerator inside the displacer. the sources are compiled at run time (needs a compiler where the solver runs). post: `HEAT_POR-<name>` (W into the gas), `TS_MEAN_POR-<name>`.
+- steel wool in an end space: `RESISTANCE = randomFiber` with `WIRE_DIA` (fibre), `SOLID_MASS` (kg), `SOLID_RHO`, `SOLID_CP`, `SOLID_K`, `MOVES_WITH = mesh`, `HEAT = solved`. the POR box fills the end space and is squashed with the mesh, the fibres stay in their cells (mass kept exactly, also across remeshing). drag and h·a blend metal-felt data (Gedeon-Wood) into single fibres in cross flow for very loose wool, heat also conducts through the wool (`SOLID_K`·φ/3, best case) and radiates (`RADIATION = yes`), and `WALL_CONTACT_PIDS` / `WALL_CONTACT` (0-1, a guess, run it lower and higher) let the hot plate heat the wool directly. no measured data at 95-99 % porosity, so treat the results as an estimate.
+
+### Decomposition and cluster
+two modules: `[GLOBAL_COMPUTE_SETUP]` is per run, `[CLUSTER_ENVIRONMENT]` is per cluster (hidden in `DEFAULT_MODULES` until you take `defaultClusterEnvironment` out of that line).
+
+- `[GLOBAL_COMPUTE_SETUP]`: `NUM_PROCS`, `LOCAL_PROCS`, `NODES`, `NODELIST`, `JOB_NAME` (auto = case dir), `RUN_TIME`, `MOTION_TIME`, `EXPORT`, `POST_CPUS`, `POST_TIME` and the decomposition. `EXCLUSIVE = True` takes whole nodes with all their memory; `False` shares the node (small meshes on a few cores) and asks for `MEM_PER_CPU` per core (blank = the cluster default, which can be small). `CPUS_PER_TASK` (blank = 1) gives each MPI rank that many cores, so fewer ranks spread over the node (e.g. 48 x 4 on a 192-core node puts two ranks per 8-core L3 group; OpenFOAM is memory-bandwidth bound). aim for about 5-15k cells per rank and time ~100 steps of two layouts before a long run.
+- `[CLUSTER_ENVIRONMENT]`: `ACCOUNT`, `MODULES`, `MPI_RUN` (parallel launcher inside a Slurm job, default `srun`; e.g. `/usr/bin/mpirun` where Open MPI can't start under srun), `PARTITION`, `POST_MODULES`, `POST_MEM`, `POST_ENV`, `POST_CONFIG`, `PVBATCH`, `GSHEET`, `COPY_BACK`. blank `ACCOUNT` / `MODULES` / `POST_MEM` drop those lines (in-house clusters).
+
+`DECOMP_METHOD = scotch` by default; on clusters without scotch use `hierarchical` (or `simple`) with `DECOMP = auto` (split chosen for the task count of each run, subdomains close to cubes) or `DECOMP = nx ny nz` (the product must equal `NUM_PROCS`). avoid thin slabs along the stroke, GAMG stalls on them near TDC. the scripts set numberOfSubdomains on every run, so the same case runs on the cluster and locally. inside Slurm jobs the scripts set `UCX_VFS_ENABLE=n`: UCX's file-system thread segfaulted in random MPI launches on the Alliance clusters (the remesh loop starts dozens per cycle).
+
+`runScript` keeps the mesh (`.meshDone`): running it again continues the solve from the latest time. remove `processor*` and `.meshDone` to remesh. the setup writes `system/meshSignature` (meshing dicts, motion zones, geometry as meshed); if a rerun of the setup changes it, `runScript` and `motionCheckScript` stop and ask for a remesh instead of using a mesh that no longer matches (e.g. a new MOVE body without its motion zone).
+
+`submitScript` submits `runScript` and then `postScript` (afterok). `--noPost` skips the post job, `--post` submits only `postScript`, `--check` does the mesh motion dry run. the post job uses `POST_MODULES` (needs python3 + numpy, pvbatch and ffmpeg), `POST_CPUS`, `POST_MEM`, `POST_TIME`, `PVBATCH`. run the setup again on whichever cluster the case runs on: the scripts hold absolute paths to this repo, and a different `NUM_PROCS` needs a remesh.
+
+### Post-processing
+`postScript` (Slurm job or `./postScript`) runs the summary, the gsheet push (`GSHEET = True`), the images, the videos and the Drive copy-back (`COPY_BACK = True`); a failed step is logged and the rest still run. by hand:
+
+```bash
+python3 /path/to/caseSetup/postUtilities/postInternal.py [cases ...] [--avgCycles N] [--gsheet]
+python3 /path/to/caseSetup/postUtilities/gsheetInternal.py [cases ...] [--comment "text"] [--dryRun]
+pvbatch --force-offscreen-rendering /path/to/caseSetup/postUtilities/pvPostInternal.py [--every N] [--lastCycles N] [--panels slice,surface,volume,clip]
+python3 /path/to/caseSetup/postUtilities/imagesToMovies.py [--fps N]
+```
+
+images are set up like pvPost: `pvPostInternalSetup` in the case (copied there by the setup, kept if it exists) lists the slices (`NAMES`, `NORMALS`, `ORIGINS` = center | loc | x,y,z, `FOLLOW` = a body so a z slice moves with the displacer), the surface patches and views, the variables and `[MOVIES] FPS`. `[VOLUME]` draws volume renderings (the gas resampled to a regular grid of `RESAMPLE` points along the longest side, opacity from `OPACITY` / `OPACITY_RAMP`, moving bodies as translucent context, box outline only with `OUTLINE True`) and `[CLIP]` clipped half volumes (`NORMALS` like `-Y` point at the removed half and the camera); `VOLUME_IMG` / `CLIP_IMG` switch them. variables (equation, label, range auto | symmetric | [min, max], colour map) are in `postUtilities/default/defaultInternalVariables`; ranges are fixed over the run. output: `postProcessing/images/<panel>/` (one png per written time) and `postProcessing/movies/<case>_<panel>.mp4`. pvbatch renders on one core, a fine mesh with every panel type can take hours: use `--panels` or `--every` if `POST_TIME` is tight.
+
+`summary.csv`, `pV.png` (last cycles overlaid, compressible) and `cycleConvergence.png` (work per body, mean gas T, mass drift, heat per BC group and crank speed per cycle) in the case folder: run info and times, cycles done, work per body and `AVG_ENERGY`/`AVG_POWER` over the last N cycles, gas p/T/rho, face pressures, and for compressible runs mass drift, p-V work and heat per BC group; for the crank drive also speed, load and generator power. `gsheetInternal.py` pushes the summary to the database sheet, one row per run found by JOB + NAME (the folder above `CASES/` and the case folder; `CASENAME` is not used). settings: `~/.config/caseSetup/gsheet.ini`
+
+```ini
+[gsheet]
+sheetID = <sheet id, or the sheet URL>
+worksheet =
+credentials = ~/.config/caseSetup/internal_cfd_credentials.json
+```
+
+or `INTERNAL_GSHEET_*`. keep the service account key out of git. the gsheet and Drive steps run in their own shell with `POST_ENV` activated (a venv with `gspread`, `google-auth`, `google-api-python-client`, e.g. `~/gdrive_env`) and `POST_CONFIG` as the settings folder (blank = `~/.config/caseSetup`; it has to be on a disk the compute nodes see). clusters whose compute nodes have no internet (e.g. Rorqual): set `GSHEET = False` and `COPY_BACK = False` and push from the login node, both scripts take several cases at once.
+
+### Copy back to Google Drive
+`postUtilities/copyBackInternal.py [cases ...] [--dryRun] [--noImages]` uploads the run data to `<folder>/<JOB>/<case>/` on Google Drive, keeping the case's sub-paths: logs and Slurm `.out` files, `internalSetup`, `fullCaseSetupDict`, `pvPostInternalSetup`, `summary.csv` and plots, every `postProcessing/**/*.dat`, the images and the videos. only new or changed files are uploaded (md5 against Drive), so rerunning it is cheap. it is the last step of `postScript` (`COPY_BACK = True` in `[CLUSTER_ENVIRONMENT]`). settings: `~/.config/caseSetup/drive.ini`
+
+```ini
+[drive]
+folderID = <folder id, or the folder URL>
+credentials = ~/.config/caseSetup/internal_cfd_credentials.json
+```
+
+or `INTERNAL_DRIVE_FOLDER` / `INTERNAL_DRIVE_CREDENTIALS`, or `--config` / `--folderId`. the folder has to be on a Shared Drive (service accounts have no storage of their own) and shared with the service account as Content manager. needs `google-api-python-client` and `google-auth`.
+
+### Demo cases
+`internalDemoCase/CASES/staticDemo` (heated/cooled box, no motion) and `internalDemoCase/CASES/motionDemo` (displacer with a dwell profile and side gap, plus a piston crown). run `internalSetup.py` in either, then `./runScript`.
 
 ### Not available yet
+dedicated regenerator outlets and sample surfaces (`REGN`, `SMP`; the regenerator itself works as a `POR` zone), conjugate heat transfer in the heater/cooler walls, `--continue` (extend a finished run by N cycles), `TURB_MODEL = kOmegaSSTIDDES` (hybrid RANS-LES), motion along axes other than z, alpha engines (cylinders side by side with different motions).
 
-regenerator (`REGN`), sample surfaces (`SMP`), heater/cooler zones, `--continue`, p-V and cycle-convergence plots, motion along axes other than z.
+---
 
 ## Directory Structure
 
@@ -473,6 +812,7 @@ caseSetup-dev/
 │   │   ├── defaultRefinements/     # Mesh refinement definitions
 │   │   └── defaultSetup/           # Ride-height & general config
 │   ├── internal/                   # internalSetup templates (defaultSetup, defaultBCTemplates, defaultDicts, defaultCluster)
+│   ├── internal-relaxed/           # same with looser p/U/e tolerances (tests only, mass drifts ~1 % over 20 cycles)
 │   └── otr/                        # Optimal Test Run setup variant
 │       ├── defaultANSA/
 │       ├── defaultBCTemplates/
@@ -488,12 +828,15 @@ caseSetup-dev/
 │   ├── models/                     # Turbulence model templates
 │   └── solvers/                    # Solver-specific templates (simpleFoam, pimpleFoam, etc.)
 │
-├── foamLibs/stirlingMotion/        # crankDisplacementInterpolation motion solver (crank drive)
+├── foamLibs/                       # OpenFOAM code compiled by the run scripts (wmake)
+│   ├── stirlingMotion/             # crank drive motion solver, slidingWallVelocity BC
+│   └── remeshMassFix/              # gas mass after a remesh map, cover fill, warm start
 ├── internalDemoCase/               # staticDemo and motionDemo internal cases
 │
 ├── meshUtilities/                  # Mesh generation & analysis tools
 │   ├── reorderFaceZones.py         # puts the motion zones first (v2412 zone-order bug)
 │   ├── decompCoeffs.py             # hierarchical/simple split for the run's task count
+│   ├── remeshRun.py                # remesh loop: next segment, map, graft the new mesh
 │   ├── ansaMesh.py                 # ANSA mesh import/export utilities
 │   ├── fidelityMesh.py             # Fidelity mesh integration
 │   └── _obsolete/                  # Legacy mesh scripts
@@ -501,7 +844,8 @@ caseSetup-dev/
 ├── postUtilities/                  # Post-processing & results analysis
 │   ├── pvPost.py                   # ParaView automation & field extraction
 │   ├── postInternal.py             # internal case summary (work, power, heat, crank speed)
-│   ├── gsheetInternal.py            # pushes internal summaries to the database sheet
+│   ├── gsheetInternal.py           # pushes internal summaries to the database sheet
+│   ├── copyBackInternal.py         # copies internal run data back to Google Drive
 │   ├── pvPostInternal.py           # internal case images (pvbatch, pvPostInternalSetup)
 │   ├── imagesToMovies.py           # one mp4 per image panel (ffmpeg)
 │   ├── postRun.py                  # Post-run analysis orchestration
@@ -696,256 +1040,6 @@ per-corner sections `[SUSP_FL]`, `[SUSP_FR]`, `[SUSP_RL]`, `[SUSP_RR]`:
 
 ---
 
-## Setup & Configuration
-
-### Case Directory Structure
-
-```
-CASES/
-└── 001/
-    ├── caseSetup                      # Configuration file (INI format)
-    ├── constant/
-    │   ├── triSurface/               # Geometry files (OBJ/STL)
-    │   ├── transportProperties
-    │   ├── turbulenceProperties
-    │   └── ...
-    ├── system/
-    │   ├── blockMeshDict
-    │   ├── snappyHexMeshDict
-    │   ├── controlDict
-    │   ├── fvSchemes
-    │   ├── fvSolution
-    │   └── ...
-    ├── 0/                            # Initial conditions (created after mesh)
-    └── postProcessing/               # (Generated after solver run)
-```
-
-
-
-### Ride-Height Input CSV
-
-```csv
-point,fl,fr,rl,rr,yaw,steer
-1,0.05,0.05,0.02,0.02,0.0,0
-2,0.10,0.10,0.05,0.05,0.0,5
-3,-0.05,-0.05,-0.02,-0.02,0.0,0
-```
-
-Where:
-- `fl, fr, rl, rr` = wheel vertical displacements (meters or mm depending on `RH_UNIT`)
-- `yaw` = vehicle yaw angle (degrees, 0 for straight)
-- `steer` = optional front road-wheel steer angle in degrees at the reference (front-left) wheel. the kinematic solver finds the rack travel that gives this angle at the front-left, then applies the same rack to the front-right so the Ackermann difference falls out on its own. the tie-rod inner joint slides along the rack axis (`RACK_AXIS` in the hardpoint file, default lateral `0 1 0`) and the tie-rod length is kept. leave blank or `0` for no steer. rear wheels aren't steered.
-
----
-
-## Per-Component Transform System
-
-### How It Works
-
-ride-height point (corner displacements + yaw) goes in, the kinematic solver works out the wheel position, rotation, rocker angle and damper stroke, then for each component it builds a transform (translation, rotation axis-angle in radians, pivot). those get applied to the matching PIDs in the OBJ/STL, and out comes geometry that follows the suspension motion.
-
-### Component Transform Details
-
-| Component | Translation | Rotation | Pivot |
-|-----------|-------------|----------|-------|
-| **WHEEL** | Wheel center displacement from solver | Rotation vector from solver (camber/toe) | Static wheel center |
-| **UCA** | Outer point moves with wheel | Computed from linkage geometry change | Midpoint of chassis mounts |
-| **LCA** | Outer point moves with wheel | Computed from linkage geometry change | Midpoint of chassis mounts |
-| **ROCKER** | Zero (rotates in place) | Rocker angle × rocker axis | Rocker pivot |
-| **PUSHROD** | Inherits from rocker | Inherits from rocker | Rocker pivot |
-| **DAMPER** | Inherits from rocker | Inherits from rocker | Rocker pivot |
-| **TIE** | Follows wheel translation | Computed from linkage geometry change | TIE_INNER (chassis mount) |
-
-### Rotation Computation (UCA/LCA/TIE)
-
-rigid-body fit off the linkage vectors:
-1. static linkage vector: chassis mount to wheel attachment in the static config
-2. current linkage vector: same thing after the wheel has moved
-3. rotation axis: cross product of the normalised vectors (perpendicular to both)
-4. rotation angle: arccos of the dot product
-5. rotation vector: `axis x angle` (axis-angle, radians)
-
-that way the arms swing the way they actually would while keeping the pivot distances fixed.
-
----
-
-## Cornering (SRF) Simulation
-
-cornering solves the whole domain in a single rotating frame (SRF) spinning at `omega` about a vertical axis through the corner centre, so the car follows a steady circle of radius `CORNER_RADIUS` at `INLET_MAG`:
-
-```
-|omega| = INLET_MAG / CORNER_RADIUS    (rad/s)
-```
-
-set `RUN_CORNERING = True` and the case reconfigures itself:
-
-- **solver**: the SRF solver (steady `SRFSimpleFoam`, transient auto-upgrades to `SRFPimpleFoam`). it solves the relative velocity `Urel`.
-- **BCs**: the x/y outer walls become `srfFreestream`, the ground becomes an SRF moving wall, the roof stays slip. the inertial freestream `UInf` is zero - all the wind comes from the rotation.
-- **per-wheel rolling speed**: each wheel rolls at `V_local = |omega| * (distance from the corner axis to the wheel centre)`, so inner wheels spin slower and outer wheels faster than `INLET_MAG`.
-- **symmetry**: the flow isn't laterally symmetric, so `SIM_SYM = half` gets forced to `full`.
-- **post**: anything that would read `UMean` switches to `UrelMean` (the rotating-frame average).
-- **domain check**: the box only looks like a curved tunnel when it's narrow next to the radius, so it requires `CORNER_RADIUS >= CORNER_CLEARANCE_FACTOR * (DOMAIN_SIZE_y / 2)` and bails with the min radius otherwise.
-
-### Configuration
-
-edit the `[CORNERING_SETUP]` block in `caseSetup`:
-
-```ini
-[CORNERING_SETUP]
-RUN_CORNERING = False           # master switch
-CORNER_RADIUS =                 # turn radius of REFCOR (m); required when enabled
-CORNER_DIR = left               # turn direction: left | right
-CORNER_CENTER = default         # rotation centre 'x y z', or 'default' to derive from REFCOR
-CORNER_CLEARANCE_FACTOR = 3     # min radius = factor * (DOMAIN_SIZE_y / 2)
-CORNER_SOLVER = SRFSimpleFoam   # SRF solver app
-```
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `RUN_CORNERING` | `False` | master switch, `True` solves the case as an SRF cornering frame |
-| `CORNER_RADIUS` | (empty) | path radius of REFCOR in metres. needed when cornering is on (or supply a per-point `corner_radius` CSV column) |
-| `CORNER_DIR` | `left` | turn direction. `left` puts the centre on the car's left (-y), `right` on the right (+y) |
-| `CORNER_CENTER` | `default` | explicit centre as three floats `x y z`, or `default` to derive it from REFCOR with a `+/- CORNER_RADIUS` offset in y |
-| `CORNER_CLEARANCE_FACTOR` | `3` | sets the min radius relative to the domain half-width, keeps the box-vs-annulus approximation honest |
-| `CORNER_SOLVER` | `SRFSimpleFoam` | SRF solver app. steady uses `SRFSimpleFoam`, transient auto-upgrades to `SRFPimpleFoam` |
-
-### Cornering With Ride-Height Studies
-
-with both `RUN_CORNERING` and `RUN_RIDE_HEIGHT` on, the ride-height CSV can drive the corner per point with two optional columns:
-
-```csv
-point,fl,fr,rl,rr,yaw,steer,corner_radius,corner_dir
-1,0.05,0.05,0.02,0.02,0.0,8,30,left
-2,0.10,0.10,0.05,0.05,0.0,-6,45,right
-```
-
-- `corner_radius` - per-point radius (m), overrides the base `CORNER_RADIUS` for that child case. bad/missing values fall back to the base.
-- `corner_dir` - per-point `left`/`right`, overrides the base `CORNER_DIR`. bad/missing values fall back to the base.
-
-every child case re-runs the domain check, so an out-of-range per-point radius fails fast.
-
----
-
-## Usage Workflow
-
-### Step 1: Create New Case
-
-```bash
-cd CASES/001
-python ../caseSetup.py --new
-# edit the caseSetup file with your parameters
-```
-
-### Step 2: Enable Kinematic Solver (Optional)
-
-edit `caseSetup` and set up the `[RIDE_HEIGHT_SETUP]` block:
-```ini
-[RIDE_HEIGHT_SETUP]
-RUN_RIDE_HEIGHT = True              # master switch for ride-height study
-RIDE_HEIGHT_FILE = rideHeightConfig # CSV of ride-height points
-RUN_RH_POINTS = 1 2 3 4 5           # subset of point indices to build
-USE_DEPEND = True
-RH_UNIT = mm                        # unit of corner displacements (mm | m)
-INIT_RH =
-RH_REF_WIDTH =
-RH_REF_LEN =
-USE_KINEMATIC_SOLVER = True         # enable double-wishbone + pushrod solver
-HARDPOINT_FILE = /path/to/suspensionHardpoints_template.cfg
-HARDPOINT_SCALE = 0.001             # 0.001 if hardpoints in mm, 1.0 if in m
-SUSP_REQUIRE_ALL_PIDS_MATCHED = False
-```
-
-| Key | Description |
-|-----|-------------|
-| `RUN_RIDE_HEIGHT` | master switch, `True` builds one child case per ride-height point |
-| `RIDE_HEIGHT_FILE` | name/path of the ride-height CSV |
-| `RUN_RH_POINTS` | space-separated list of point indices (from the CSV) to build |
-| `USE_DEPEND` | how `executeAll.sh` submits the child cases: `True` runs them one at a time (each child starts once the previous child's export finishes), `False` submits them all at once |
-| `RH_UNIT` | unit of the corner displacements in the CSV (`mm` or `m`) |
-| `INIT_RH` | optional initial/reference ride-height offset, not operational at this moment |
-| `RH_REF_WIDTH`, `RH_REF_LEN` | optional reference track width / wheelbase, not operational at this moment |
-| `USE_KINEMATIC_SOLVER` | turn on the per-component kinematic deform (otherwise just a vertical wheel shift) |
-| `HARDPOINT_FILE` | path to the suspension hardpoint CFG (needed if the solver's on) |
-| `HARDPOINT_SCALE` | coordinate-to-metre multiplier (`0.001` for mm, `1.0` for m) |
-| `SUSP_REQUIRE_ALL_PIDS_MATCHED` | `True` errors on any unmatched part, `False` leaves it alone with a warning |
-
-prep the hardpoint file (copy the template and update the coordinates):
-```bash
-cp rideHeightUtils/suspensionHardpoints_template.cfg /path/to/suspensionHardpoints.cfg
-# edit the suspension coordinates in the CFG
-```
-
-add the PID keywords to the geometry (any key with `PID` in the hardpoint CFG sections):
-```ini
-[SUSP_FL]
-...
-FL_WHEEL_PID = flwheel
-FL_UCA_PID = fluca
-FL_LCA_PID = fllca
-FL_ROCKER_PID = flrocker
-FL_PUSHROD_PID = flprod
-FL_DAMPER_PID = fldamper
-FL_TIE_PID = fltie
-...
-```
-the keyword has to be a substring of the actual part/group name in the OBJ/STL (e.g. `fllca` matches a part named `body_susp_fllca`).
-
-### Step 3: Setup Case
-
-```bash
-# standard mesh + BC setup. if RUN_RIDE_HEIGHT = True this
-# builds the per-point child cases for you.
-python ../caseSetup.py
-```
-
-> **Note:** `--rideHeightMode` is an internal flag caseSetup passes to itself when it re-runs inside each child case. don't pass it yourself, just set `RUN_RIDE_HEIGHT = True` and run caseSetup normally.
-
-### Step 4: Process Ride-Height Points
-
-if ride-height mode is on, you get one child case per point:
-```
-001_1/     # ride-height point 1
-001_2/     # ride-height point 2
-...
-```
-
-each child case has:
-- the geometry deformed to follow the suspension
-- domain pitch/roll/heave updated
-- its own caseSetup with the point's parameters
-
-### Step 5: Run Solver
-
-```bash
-cd 001_1/
-blockMesh
-snappyHexMesh
-# run the solver (OpenFOAM command or cluster submission)
-# or run the generated bash scripts in order: meshScript, solveScript, exportScript
-# (postScript is called by exportScript when it's done)
-```
-
-for a ride-height study, run every child case at once from the parent case:
-```bash
-cd 001/
-./executeAll.sh
-```
-- **SLURM scripts:** each child's mesh, solve and export are chained with `sbatch --dependency`. With `USE_DEPEND = True` the children run one after another (child N starts once child N-1's export is done, whether or not it succeeded), which keeps the queue open for other jobs. With `USE_DEPEND = False` all children are submitted at once. If a step fails, the rest of that child is cancelled.
-- **plain bash scripts (no `#SBATCH` headers):** the children are run one after another with bash.
-
-### Step 6: Post-Process Results
-
-```bash
-python ../postUtilities/postRun.py
-# gives you:
-# - force convergence plots
-# - pressure/velocity field plots
-# - summary stats
-# - powerpoint report (optional)
-```
-
----
-
 ## Compilation
 
 PyInstaller builds a standalone executable (handy for deployment):
@@ -955,55 +1049,6 @@ bash compileFiles.sh
 ```
 
 you get `dist/caseSetup` with all the templates and utilities bundled in.
-
----
-
-## Additional Features
-
-### Multi-Point Ride-Height Mapping
-
-one case per ride-height point (e.g. accel, braking, cornering):
-
-```csv
-point,fl,fr,rl,rr,yaw
-1,0.05,0.02,-0.02,-0.05,0.0      # accel
-2,-0.02,-0.05,0.05,0.02,0.0      # braking
-3,0.00,-0.08,0.08,0.00,5.0       # yaw + roll
-```
-
-run with `--rideHeightMode` (only caseSetup itself should pass this!):
-```bash
-python caseSetup.py --rideHeightMode
-```
-
-builds a child case per point with the suspension geometry already deformed.
-
-### Mesh Fidelity Control
-
-refinement regions live in `defaultRefinements/`:
-- surface layers
-- local refinement zones
-- boundary layer y+
-
-### Custom Turbulence Models
-
-drop new models in `zeroTemplates/models/`. already there:
-- k-omega SST
-- Spalart-Allmaras (SA)
-- k-epsilon (standard)
-
-### Cluster Submission
-
-auto-generate the SLURM/PBS scripts:
-```bash
-# edit the defaultCluster/clusterDict templates with your HPC settings.
-# the default setup template just outputs plain bash scripts.
-python caseSetup.py 
-# generates: meshScript, solveScript, exportScript, postScript
-# in setupTemplates/default/defaultCluster/slurm/clusterDict you need to:
-#  - point solveScript at the zeroTemplates dir (in this repo)
-#  - point postScript at the ParaView pvbatch command
-```
 
 ---
 
@@ -1047,17 +1092,11 @@ python caseSetup.py
 
 ---
 
-## License & Attribution
-
-built on OpenFOAM and community work. see the individual module headers for specific acknowledgments.
-
----
-
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
-| **5.0.0** | 2026 | internalSetup for internal flows / Stirling engines: moving mesh, crank drive + generator load, postInternal summary, hierarchical decomposition |
+| **5.0.0** | 2026 | internalSetup for internal flows / Stirling engines: moving mesh, remeshing with mass fix, crank drive + generator load, porous regenerator and steel wool with solid heat, through-flow and fans, postInternal summary, images/volume renders/videos, gsheet and Drive copy-back, cluster layout options |
 | 4.2.2 | 2026 | cornering (SRF): rotating-frame solver/BC/field setup, kinematic ride height solver, ride height mapping|
 | 4.1.1 | 2025 | updates to postProcessing and ANSA mesh integration |
 | 4.0 | 2024 | complete re-write with multi-setup template framework |
@@ -1067,7 +1106,12 @@ built on OpenFOAM and community work. see the individual module headers for spec
 
 ---
 
+## License & Attribution
+
+built on OpenFOAM and community work. see the individual module headers for specific acknowledgments.
+
+---
+
 ## Support & Contact
 
 for issues, questions or contributions, check the docs or ping the maintainers.
-
