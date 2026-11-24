@@ -118,18 +118,8 @@ The `GEOM` columns are as follows:
 
 NOTE: the `ROTA` prefix is to specify that part will get a rotating wall boundary condition, more information in the `documentation/source/caseSetupTUG.pdf`!
 
-### Standalone GUI authoring
-
-If you want a separate GUI for authoring `caseSetup` files without modifying the main pipeline, launch:
-
-```bash
-python /path/to/caseSetupGui.py --case-dir /path/to/project/CASES/001 --template default
-```
-
-The GUI is standalone: it reads template defaults from `setupTemplates`, writes an explicit `caseSetup` file in the selected case folder, and can optionally run the existing `caseSetup.py -s <template>` flow as a subprocess. Geometry file pickers store the geometry file name only, matching the existing `caseSetup` format. Geometry prefixes such as `ROTA-`, `POR-`, `FAN-`, `REFX-`, `GEOMX-`, `MRFG-`, `IDOM-`, and `GRND-` create their matching addon sections automatically.
-
 5. When all geometry is setup and your `BC_SETUP` is all done, run `caseSetup.py` to finish setting up the case.
-6. Use the `meshingScript`, `solveScript`, `exportScript` to execute each part of the case. 
+6. Submit `meshingScript`, `solveScript` and `exportScript` by hand, in that order, each once the previous one has finished. `exportScript` submits `postScript` itself when it is done.
     
     NOTE: make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` path in this repo in `setupTemplates/default/defaultCluster/slurm/clusterDict`. Likewise replace `/path/to/bin/pvbatch` with the path to your local Paraview `pvbatch` installation, and `/path/to/postUtilities/` with the path to this local repo.
 
@@ -139,7 +129,7 @@ For more information about the options and settings, refer to the `documentation
 
 ## Demo Cases
 
-A motorbike demo case has been provided in the `motorbikeDemoCase` directory. Copy that file to a desired location and execute `caseSetup.py` in either the `baseDemo` or `cornerDemo` directories. Run the scripts in order of `meshingScript`, `solveScript`, `exportScript`. 
+A motorbike demo case has been provided in the `motorbikeDemoCase` directory. Copy that file to a desired location and execute `caseSetup.py` in either the `baseDemo` or `cornerDemo` directories. Submit the scripts by hand in the order `meshingScript`, `solveScript`, `exportScript` (`exportScript` submits `postScript`). 
 
 NOTE: Make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` path in this repo in `setupTemplates/default/defaultCluster/slurm/clusterDict`. Likewise replace `/path/to/bin/pvbatch` with the path to your local Paraview `pvbatch` installation, and `/path/to/postUtilities/` with the path to this local repo. An example `clusterDict` has been provided in `setupTemplates/default-local`
 
@@ -155,7 +145,7 @@ NOTE: Make sure to replace `/path/to/zeroTemplates` with the `zeroTemplates` pat
 
 ```bash
 cd CASES/001
-python ../caseSetup.py --new
+python /path/to/caseSetup.py --new
 # edit the caseSetup file with your parameters
 ```
 
@@ -211,17 +201,23 @@ FL_DAMPER_PID = fldamper
 FL_TIE_PID = fltie
 ...
 ```
-the keyword has to be a substring of the actual part/group name in the OBJ/STL (e.g. `fllca` matches a part named `body_susp_fllca`).
+the key name decides which transform a part gets (`FL_LCA_PID` = front-left lower wishbone), the value is a keyword that has to be a substring of the actual part/group name in the OBJ/STL, case-sensitive (e.g. `fllca` matches a part named `body_susp_fllca`). see [suspensionHardpoints_template.cfg](#suspensionhardpoints_templatecfg) for the components and for more than one part per component.
+
+check the motion before meshing anything:
+```bash
+python /path/to/caseSetup.py --animateSuspension
+```
+it links the geometry and writes `suspensionAnimation.gif` (front/side/top views over the ride-height map) in the case, then stops without setting up the rest.
 
 ### Step 3: Setup Case
 
 ```bash
 # standard mesh + BC setup. if RUN_RIDE_HEIGHT = True this
 # builds the per-point child cases for you.
-python ../caseSetup.py
+python /path/to/caseSetup.py
 ```
 
-> **Note:** `--rideHeightMode` is an internal flag caseSetup passes to itself when it re-runs inside each child case. don't pass it yourself, just set `RUN_RIDE_HEIGHT = True` and run caseSetup normally.
+> **Note:** `--rideHeightMode` is what caseSetup passes to itself when it sets up each child case. it skips the ride height mapping module and doesn't relink the geometries, so it's also handy for debugging one child case. for a study don't pass it, just set `RUN_RIDE_HEIGHT = True` and run caseSetup normally.
 
 ### Step 4: Process Ride-Height Points
 
@@ -239,13 +235,12 @@ each child case has:
 
 ### Step 5: Run Solver
 
+submit the three scripts by hand, in order, each once the previous one has finished:
 ```bash
 cd 001_1/
-blockMesh
-snappyHexMesh
-# run the solver (OpenFOAM command or cluster submission)
-# or run the generated bash scripts in order: meshScript, solveScript, exportScript
-# (postScript is called by exportScript when it's done)
+sbatch meshingScript      # ./meshingScript if the template writes plain bash scripts
+sbatch solveScript
+sbatch exportScript       # submits postScript itself when it's done
 ```
 
 for a ride-height study, run every child case at once from the parent case:
@@ -259,7 +254,7 @@ cd 001/
 ### Step 6: Post-Process Results
 
 ```bash
-python ../postUtilities/postRun.py
+python /path/to/caseSetup/postUtilities/postRun.py
 # gives you:
 # - force convergence plots
 # - pressure/velocity field plots
@@ -324,12 +319,12 @@ point,fl,fr,rl,rr,yaw
 3,0.00,-0.08,0.08,0.00,5.0       # yaw + roll
 ```
 
-run with `--rideHeightMode` (only caseSetup itself should pass this!):
+set `RUN_RIDE_HEIGHT = True` in `[RIDE_HEIGHT_SETUP]` and run caseSetup as normal:
 ```bash
-python caseSetup.py --rideHeightMode
+python /path/to/caseSetup.py
 ```
 
-builds a child case per point with the suspension geometry already deformed.
+builds a child case per point with the suspension geometry already deformed, plus `executeAll.sh` to submit them all (see step 5). to pick which ride-height points to run from a vehicle-dynamics export, `preUtilities/rideHeightPointGenerator.py` chooses the runs (`design`, `sweeps`) and builds the maps from the results (`table`), the steps are in the header of the script.
 
 ### Mesh Fidelity Control
 
@@ -338,25 +333,29 @@ refinement regions live in `defaultRefinements/`:
 - local refinement zones
 - boundary layer y+
 
-### Custom Turbulence Models
+### Turbulence Models
 
-drop new models in `zeroTemplates/models/`. already there:
-- k-omega SST
-- Spalart-Allmaras (SA)
-- k-epsilon (standard)
+`TURB_MODEL` in `[GLOBAL_SIM_CONTROL]`, depends on `SIM_TYPE`:
+
+| `SIM_TYPE` | `TURB_MODEL` | OpenFOAM model |
+|------------|--------------|----------------|
+| `steady` (RAS) | `kosst` | `kOmegaSST` |
+| | `sa` | `SpalartAllmaras` |
+| | `geko` | `GEKO` |
+| `transient` (hybrid RANS-LES) | `kosst` | `kOmegaSSTIDDES` |
+| | `sa` | `SpalartAllmarasIDDES` |
+
+internalSetup (`[GLOBAL_SIM_CONTROL] TURB_MODEL`): `laminar` (default), `kOmegaSST` (or `kosst`), `kEpsilon`, `kOmega`, all transient (URANS with rhoPimpleFoam / pimpleFoam) or steady with the steady solvers.
+
+the field templates for `createZeroDirectory` are in `zeroTemplates/models/turbulence`: `GEKO`, `SpalartAllmaras`, `SpalartAllmarasDDES`, `SpalartAllmarasIDDES`, `kEpsilon`, `kOmega`, `kOmegaSST`, `kOmegaSSTIDDES`, `laminar`. a new model needs its template there and its name in the model table (`writeSystem.py` for aero, `getTurbulence` in `writeInternal.py` for internal).
 
 ### Cluster Submission
 
-auto-generate the SLURM/PBS scripts:
-```bash
-# edit the defaultCluster/clusterDict templates with your HPC settings.
-# the default setup template just outputs plain bash scripts.
-python caseSetup.py 
-# generates: meshScript, solveScript, exportScript, postScript
-# in setupTemplates/default/defaultCluster/slurm/clusterDict you need to:
-#  - point solveScript at the zeroTemplates dir (in this repo)
-#  - point postScript at the ParaView pvbatch command
-```
+caseSetup writes `meshingScript`, `solveScript`, `exportScript` and `postScript` (and `postMeshScript` if the template has a `postMesh` section) from the selected template's `defaultCluster/slurm/clusterDict`. the template decides the format: Slurm job scripts with `#SBATCH` headers (`local`, `local2606`, `otr`, `otr2606`) or plain bash scripts (`default` and its variants). Slurm only, there's no PBS/SGE.
+
+submit `meshingScript`, `solveScript` and `exportScript` by hand, in that order; `exportScript` submits `postScript` when it finishes. a ride-height study chains all of it for every child case with `executeAll.sh`. in the template's clusterDict you need to:
+- point the solve section at the `zeroTemplates` dir in this repo
+- point the post section at your ParaView `pvbatch` and at `postUtilities/` in this repo
 
 ### Fan pressure-jump condition
 The `FAN` geometry prefix adds an ESI OpenFOAM `fan` pressure-jump condition for a planar fan disk. This is useful for modelling a fan in front of a radiator without resolving the blades. Use a separate `POR` geometry for the radiator porous region if a radiator pressure drop is also required. The FAN disk must be a single, approximately planar circular ASCII OBJ/STL surface and is currently supported through the snappyHexMesh path.
@@ -803,7 +802,7 @@ caseSetup-dev/
 ├── README.md                       # This file
 │
 ├── setupTemplates/                 # Case setup templates
-│   ├── default/                    # Standard automotive aerodynamics setup
+│   ├── default/                    # Standard automotive aerodynamics setup (plain bash scripts)
 │   │   ├── defaultANSA/            # ANSA mesh configuration
 │   │   ├── defaultBCTemplates/     # Boundary condition templates
 │   │   ├── defaultCluster/         # Cluster/HPC submission configs
@@ -811,9 +810,16 @@ caseSetup-dev/
 │   │   ├── defaultPost/            # Post-processing setup
 │   │   ├── defaultRefinements/     # Mesh refinement definitions
 │   │   └── defaultSetup/           # Ride-height & general config
+│   ├── default-fast/               # quick-test variants of default
+│   ├── default-fast-linear/
+│   ├── default-local/              # plain bash example with local paths (demo case)
+│   ├── f1-2026/                    # F1 2026 setup
 │   ├── internal/                   # internalSetup templates (defaultSetup, defaultBCTemplates, defaultDicts, defaultCluster)
 │   ├── internal-relaxed/           # same with looser p/U/e tolerances (tests only, mass drifts ~1 % over 20 cycles)
-│   └── otr/                        # Optimal Test Run setup variant
+│   ├── local/                      # Slurm scripts, of2206
+│   ├── local2606/                  # Slurm scripts, of2606
+│   ├── otr2606/                    # Ontario Tech Racing setup, of2606
+│   └── otr/                        # Ontario Tech Racing setup, of2206
 │       ├── defaultANSA/
 │       ├── defaultBCTemplates/
 │       ├── defaultCluster/
@@ -839,6 +845,7 @@ caseSetup-dev/
 │   ├── remeshRun.py                # remesh loop: next segment, map, graft the new mesh
 │   ├── ansaMesh.py                 # ANSA mesh import/export utilities
 │   ├── fidelityMesh.py             # Fidelity mesh integration
+│   ├── getStats.py                 # mesh quality metrics
 │   └── _obsolete/                  # Legacy mesh scripts
 │
 ├── postUtilities/                  # Post-processing & results analysis
@@ -858,27 +865,30 @@ caseSetup-dev/
 │   ├── gsheetExport.py             # Google Sheets export
 │   ├── estimateStatisticalError.py # Uncertainty quantification
 │   ├── changeCoeff.py              # Force coefficient post-processing
+│   ├── forceBinPlot.py             # Force bin plots
+│   ├── binPlotForces_v2_0.py       # Force bin plots (v2)
+│   ├── archiveData.py              # Archives finished cases
+│   ├── removePostPro.py            # Removes post-processing output
 │   ├── postProReportGen.py         # Report generation orchestrator
 │   ├── postProReportTemplate/      # LaTeX report templates
 │   ├── pptGeneration/              # PowerPoint templates
 │   ├── default/                    # Default config & setup files
-│   └── _obsolete/                  # Legacy post-processing scripts
+│   └── _obsolete*.py               # Legacy post-processing scripts
 │
 ├── preUtilities/                   # Pre-processing utilities
 │   ├── archiveCase.py              # Case archival/backup utilities
-│   └── copyTrial.py                # Trial case copying/cloning
+│   ├── copyTrial.py                # Trial case copying/cloning
+│   └── rideHeightPointGenerator.py # picks the ride-height runs from a vehicle-dynamics export, builds the maps
 │
 ├── rideHeightUtils/                # **Suspension Kinematics System**
 │   ├── doubleWishbonePushrodKinematics.py  # Core kinematic solver
 │   ├── suspensionHardpoints_template.cfg   # Hardpoint geometry template
 │   ├── suspensionHardpoints_template.json  # JSON format alternative
 │   ├── rideHeightConfig                    # Ride-height configuration
-│   └── rideHeightMorph.py                  # Suspension morphing utilities
+│   └── suspensionAnimator.py               # suspension motion GIF (--animateSuspension)
 │
-├── documentation/                  # Project documentation
-│   └── source/                     # LaTeX/technical documentation
-│
-└── addTemplates/                   # (Not shown) Additional custom templates
+└── documentation/                  # Project documentation
+    └── source/                     # LaTeX/technical documentation
 ```
 
 ---
@@ -898,9 +908,13 @@ python caseSetup.py
 python caseSetup.py --new
 
 # Ride-height study: set RUN_RIDE_HEIGHT = True in caseSetup, then run normally.
-# caseSetup builds the child cases and re-invokes itself with --rideHeightMode
-# internally (do not pass --rideHeightMode yourself). I mean you could if you want to re-set up the child case, it just ignores the ride height mapping module and skips linking the geometries, prevents infinite loops...
+# caseSetup builds the child cases and re-runs itself in each one with --rideHeightMode.
+# --rideHeightMode on its own is for debugging a child case: it skips the ride height
+# mapping module and doesn't relink the geometries (which also stops it looping).
 python caseSetup.py
+
+# Suspension motion GIF over the ride-height map (links the geometry, skips the rest)
+python caseSetup.py --animateSuspension
 
 # Options:
 #  -s, --setup            Setup template type (default: 'default')
@@ -908,7 +922,8 @@ python caseSetup.py
 #  --new                  Create new caseSetup file
 #  --modules              Show available modules
 #  --postProDict          Copy post-processing config
-#  --rideHeightMode       INTERNAL ONLY (used by caseSetup when re-running child cases)
+#  --rideHeightMode       ride-height tool and debugging only (sets up one child case)
+#  --animateSuspension    suspension motion GIF (needs USE_KINEMATIC_SOLVER = True)
 ```
 
 ### Creating a custom setup template from an existing template
@@ -957,7 +972,6 @@ main functions:
 - `calculateRideHeights()` - pitch, roll, heave and wheel motion from the ride-height file
 - `_load_suspension_kinematics_setup()` - load hardpoints and sanity-check the kinematic setup
 - `_compute_component_transforms()` - per-component translation/rotation/pivot from the solver state
-- `_categorize_pid_keywords_by_component()` - map geometry PIDs onto suspension components
 - `transformGeom()` - apply the per-component transforms to the geometry files
 - `transformGeometryByPIDRegex()` - PID-aware geometry transform with regex matching
 
@@ -981,7 +995,7 @@ writes the `constant/` dir:
 ### writeScripts.py - job submission & run scripts
 
 writes the cluster/run scripts:
-- SLURM, PBS, SGE configs
+- Slurm job scripts or plain bash, from the template's clusterDict
 - mesh, solve, export, post pipelines
 - job monitoring and result export
 - needs a couple of tweaks in clusterDict (see below)
@@ -1021,22 +1035,22 @@ per-corner sections `[SUSP_FL]`, `[SUSP_FR]`, `[SUSP_RL]`, `[SUSP_RR]`:
   - `ROCKER_PIVOT`, `ROCKER_AXIS` - rocker rotation center and axis
   - `ROCKER_PUSHROD_JOINT_REF`, `ROCKER_DAMPER_JOINT_REF`, `ROCKER_DAMPER_CHASSIS` - rocker joint refs
   - `WHEEL_AXIS_LOCAL`, `WHEEL_FORWARD_LOCAL` - wheel orientation vectors
+  - `RACK_AXIS` - direction the tie-rod inner joint slides for steering (optional, default `0 1 0`, only the steered front corners use it)
 
-- PID keywords (any key with `PID` in the name):
-  - `FL_UCA_PID`, `FL_LCA_PID`, `FL_ROCKER_PID`, `FL_PUSHROD_PID`, `FL_DAMPER_PID`, `FL_TIE_PID`, `FL_WHEEL_PID`
-  - matched case-insensitive, substring, against the geometry PIDs to pick which transform to apply
-  - same pattern for FR, RL, RR with the fr/rl/rr prefixes
-  - the classifier takes the full name or a common abbreviation, so `flprod` or `rlpr` still come out as PUSHROD:
+- part keywords: `<CORNER>_<COMPONENT>_PID = <keyword>`, e.g. `FL_PUSHROD_PID = flprod`
+  - the key decides the transform: the corner (`FL`, `FR`, `RL`, `RR`, must match the section) and the component, one of `UCA`, `LCA`, `ROCKER`, `PUSHROD`, `DAMPER`, `TIE`, `WHEEL`, `UPRIGHT` (the upright and anything bolted to it, e.g. brake ducts, takes the wheel's pose). a key with another component stops with an error.
+  - the value is matched as a plain substring of the PID names (OBJ groups / STL solids), case-sensitive. the keyword itself can be anything, `flprod` is just a name.
+  - each keyword belongs to one key, using it twice is an error. a part matched by two keywords is fine as long as they're the same corner and component.
+  - more than one part for a component (e.g. two halves of a wishbone, brake duct on the upright): add an extra section with a `CORNER` line, its `PID` keys go to that corner:
 
-    | Component | Accepted keyword aliases |
-    |-----------|--------------------------|
-    | UCA       | `uca` |
-    | LCA       | `lca` |
-    | ROCKER    | `rocker`, `rock`, `rkr` |
-    | PUSHROD   | `pushrod`, `prod`, `pshrd`, `push`, `pr` |
-    | DAMPER    | `damper`, `damp`, `shock`, `strut` |
-    | WHEEL     | `wheel`, `whl` |
-    | TIE       | `tie`, `tierod`, `trod` |
+    ```ini
+    [FL_EXTRA]
+    CORNER = fl
+    UPRIGHT_PID = flbrakeduct
+    UCA_PID = flucarear
+    ```
+
+  - parts no keyword matches keep their place with a warning, `SUSP_REQUIRE_ALL_PIDS_MATCHED = True` makes that an error. the per-part log next to each output geometry (`*.susp_pid_transform.json` / `.csv`) shows what moved.
 
 ---
 
@@ -1066,7 +1080,7 @@ you get `dist/caseSetup` with all the templates and utilities bundled in.
 
 ### "PID scan skipped" / Unmatched PID
 - "PID scan skipped" means a geometry couldn't go through the PID-aware path (unsupported or binary), so it falls back to simple wheel translation. use ASCII OBJ/STL for the suspension parts.
-- "Unmatched PID" means a hardpoint keyword doesn't show up in any part/group name. check the keyword is a substring of the real part name, or add an alias.
+- "Unmatched PID" means a hardpoint keyword doesn't show up in any part/group name. check the keyword is a substring of the real part name (case-sensitive), or add an extra section with another keyword (see the hardpoint template docs).
 - check the per-part transform log next to each output geometry (`*.susp_pid_transform.json` / `.csv`) to see what actually moved.
 - check `HARDPOINT_SCALE` matches the unit of your hardpoint coordinates (`0.001` for mm).
 
@@ -1097,6 +1111,7 @@ you get `dist/caseSetup` with all the templates and utilities bundled in.
 | Version | Date | Changes |
 |---------|------|---------|
 | **5.0.0** | 2026 | internalSetup for internal flows / Stirling engines: moving mesh, remeshing with mass fix, crank drive + generator load, porous regenerator and steel wool with solid heat, through-flow and fans, postInternal summary, images/volume renders/videos, gsheet and Drive copy-back, cluster layout options |
+| 4.2.3 | 2026 | PolyForm Noncommercial license, SRF cornering dict/meshing fixes, ride-height fixes, ride-height point selector (`preUtilities/rideHeightPointGenerator.py`), gsheet push by header name with ride height and yaw, IDDES delta update, suspension animation (`--animateSuspension`) |
 | 4.2.2 | 2026 | cornering (SRF): rotating-frame solver/BC/field setup, kinematic ride height solver, ride height mapping|
 | 4.1.1 | 2025 | updates to postProcessing and ANSA mesh integration |
 | 4.0 | 2024 | complete re-write with multi-setup template framework |
