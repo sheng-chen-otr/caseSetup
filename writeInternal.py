@@ -239,9 +239,11 @@ def parseGroupLine(tokens, where):
     return group
 
 
-def resolveBCGroups(wallName, wallSetup, pids):
+def resolveBCGroups(wallName, wallSetup, pids, fromBodies=()):
     #matches the BC_GROUPS keywords (case-insensitive substring) to the PIDs of one WALL geometry
     #returns an ordered list of groups {name, pids, U, T}; unmatched PIDs go to <wall>_default
+    #fromBodies: (section, ZONE_PIDS keywords, U_DEFAULT, T_DEFAULT) of the FROM bodies in this file, each its own
+    #group over its faces (blank U / T = this file's defaults)
     uDefault = wallSetup['U_DEFAULT'][0]
     if uDefault not in uModes:
         sys.exit('ERROR! [%s] U_DEFAULT must be one of %s!' % (wallName, uModes))
@@ -270,6 +272,20 @@ def resolveBCGroups(wallName, wallSetup, pids):
         else:
             groups.append({'name': groupName, 'pids': matched, 'flow': None,
                            'U': group['U'] or uDefault, 'T': group['T'] or tDefault})
+    for section, keywords, uOwn, tOwn in fromBodies:
+        matched = [pid for pid in pids if any(kw.lower() in pid.lower() for kw in keywords)]
+        for pid in matched:
+            if pid in owner:
+                sys.exit('ERROR! PID "%s" of [%s] (FROM %s) is also in [%s] group %s: set its U and T in one place, '
+                         'the T_DEFAULT / U_DEFAULT of [%s] or that group' % (pid, section, wallName, wallName, owner[pid], section))
+            owner[pid] = section
+        uOwn = [u for u in uOwn if u != '']
+        if uOwn and uOwn[0] not in uModes:
+            sys.exit('ERROR! [%s] U_DEFAULT must be one of %s or blank!' % (section, uModes))
+        tOwn = [t for t in tOwn if t != '']
+        if matched:
+            groups.append({'name': section, 'pids': matched, 'flow': None, 'U': uOwn[0] if uOwn else uDefault,
+                           'T': parseThermal(tOwn, '[%s] T_DEFAULT' % (section)) if tOwn else tDefault})
     rest = [pid for pid in pids if pid not in owner]
     if len(rest) > 0:
         groups.append({'name': '%s_default' % (wallName), 'pids': rest, 'U': uDefault, 'T': tDefault, 'flow': None})
@@ -283,20 +299,6 @@ def flowLabel(flow):
     return '%s %g' % (flow['type'], flow['value'])
 
 
-def sameTokens(a, b):
-    #two BC settings equal word by word, numbers compared as numbers (fixed 295 = fixed 295.0)
-    if len(a) != len(b):
-        return False
-    for x, y in zip(a, b):
-        try:
-            if float(x) != float(y):
-                return False
-        except ValueError:
-            if x.lower() != y.lower():
-                return False
-    return True
-
-
 def getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids=None):
     #wallGroups[geomName] = groups for WALL and MOVE geometry, prints the PID -> group -> U, T table
     #movingPids[geomName] = PIDs that move with a body (U becomes movingWallVelocity)
@@ -308,7 +310,12 @@ def getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids=None):
         geomName = stripExt(geom)
         if not geomName.startswith(('WALL', 'MOVE')):
             continue
-        groups = resolveBCGroups(geomName, fullCaseSetupDict[geomName], pidDict[geomName])
+        #FROM bodies in this file (a piston crown in the chamber): their faces get the body's own U and T
+        fromBodies = [(section, [k for k in body.get('ZONE_PIDS', ['']) if k != ''], body.get('U_DEFAULT', ['']),
+                       body.get('T_DEFAULT', ['']))
+                      for section, body in fullCaseSetupDict.items()
+                      if section.startswith('MOVE') and ''.join(body.get('FROM', [''])).strip() == geomName]
+        groups = resolveBCGroups(geomName, fullCaseSetupDict[geomName], pidDict[geomName], fromBodies)
         moving = movingPids.get(geomName, [])
         for group in groups:
             group['moving'] = [pid for pid in group['pids'] if pid in moving]
@@ -324,22 +331,14 @@ def getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids=None):
                     tLabel = ' '.join(str(t) for t in group['T'])
                 print('\t\t%-32s %-20s %-14s %s' % ('%s_%s' % (geomName, pid), group['name'], uLabel, tLabel))
         wallGroups[geomName] = groups
-    #FROM bodies have no file of their own: their faces get U and T from the groups of the file they are in, the
-    #body's own U_DEFAULT / T_DEFAULT are not used (an adiabatic crown in a fixed-T wall file silently got fixed T)
+    #BC_GROUPS of a FROM body are not used: its faces are one group, set by its own U_DEFAULT / T_DEFAULT
     for section, body in fullCaseSetupDict.items():
         if not section.startswith('MOVE') or not ''.join(body.get('FROM', [''])).strip():
             continue
-        source = ''.join(body['FROM']).strip()
-        for group in wallGroups.get(source, []):
-            if not group.get('moving') or group['flow']:
-                continue
-            tOwn = ' '.join(body.get('T_DEFAULT', [''])).strip()
-            tUsed = ' '.join(str(t) for t in group['T'])
-            if tOwn and sameTokens(tOwn.split(), tUsed.split()) is False:
-                print('\t\tWARNING: [%s] T_DEFAULT %s is not used (FROM %s): its faces %s get T %s from [%s] group %s. '
-                      'Give them their own group there, e.g. BC_GROUPS = %s with %s = PIDS %s T %s'
-                      % (section, tOwn, source, ' '.join(group['moving']), tUsed, source, group['name'],
-                         section.split('-', 1)[-1], section.split('-', 1)[-1], ' '.join(group['moving']), tOwn))
+        ownGroups = [g for g in body.get('BC_GROUPS', ['']) if g != '']
+        if ownGroups:
+            print('\t\tWARNING: [%s] BC_GROUPS %s is not used (FROM body): its faces take its T_DEFAULT / U_DEFAULT'
+                  % (section, ' '.join(ownGroups)))
     return wallGroups
 
 

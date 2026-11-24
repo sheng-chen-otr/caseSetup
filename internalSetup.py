@@ -91,6 +91,16 @@ def findPidBodies(pidDict):
     return bodies
 
 
+#FROM bodies: no BC_GROUPS (their faces are one group), U_DEFAULT / T_DEFAULT blank = the file's defaults
+FROM_UNUSED = ('BC_GROUPS',)
+FROM_BLANK = ('U_DEFAULT', 'T_DEFAULT')
+
+
+def fromItems(moveItems):
+    #defaultMove keys for a FROM section
+    return [(key, '' if key in FROM_BLANK else val) for key, val in moveItems if key not in FROM_UNUSED]
+
+
 def addPidBodies(writeCaseSetupDict, pidBodies, geomNames, moveItems):
     #new [MOVE-<name>] section for each MOVE- PID: FROM, ZONE_PIDS and MOTION_COLUMN filled, the rest from defaultMove
     #an existing section is kept as it is (only missing keys are added later)
@@ -103,7 +113,7 @@ def addPidBodies(writeCaseSetupDict, pidBodies, geomNames, moveItems):
         if section in writeCaseSetupDict:
             continue
         values = {'FROM': [geomName], 'ZONE_PIDS': [pid], 'MOTION_COLUMN': [section[len('MOVE-'):]]}
-        writeCaseSetupDict[section] = dict((key, values.get(key, [val])) for key, val in moveItems)
+        writeCaseSetupDict[section] = dict((key, values.get(key, [val])) for key, val in fromItems(moveItems))
         print('\n\tAdded [%s] for the PID %s in %s (FROM, ZONE_PIDS, MOTION_COLUMN set), please check it'
               % (section, pid, geomName))
         updateFlag = True
@@ -179,7 +189,7 @@ def main(argv=None):
         updateFlag = True
     fromSections = findFromSections(writeCaseSetupDict, geomNames, pidDict)
     for section in fromSections:
-        if setupCore.fillAddonSection(writeCaseSetupDict, section, moveItems, keepExtra=True):
+        if setupCore.fillAddonSection(writeCaseSetupDict, section, fromItems(moveItems), keepExtra=True):
             updateFlag = True
     setupCore.cleanUpCaseSetup(geomDict, writeCaseSetupDict, fullCaseSetupDict, addonKeyWords, fromSections)
     setupCore.writeToCaseSetup(writeCaseSetupDict, caseDir, configName, updateFlag)

@@ -231,7 +231,7 @@ def test_move_pids_in_wall_files_become_sections(repo_root):
     assert internalSetup.addPidBodies(w, bodies, ['WALL-chamber-full-system', 'MOVE-displacer'], moveItems)
     assert w['MOVE-rod']['MOTION_COLUMN'] == ['myRod']
     piston = w['MOVE-piston']
-    assert list(piston) == [key for key, val in moveItems]
+    assert list(piston) == [key for key, val in moveItems if key not in internalSetup.FROM_UNUSED]
     assert piston['FROM'] == ['WALL-chamber-full-system'] and piston['ZONE_PIDS'] == ['MOVE-piston']
     assert piston['MOTION_COLUMN'] == ['piston'] and piston['TDC_CLEARANCE'] == ['0.002']
     assert not internalSetup.addPidBodies(w, bodies, ['WALL-chamber-full-system'], moveItems)
@@ -1305,21 +1305,28 @@ def test_static_walls_slide_in_a_moving_mesh(tmp_path, monkeypatch, repo_root):
     assert 'slidingMesh' in options and 'slidingWallVelocity' in options
 
 
-def test_from_body_thermal_setting_warning(capsys):
-    #a FROM body's own T_DEFAULT is not used: warned when its faces get another T from the wall file's groups
+def test_from_body_own_bc(capsys):
+    #a FROM body's faces are one group with the body's own U_DEFAULT / T_DEFAULT (blank = the file's defaults)
     geomDict = {'WALL-cyl.stl': {}}
     pidDict = {'WALL-cyl': ['MOVE-crown', 'WALL-liner', 'WALL-bottom']}
     full = {'WALL-cyl': {'U_DEFAULT': ['noSlip'], 'T_DEFAULT': ['fixed', '295'], 'BC_GROUPS': ['']},
-            'MOVE-crown': {'FROM': ['WALL-cyl'], 'T_DEFAULT': ['adiabatic']}}
-    groups = writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})
-    out = capsys.readouterr().out
-    assert 'WARNING: [MOVE-crown] T_DEFAULT adiabatic is not used' in out and 'crown = PIDS MOVE-crown T adiabatic' in out
-    #own group for the crown in the wall file: no warning
+            'MOVE-crown': {'FROM': ['WALL-cyl'], 'ZONE_PIDS': ['MOVE-crown'], 'U_DEFAULT': [''], 'T_DEFAULT': ['adiabatic']}}
+    groups = dict((g['name'], g) for g in writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})['WALL-cyl'])
+    assert groups['MOVE-crown']['pids'] == ['MOVE-crown'] and groups['MOVE-crown']['T'] == ['adiabatic']
+    assert groups['MOVE-crown']['U'] == 'noSlip' and groups['MOVE-crown']['moving'] == ['MOVE-crown']
+    assert groups['WALL-cyl_default']['pids'] == ['WALL-liner', 'WALL-bottom'] and groups['WALL-cyl_default']['T'] == ['fixed', 295.0]
+    assert 'movingWall' in capsys.readouterr().out
+    #blank T: the file's default
+    full['MOVE-crown']['T_DEFAULT'] = ['']
+    groups = dict((g['name'], g) for g in writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})['WALL-cyl'])
+    assert groups['MOVE-crown']['T'] == ['fixed', 295.0]
+    #the same faces in a group of the wall file as well: error (one place for U and T)
     full['WALL-cyl']['BC_GROUPS'], full['WALL-cyl']['crown'] = ['crown'], ['PIDS', 'crown', 'T', 'adiabatic']
-    writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})
-    assert 'WARNING' not in capsys.readouterr().out
-    #same value written differently: no warning
+    with pytest.raises(SystemExit, match='set its U and T in one place'):
+        writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})
+    #BC_GROUPS in the FROM body's own section are not used
     full['WALL-cyl']['BC_GROUPS'] = ['']
-    full['MOVE-crown']['T_DEFAULT'] = ['fixed', '295.0']
+    full['MOVE-crown']['BC_GROUPS'] = ['face']
+    capsys.readouterr()
     writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})
-    assert 'WARNING' not in capsys.readouterr().out
+    assert 'WARNING: [MOVE-crown] BC_GROUPS face is not used (FROM body)' in capsys.readouterr().out
