@@ -2423,6 +2423,10 @@ def buildMotion(geomDict, fullCaseSetupDict, pidDict, mshDir, caseDir):
                 print('\t\t\t%s  %5.1f to %5.1f deg  worst squash/stretch %.2fx (%s - %s)'
                       % (name, np.mod(a0, 360.0), np.mod(a1, 360.0), worst[0], worst[1][0] if worst[1] else '-',
                          worst[1][1] if worst[1] else '-'))
+            #fixed time step: OpenFOAM restarts with the controlDict deltaT (uniform/time is only read when adjustable)
+            if getTimeStep(fullCaseSetupDict)[3] == 'no':
+                print('\t\tNOTE: fixed time step, every segment restarts at the full MAX_DT (REMESH_DT is not used). '
+                      'If a run diverges just after a map, use an adjustable step (MAX_CO > 0) to ramp up from REMESH_DT')
     if ratio > maxDeformation and segments is None:
         sys.exit('ERROR! Squash/stretch %.2fx exceeds MAX_DEFORMATION %.2f: increase TDC_CLEARANCE or the limit'
                  % (ratio, maxDeformation))
