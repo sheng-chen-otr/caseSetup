@@ -437,7 +437,7 @@ def _fullDefaults(repo_root, solver):
     templateLoc = os.path.join(repo_root, 'setupTemplates', 'internal')
     full = setupCore.getGlobalDefaults(templateLoc)
     full['GLOBAL_SIM_CONTROL']['SOLVER'] = [solver]
-    full['GLOBAL_REFINEMENT']['LOC_IN_MESH'] = ['0.001', '0.002', '0.003']
+    full['GLOBAL_REFINEMENT']['LOC_IN_MESH'] = ['0.0013', '0.0021', '0.0033']
     return templateLoc, full
 
 
@@ -448,17 +448,25 @@ def test_segment_snappy_dicts(tmp_path, monkeypatch, repo_root):
     full['WALL-chamber'] = {}
     geomDict = {'WALL-chamber.stl': {'refinement': '1', 'scale': '1', 'layers': '0', 'expansion': '1.2'}}
     motionInfo = {'gapRefs': [], 'segments': [(0.0, 90.0), (90.0, 360.0)],
-                  'meshSetups': [{'loc': [0.001, 0.002, 0.003], 'bands': []},
-                                 {'loc': [0.001, 0.002, 0.0287936], 'bands': [(0.026, 0.0315, 2)]}]}
+                  'meshSetups': [{'loc': [0.0013, 0.0021, 0.0033], 'bands': []},
+                                 {'loc': [0.0013, 0.0021, 0.0287936], 'bands': [(0.026, 0.0315, 2)]}]}
     monkeypatch.chdir(tmp_path)
     writeInternal.writeSnappyInternal(templateLoc, geomDict, full, motionInfo)
     case = (tmp_path / 'system/snappyHexMeshDict').read_text()
     seg = (tmp_path / 'meshes/seg02/snappyHexMeshDict').read_text()
-    assert 'locationInMesh (0.001 0.002 0.003);' in case and 'GAPZ' not in case
-    assert 'locationInMesh (0.001 0.002 0.0287936);' in seg
+    assert 'locationInMesh (0.0013 0.0021 0.0033);' in case and 'GAPZ' not in case
+    assert 'locationInMesh (0.0013 0.0021 0.0287936);' in seg
     assert 'GAPZ-0 { type searchableBox; min (-1e3 -1e3 0.026); max (1e3 1e3 0.0315); }' in seg
     assert 'GAPZ-0 { mode inside; levels ((1e15 0)); levelIncrement (0 20 (0 0 2)); }' in seg
     assert not (tmp_path / 'meshes/seg01').exists()
+    #a moved segment point on a cell face is shifted off it (z faces every 4 mm / 2^(1+4) here), the given point is an error
+    motionInfo['meshSetups'][1]['loc'] = [0.0013, 0.0021, 0.03]
+    writeInternal.writeSnappyInternal(templateLoc, geomDict, full, motionInfo)
+    seg = (tmp_path / 'meshes/seg02/snappyHexMeshDict').read_text()
+    assert 'locationInMesh (0.0013 0.0021 0.0300375);' in seg
+    full['GLOBAL_REFINEMENT']['LOC_IN_MESH'] = ['0', '0', '0.0033']
+    with pytest.raises(SystemExit, match='lies on a cell face.*in x y'):
+        writeInternal.writeSnappyInternal(templateLoc, geomDict, full, motionInfo)
 
 
 def test_flow_type_and_nu(repo_root):
@@ -482,7 +490,7 @@ def test_incompressible_dicts(tmp_path, monkeypatch, repo_root):
     writeInternal.writeFunctionObjectsInternal({}, full)
     schemes = (tmp_path / 'system/fvSchemes').read_text()
     assert 'div((nuEff*dev2(T(grad(U)))))' in schemes and 'meshPhi' not in schemes and 'div(phi,e)' not in schemes
-    assert 'pRefPoint ( 0.001 0.002 0.003 );' in (tmp_path / 'system/fvSolution').read_text()
+    assert 'pRefPoint ( 0.0013 0.0021 0.0033 );' in (tmp_path / 'system/fvSolution').read_text()
     assert 'nu ' in (tmp_path / 'constant/transportProperties').read_text()
     assert not (tmp_path / 'constant/thermophysicalProperties').exists()
     fos = (tmp_path / 'system/internalFunctionObjects').read_text()
@@ -855,7 +863,7 @@ def test_steady_numerics_and_control(tmp_path, monkeypatch, repo_root):
     templateLoc, full = _fullDefaults(repo_root, 'simpleFoam')
     writeInternal.writeNumericsInternal(templateLoc, full)
     solution = (tmp_path / 'system/fvSolution').read_text()
-    assert 'pRefPoint ( 0.001 0.002 0.003 );' in solution and 'pMinFactor' not in solution
+    assert 'pRefPoint ( 0.0013 0.0021 0.0033 );' in solution and 'pMinFactor' not in solution
     templateLoc, full = _fullDefaults(repo_root, 'buoyantSimpleFoam')
     writeInternal.writeNumericsInternal(templateLoc, full, pressureBC=True)
     assert 'p_rgh           0.3;' in (tmp_path / 'system/fvSolution').read_text()

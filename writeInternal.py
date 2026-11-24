@@ -323,6 +323,17 @@ def getBackgroundMesh(bbox, baseCell, nMargin=2):
     return lo, hi, n
 
 
+def gridAxes(point, baseCell, level, zExtra=0):
+    #axes on which the point lies on a cell face of a background mesh of whole base cells refined up to level
+    #(zExtra more levels in z: the end-gap bands split cells in z only, up to 4 times)
+    axes = []
+    for axis, v in enumerate(point):
+        fine = baseCell/2**(level + (zExtra if axis == 2 else 0))
+        if abs(v/fine - round(v/fine))*fine < 1e-9*baseCell:
+            axes.append(axis)
+    return axes
+
+
 def caseGeomPath(geom):
     #geometry file as snappy reads it: shifted copies are written without .gz
     plain = os.path.join('constant', 'triSurface', geom.replace('.gz', ''))
@@ -357,6 +368,25 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
         [float(v) for v in locInMesh]
     except ValueError:
         sys.exit('ERROR! GLOBAL_REFINEMENT LOC_IN_MESH must be 3 numbers, got %s!' % (locInMesh))
+    #LOC_IN_MESH on a cell face stops snappy ("not inside the mesh or on a face or edge"): the background box corners
+    #are whole base cells, so faces sit at multiples of BASE_CELL/2^level from 0 (x = 0 on an axis through the origin).
+    #On the base grid (faces everywhere) it is an error; on a finer level only where the point's cell is refined that
+    #far (near a wall), a warning. The moved segment points sit in z-refined end gaps: shifted a little off any face
+    baseCell = float(getVal(fullCaseSetupDict, 'GLOBAL_REFINEMENT', 'BASE_CELL'))
+    maxLevel = max([int(geomDict[geom]['refinement']) for geom in geomDict]
+                   + [int(gapRef['level']) for gapRef in (motionInfo['gapRefs'] if motionInfo else [])])
+    point = [float(v) for v in locInMesh]
+    onGrid, onFine = gridAxes(point, baseCell, 0), gridAxes(point, baseCell, maxLevel)
+    if onGrid or onFine:
+        axes = onGrid or onFine
+        suggest = [v + (0.3*baseCell/2**maxLevel if axis in axes else 0.0) for axis, v in enumerate(point)]
+        message = ('GLOBAL_REFINEMENT LOC_IN_MESH %s lies on a cell face %s in %s (faces at multiples of BASE_CELL/2^level '
+                   'from 0): move it off, e.g. LOC_IN_MESH = %s (check it is still in the gas)'
+                   % (' '.join(locInMesh), 'of the background mesh' if onGrid else 'of refinement level %d' % (maxLevel),
+                      ' '.join('xyz'[axis] for axis in axes), ' '.join('%.6g' % v for v in suggest)))
+        if onGrid:
+            sys.exit('ERROR! ' + message)
+        print('		WARNING: %s, if its cell is refined that far' % (message))
     #feature edges: surfaceFeatureExtract writes constant/triSurface/<geom>.eMesh (run before snappy),
     #refined at each geometry's surface level (FEATURE_LEVEL surface) or a fixed level
     featureLevel = refinement.get('FEATURE_LEVEL', ['surface'])[0]
@@ -411,6 +441,11 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
         meshSetups = [{'loc': locInMesh, 'bands': []}]
     names = segmentNames(motionInfo['segments']) if motionInfo and motionInfo.get('segments') else ['seg01']
     for name, meshSetup in zip(names, meshSetups):
+        if name != 'seg01':
+            point = [float(v) for v in meshSetup['loc']]
+            for axis in gridAxes(point, baseCell, maxLevel, 4):
+                point[axis] += 0.3*baseCell/2**(maxLevel + 4)
+            meshSetup['loc'] = point
         geometryBands, regionBands = [], []
         for k, (zLo, zHi, splits) in enumerate(meshSetup['bands']):
             #z-only (directional) refinement of every cell in the band, after the other refinement
