@@ -448,6 +448,19 @@ def test_summary_steady_flow(tmp_path):
     assert [os.path.basename(p) for p in postInternal.writePlots(str(case))] == ['flowConvergence.png']
 
 
+def test_summary_transient_not_cyclic(tmp_path):
+    #END_TIME run (transient through-flow, CYCLIC no): averages over the last 10 % of the run (or --avgTime), no cycles
+    case = makeSteadyCase(tmp_path)
+    setup = (case / 'fullCaseSetupDict').read_text().replace('STEADY = yes', 'STEADY = no\nCYCLIC = no')
+    (case / 'fullCaseSetupDict').write_text(setup.replace('[GLOBAL_CONTROL]', '[GLOBAL_CONTROL]\nEND_TIME = 300'))
+    s = postInternal.buildSummary(str(case))
+    assert 'CYCLES_DONE' not in s and 'END_ITER' not in s
+    assert s['END_TIME'] == 300 and s['END_TIME_SET'] == '300' and s['AVG_TIME'] == pytest.approx(30.0)
+    assert s['MDOT_pIn'] == pytest.approx(0.03) and s['P_DROP'] == pytest.approx(7.0)
+    assert postInternal.buildSummary(str(case), avgTime=100.0)['AVG_TIME'] == pytest.approx(100.0)
+    assert [os.path.basename(p) for p in postInternal.writePlots(str(case))] == ['flowConvergence.png']
+
+
 def test_flow_units_incompressible():
     import configparser
     config = configparser.ConfigParser()
@@ -654,3 +667,58 @@ def test_read_summary_keeps_names_as_text(tmp_path):
     (tmp_path / 'summary.csv').write_text('JOB,0042\nNAME,003\nCELL_COUNT,123\nAVG_POWER,1.5\n')
     s = postInternal.readSummary(str(tmp_path))
     assert s['JOB'] == '0042' and s['NAME'] == '003' and s['CELL_COUNT'] == 123 and s['AVG_POWER'] == 1.5
+
+
+def test_solver_quality_from_logs(tmp_path):
+    #Courant number per step (printed before "Time = ") and the final p solve per step hitting the iteration cap,
+    #over the averaging window only, across restarted logs
+    def step(t, co, pIters):
+        lines = ['Courant Number mean: 0.01 max: %g' % (co), 'deltaT = 1e-05', 'Time = %g' % (t), '',
+                 'PIMPLE: iteration 1']
+        lines += ['GAMG:  Solving for p, Initial residual = 0.1, Final residual = 1e-09, No Iterations %d' % (n)
+                  for n in pIters]
+        return lines + ['ExecutionTime = 1 s  ClockTime = 1 s', '']
+    (tmp_path / 'log.rhoPimpleFoam.1').write_text('\n'.join(step(0.1, 5.0, [3, 100]) + step(0.2, 0.5, [2, 20])))
+    (tmp_path / 'log.rhoPimpleFoam').write_text('\n'.join(step(0.3, 2.0, [4, 100]) + step(0.4, 0.8, [1, 30])))
+    logs = postInternal.solverLogs(str(tmp_path), 'rhoPimpleFoam')
+    coMax, above, capped, n = postInternal.solverQuality(logs, 0.15, 0.4, 100)
+    #steps 0.2, 0.3, 0.4: Co 0.5, 2, 0.8 and final p iterations 20, 100, 30
+    assert n == 3 and coMax == 2.0
+    assert above == pytest.approx(1/3) and capped == pytest.approx(1/3)
+    assert postInternal.solverQuality(logs, 1.0, 2.0, 100) == (None, None, None, 0)
+
+
+def gasSpring(case, exponent):
+    #helium gas spring p V^n = const through V0 = 1 L at 300 K: n = 1 isothermal at the fixed wall T (600 K here)
+    R, cp = 8314.46/4.003, 5193.0
+    (case / 'constant' / 'thermophysicalProperties').write_text(
+        'mixture { specie { molWeight 4.003; } thermodynamics { Cp 5193; Hf 0; } }\n')
+    w = 2*math.pi*FREQ
+    t = np.linspace(0.0, 2.0/FREQ, 4001)[1:]
+    volume = 1e-3*(1.0 + 0.3*np.sin(w*t))
+    mass = np.full_like(t, 1e-3)
+    p = mass[0]*R*600.0/1e-3*(1e-3/volume)**exponent
+    rho = mass/volume
+    post = case / 'postProcessing'
+    _dat(post / 'gasAvg' / '0' / 'volFieldValue.dat', ['Time', 'volAverage(p)', 'volAverage(T)', 'volAverage(rho)'],
+         np.column_stack([t, p, p/(rho*R), rho]))
+    _dat(post / 'gasMass' / '0' / 'volFieldValue.dat', ['Time', 'volIntegrate(rho)'], np.column_stack([t, mass]))
+    return cp/(cp - R)
+
+
+def test_ideal_gas_limits(tmp_path):
+    #isothermal spring: n = 1, p on the isothermal curve, no loop work, no T swing
+    case = makeCase(tmp_path)
+    gamma = gasSpring(case, 1.0)
+    s = postInternal.buildSummary(str(case), avgCycles=1)
+    assert s['GAMMA'] == pytest.approx(gamma) and gamma == pytest.approx(5.0/3.0, rel=1e-3)
+    assert s['T_ISO_REF'] == 600.0
+    assert s['POLY_N'] == pytest.approx(1.0, abs=1e-6)
+    assert s['P_ISO_DEV_MAX'] == pytest.approx(0.0, abs=1e-9)
+    assert s['PV_WORK_REL'] == pytest.approx(0.0, abs=1e-6) and s['T_SWING'] == pytest.approx(0.0, abs=1e-6)
+    #adiabatic spring: n = gamma, p off the isothermal curve, T swings
+    gasSpring(case, gamma)
+    s = postInternal.buildSummary(str(case), avgCycles=1)
+    assert s['POLY_N'] == pytest.approx(gamma, abs=1e-6)
+    assert abs(s['P_ISO_DEV_MAX']) > 0.1 and s['T_SWING'] > 100.0
+    assert 'pV.png' in [os.path.basename(path) for path in postInternal.writePlots(str(case))]

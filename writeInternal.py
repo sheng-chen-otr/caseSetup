@@ -316,6 +316,14 @@ def getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids=None):
                       for section, body in fullCaseSetupDict.items()
                       if section.startswith('MOVE') and ''.join(body.get('FROM', [''])).strip() == geomName]
         groups = resolveBCGroups(geomName, fullCaseSetupDict[geomName], pidDict[geomName], fromBodies)
+        #since 2026-11-24 a FROM body's own T_DEFAULT is used (before, its faces took the file's default): say so when
+        #they differ, so a case set up before and after does not change its crown temperature unnoticed
+        fileT = parseThermal([t for t in fullCaseSetupDict[geomName]['T_DEFAULT'] if t != ''],
+                             '[%s] T_DEFAULT' % (geomName))
+        for group in groups:
+            if group['name'] in [section for section, _, _, _ in fromBodies] and group['T'] != fileT:
+                print('\t\tNOTE: [%s] faces use its own T_DEFAULT (%s), not the %s default (%s)'
+                      % (group['name'], ' '.join(str(t) for t in group['T']), geomName, ' '.join(str(t) for t in fileT)))
         moving = movingPids.get(geomName, [])
         for group in groups:
             group['moving'] = [pid for pid in group['pids'] if pid in moving]
@@ -340,6 +348,351 @@ def getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids=None):
             print('\t\tWARNING: [%s] BC_GROUPS %s is not used (FROM body): its faces take its T_DEFAULT / U_DEFAULT'
                   % (section, ' '.join(ownGroups)))
     return wallGroups
+
+
+#----- mesh groups: surface level and wall layers per PID
+
+#LAYERS auto: first layer = thermal penetration depth / AUTO_FIRST_DIV, layers growing at most AUTO_EXPANSION up to the
+#final layer (FINAL x surface cell)
+AUTO_FIRST_DIV = 10.0
+AUTO_EXPANSION = 1.3
+#and the whole stack at most AUTO_TOTAL_DEPTHS penetration depths thick (absolute sizes then)
+AUTO_TOTAL_DEPTHS = 2.0
+
+#layer sizes of a mesh group line and their snappy keys; any two pick the thicknessModel
+layerSizeKeys = ('FIRST', 'FINAL', 'TOTAL', 'EXPANSION')
+snappySizeKeys = {'FIRST': 'firstLayerThickness', 'FINAL': 'finalLayerThickness', 'TOTAL': 'thickness',
+                  'EXPANSION': 'expansionRatio'}
+thicknessModels = {('FIRST', 'TOTAL'): 'firstAndOverall', ('EXPANSION', 'FIRST'): 'firstAndExpansion',
+                   ('FINAL', 'TOTAL'): 'finalAndOverall', ('EXPANSION', 'FINAL'): 'finalAndExpansion',
+                   ('EXPANSION', 'TOTAL'): 'overallAndExpansion'}
+#SIZES: relative = fractions of the local cell, absolute = m, mixed = FIRST in m and FINAL relative
+sizeModes = ('relative', 'absolute', 'mixed')
+
+
+def parseMeshGroupLine(tokens, where):
+    #<group> = PIDS kw1 kw2 .. [LEVEL a [b]] [EDGE_LEVEL n] [LAYERS n|auto|0|-1] [SIZES relative|absolute|mixed]
+    #          [FIRST x] [FINAL x] [TOTAL x] [EXPANSION r] [MIN x]
+    tokens = [t for t in tokens if t != '']
+    parts = dict((key, []) for key in ('PIDS', 'LEVEL', 'EDGE_LEVEL', 'LAYERS', 'SIZES', 'MIN') + layerSizeKeys)
+    current = None
+    for token in tokens:
+        if token in parts:
+            current = token
+        elif current is None:
+            sys.exit('ERROR! %s must start with PIDS, got: %s' % (where, ' '.join(tokens)))
+        else:
+            parts[current].append(token)
+    if len(parts['PIDS']) == 0:
+        sys.exit('ERROR! %s has no PIDS keywords!' % (where))
+    group = {'keywords': parts['PIDS'], 'level': None, 'edgeLevel': None, 'layers': None, 'mode': None, 'sizes': {},
+             'min': None}
+    if parts['LEVEL']:
+        if len(parts['LEVEL']) > 2 or not all(v.isdigit() for v in parts['LEVEL']):
+            sys.exit('ERROR! %s: LEVEL takes one or two refinement levels (min max), got %s!' % (where, parts['LEVEL']))
+        level = [int(v) for v in parts['LEVEL']]
+        group['level'] = (level[0], level[-1])
+        if level[-1] < level[0]:
+            sys.exit('ERROR! %s: LEVEL max below min!' % (where))
+    if parts['EDGE_LEVEL']:
+        if len(parts['EDGE_LEVEL']) != 1 or not parts['EDGE_LEVEL'][0].isdigit():
+            sys.exit('ERROR! %s: EDGE_LEVEL takes one refinement level, got %s!' % (where, parts['EDGE_LEVEL']))
+        group['edgeLevel'] = int(parts['EDGE_LEVEL'][0])
+    if parts['LAYERS']:
+        value = parts['LAYERS'][0]
+        if len(parts['LAYERS']) != 1 or not (value == 'auto' or value.isdigit() or value == '-1'):
+            sys.exit('ERROR! %s: LAYERS takes a number of layers, auto, 0 (none, wall points fixed) or -1 (none, wall '
+                     'points slide), got %s!' % (where, parts['LAYERS']))
+        group['layers'] = value if value == 'auto' else int(value)
+    for key in layerSizeKeys + ('MIN',):
+        if parts[key]:
+            values = parseNumbers(parts[key], where, key)
+            if len(values) != 1 or values[0] <= 0:
+                sys.exit('ERROR! %s: %s takes one positive number!' % (where, key))
+            if key == 'MIN':
+                group['min'] = values[0]
+            else:
+                group['sizes'][key] = values[0]
+    if parts['SIZES']:
+        if len(parts['SIZES']) != 1 or parts['SIZES'][0] not in sizeModes:
+            sys.exit('ERROR! %s: SIZES must be one of %s!' % (where, ' | '.join(sizeModes)))
+        group['mode'] = parts['SIZES'][0]
+    given = group['sizes'] or group['mode'] or group['min']
+    if group['level'] is None and group['edgeLevel'] is None and group['layers'] is None:
+        sys.exit('ERROR! %s sets nothing: give LEVEL, EDGE_LEVEL and/or LAYERS!' % (where))
+    if given and group['layers'] is None:
+        sys.exit('ERROR! %s: SIZES / FIRST / FINAL / TOTAL / EXPANSION / MIN need LAYERS!' % (where))
+    if given and group['layers'] in (0, -1):
+        sys.exit('ERROR! %s: LAYERS %d adds no layers, no sizes!' % (where, group['layers']))
+    if group['layers'] in (None, 0, -1):
+        return group
+    #mixed by default with FIRST or auto (absolute first layer blending into the cells), else relative as the GEOM line
+    if group['mode'] is None:
+        group['mode'] = 'mixed' if group['layers'] == 'auto' or 'FIRST' in group['sizes'] else 'relative'
+    sizes = sorted(group['sizes'])
+    if len(sizes) > 2:
+        sys.exit('ERROR! %s: give at most two of FIRST, FINAL, TOTAL, EXPANSION (got %s)!' % (where, ' '.join(sizes)))
+    if group['layers'] == 'auto':
+        if group['mode'] != 'mixed' or any(key != 'FINAL' for key in sizes):
+            sys.exit('ERROR! %s: LAYERS auto sets the first layer itself (SIZES mixed, FINAL only)!' % (where))
+    elif group['mode'] == 'mixed':
+        if 'FIRST' not in sizes or any(key not in ('FIRST', 'FINAL') for key in sizes):
+            sys.exit('ERROR! %s: SIZES mixed takes FIRST (m) and optionally FINAL (x the cell); for TOTAL / EXPANSION '
+                     'use SIZES absolute or relative!' % (where))
+    elif group['mode'] == 'absolute' and not any(key in sizes for key in ('FIRST', 'FINAL', 'TOTAL')):
+        sys.exit('ERROR! %s: SIZES absolute needs FIRST, FINAL or TOTAL in m!' % (where))
+    if 'EXPANSION' in sizes and group['sizes']['EXPANSION'] < 1.0:
+        print('\t\tWARNING: %s: EXPANSION %g < 1, the layers get thinner away from the wall'
+              % (where, group['sizes']['EXPANSION']))
+    return group
+
+
+def thermalDepth(fullCaseSetupDict, wallT):
+    #thermal penetration depth sqrt(2 alpha/omega) of the gas at the charge pressure and wallT for a cyclic run at FREQ
+    props = getGasProperties(fullCaseSetupDict)
+    material = fullCaseSetupDict['GLOBAL_MATERIAL']
+    mu = props['MU'] if props['TRANSPORT'] == 'const' else props['AS']*wallT**1.5/(wallT + props['TS'])
+    rho = float(material['CHARGE_PRESSURE'][0])*props['MOL_WEIGHT']/(8314.46*wallT)
+    alpha = mu/props['PR']/rho
+    omega = 2.0*np.pi*float(getVal(fullCaseSetupDict, 'GLOBAL_CONTROL', 'FREQ'))
+    return np.sqrt(2.0*alpha/omega)
+
+
+def stackGeometry(sizes, n):
+    #first, final, total thickness and growth ratio of n layers from two of FIRST / FINAL / TOTAL / EXPANSION (one length unit)
+    span = lambda r: float(n) if abs(r - 1.0) < 1e-12 else (r**n - 1.0)/(r - 1.0)
+    if 'EXPANSION' in sizes:
+        ratio = sizes['EXPANSION']
+    elif 'FIRST' in sizes and 'FINAL' in sizes:
+        ratio = (sizes['FINAL']/sizes['FIRST'])**(1.0/(n - 1)) if n > 1 else 1.0
+    else:
+        #FIRST or FINAL with TOTAL: growth ratio by bisection (total grows with the ratio for a fixed first layer, and
+        #falls for a fixed final layer)
+        lo, hi = 1e-3, 1e3
+        for _ in range(200):
+            ratio = (lo*hi)**0.5
+            if 'FIRST' in sizes:
+                big = sizes['FIRST']*span(ratio) > sizes['TOTAL']
+            else:
+                big = sizes['FINAL']*span(ratio)/ratio**(n - 1) < sizes['TOTAL']
+            lo, hi = (lo, ratio) if big else (ratio, hi)
+    if 'FIRST' in sizes:
+        first = sizes['FIRST']
+    elif 'FINAL' in sizes:
+        first = sizes['FINAL']/ratio**(n - 1)
+    else:
+        first = sizes['TOTAL']/span(ratio)
+    return first, first*ratio**(n - 1), first*span(ratio), ratio
+
+
+def layerEntry(group, cell, expansionDefault, finalDefault, minDefault):
+    #snappy layers entry of a mesh group with layers > 0, and the stack in m (first, final, total, ratio)
+    #every entry names its thicknessModel: without it a patch entry only reads the keys of the global model
+    #(v2412: a per-patch firstLayerThickness under the global finalAndExpansion was ignored without a message)
+    n = group['layers']
+    sizes = dict(group['sizes'])
+    if group['mode'] == 'mixed':
+        final = sizes.get('FINAL', finalDefault)
+        first, finalM, total, ratio = stackGeometry({'FIRST': sizes['FIRST'], 'FINAL': final*cell}, n)
+        entry = ('nSurfaceLayers %d; thicknessModel firstAndRelativeFinal; relativeSizes true; firstLayerThickness %.6g; '
+                 'finalLayerThickness %.6g; minThickness %.6g;' % (n, sizes['FIRST'], final, group['min'] or minDefault))
+        return entry, (first, finalM, total, ratio)
+    #relative / absolute: fill up to two sizes (FINAL default only when no thickness is given, relative)
+    if not any(key in sizes for key in ('FIRST', 'FINAL', 'TOTAL')):
+        sizes['FINAL'] = finalDefault
+    if len(sizes) < 2:
+        sizes['EXPANSION'] = expansionDefault
+    scale = cell if group['mode'] == 'relative' else 1.0
+    first, finalM, total, ratio = stackGeometry(dict((key, val*(1.0 if key == 'EXPANSION' else scale))
+                                                     for key, val in sizes.items()), n)
+    #FIRST and FINAL have no snappy model of their own: first layer and the growth ratio between them
+    if 'FIRST' in sizes and 'FINAL' in sizes:
+        sizes = {'FIRST': sizes['FIRST'], 'EXPANSION': ratio}
+    model = thicknessModels[tuple(sorted(sizes))]
+    #minThickness in the group's units: relative MIN_LAYER_THICKNESS, absolute a tenth of the stack
+    minThickness = group['min'] or (minDefault if group['mode'] == 'relative' else 0.1*total)
+    entry = ('nSurfaceLayers %d; thicknessModel %s; relativeSizes %s; %s minThickness %.6g;'
+             % (n, model, 'true' if group['mode'] == 'relative' else 'false',
+                ' '.join('%s %.6g;' % (snappySizeKeys[key], sizes[key]) for key in sorted(sizes)), minThickness))
+    return entry, (first, finalM, total, ratio)
+
+
+def pidWallT(wallGroups, geomName, pid, initT):
+    #fixed wall T of the PID's BC group, else INIT_T
+    for group in wallGroups.get(geomName, []):
+        if pid in group['pids'] and group['T'] and group['T'][0] == 'fixed':
+            return group['T'][1]
+    return initT
+
+
+def getMeshGroups(geomDict, fullCaseSetupDict, pidDict, wallGroups, motionInfo=None):
+    #meshGroups[geomName] = [{name, pids, level, layers, mode, entry, stack, ...}], prints the PID -> mesh group table
+    #PIDs match like BC_GROUPS (case-insensitive substring); a PID in two mesh groups is an error
+    refinement = fullCaseSetupDict['GLOBAL_REFINEMENT']
+    baseCell = float(getVal(fullCaseSetupDict, 'GLOBAL_REFINEMENT', 'BASE_CELL'))
+    finalDefault = float(refinement['FINAL_LAYER_THICKNESS'][0])
+    minDefault = float(refinement['MIN_LAYER_THICKNESS'][0])
+    initT = float(getVal(fullCaseSetupDict, 'GLOBAL_MATERIAL', 'INIT_T'))
+    cyclic = not isSteady(fullCaseSetupDict) and getEndTime(fullCaseSetupDict) is None
+    meshGroups = {}
+    rows = []
+    for geom in geomDict:
+        geomName = stripExt(geom)
+        if not geomName.startswith(('WALL', 'MOVE')):
+            continue
+        setup = fullCaseSetupDict[geomName]
+        groupNames = [g for g in setup.get('MESH_GROUPS', ['']) if g != '']
+        owner = {}
+        groups = []
+        for groupName in groupNames:
+            where = '[%s] %s' % (geomName, groupName)
+            if groupName not in setup:
+                sys.exit('ERROR! [%s] MESH_GROUPS lists %s but there is no "%s = PIDS ..." line!'
+                         % (geomName, groupName, groupName))
+            if groupName in [g for g in setup.get('BC_GROUPS', ['']) if g != '']:
+                sys.exit('ERROR! [%s] %s is in BC_GROUPS and MESH_GROUPS: give the mesh group its own name'
+                         % (geomName, groupName))
+            group = parseMeshGroupLine(setup[groupName], where)
+            group['name'] = groupName
+            group['pids'] = []
+            for kw in group['keywords']:
+                hits = [pid for pid in pidDict[geomName] if kw.lower() in pid.lower()]
+                if len(hits) == 0:
+                    sys.exit('ERROR! %s: keyword "%s" matches no PID. PIDs are: %s' % (where, kw, pidDict[geomName]))
+                for pid in hits:
+                    if pid in owner and owner[pid] != groupName:
+                        sys.exit('ERROR! [%s] PID "%s" matches mesh groups %s and %s!' % (geomName, pid, owner[pid], groupName))
+                    owner[pid] = groupName
+                    if pid not in group['pids']:
+                        group['pids'].append(pid)
+            #the mesh group entry is written after the GAP_PIDS one, so it wins there
+            gapKeywords = [k for k in setup.get('GAP_PIDS', ['']) if k != '']
+            gapHits = [pid for pid in group['pids'] if any(k.lower() in pid.lower() for k in gapKeywords)]
+            if gapHits and group['layers'] not in (None, 0, -1):
+                print('\t\tWARNING: %s puts layers on the GAP_PIDS faces %s (layers collapse in narrow gaps)'
+                      % (where, gapHits))
+            #edges of faces opening into the refined side gap: the rim cells are only cube-like (no highly skewed
+            #faces) one level above the gap refinement (v2412 demo segment: displacer edges at the gap level 3 left
+            #752 faces with skewness > 4, level 4 none)
+            gapLevels = [gapRef['level'] for gapRef in (motionInfo['gapRefs'] if motionInfo else [])]
+            if group['edgeLevel'] is not None and gapLevels and group['edgeLevel'] <= max(gapLevels):
+                print('\t\tWARNING: %s: EDGE_LEVEL %d is not above the gap refinement level %d: edges opening into '
+                      'the gap or an end-gap band keep flat, skewed cells, use EDGE_LEVEL %d'
+                      % (where, group['edgeLevel'], max(gapLevels), max(gapLevels) + 1))
+            #surface cell size the layers grow into: the group's min level, else the file's
+            level = group['level'][0] if group['level'] else int(geomDict[geom]['refinement'])
+            cell = baseCell/2**level
+            group['cell'] = cell
+            group['depth'] = None
+            group['entry'], group['stack'] = None, None
+            if group['layers'] == 'auto':
+                if not cyclic:
+                    sys.exit('ERROR! %s: LAYERS auto sizes the layers from the thermal penetration depth at FREQ '
+                             '(cyclic runs only): give LAYERS n with FIRST' % (where))
+                #coldest wall of the group = thinnest thermal layer (alpha grows with T)
+                group['depth'] = min(thermalDepth(fullCaseSetupDict, pidWallT(wallGroups, geomName, pid, initT))
+                                     for pid in group['pids'])
+                group['sizes']['FIRST'] = group['depth']/AUTO_FIRST_DIV
+                final = group['sizes'].get('FINAL', finalDefault)*cell
+                if final <= group['sizes']['FIRST']:
+                    #no layers needed: written like the walls without layers (ZERO_LAYERS)
+                    group['layers'] = None
+                    group['autoNone'] = True
+                    print('\t\tNOTE: %s: surface cells (%.3g mm) already fine for the thermal layer (%.3g mm), no layers'
+                          % (where, 1e3*cell, 1e3*group['depth']))
+                else:
+                    group['layers'] = int(np.ceil(np.log(final/group['sizes']['FIRST'])/np.log(AUTO_EXPANSION))) + 1
+                    #stack capped at AUTO_TOTAL_DEPTHS thermal depths: a stack growing up to the cell size (3.3 mm for a
+                    #0.84 mm layer on 2 mm cells) did not fit the end gap, snappy shrank the mesh to make room and
+                    #inverted cells there (v2412 demo segment: 60 negative volumes); capped at 1.7 mm: none, all layers
+                    first = group['sizes']['FIRST']
+                    total = stackGeometry({'FIRST': first, 'FINAL': final}, group['layers'])[2]
+                    cap = AUTO_TOTAL_DEPTHS*group['depth']
+                    if total > cap:
+                        group['mode'] = 'absolute'
+                        group['sizes'] = {'FIRST': first, 'TOTAL': cap}
+                        group['layers'] = int(np.ceil(np.log(1.0 + cap/first*(AUTO_EXPANSION - 1.0))/np.log(AUTO_EXPANSION)))
+            if group['layers'] in (0, -1):
+                group['entry'] = 'nSurfaceLayers %d;' % (group['layers'])
+            elif group['layers'] is not None:
+                group['entry'], group['stack'] = layerEntry(group, cell, float(geomDict[geom]['expansion']),
+                                                            finalDefault, minDefault)
+                first, final, total, ratio = group['stack']
+                if ratio < 1.0:
+                    print('\t\tWARNING: %s: the layers get thinner away from the wall (%.3g mm to %.3g mm)'
+                          % (where, 1e3*first, 1e3*final))
+                elif ratio > 1.5:
+                    print('\t\tWARNING: %s: layers grow %.2fx per layer from %.3g mm to %.3g mm: use more LAYERS'
+                          % (where, ratio, 1e3*first, 1e3*final))
+                if final > cell:
+                    print('\t\tWARNING: %s: final layer %.3g mm is thicker than the %.3g mm surface cell'
+                          % (where, 1e3*final, 1e3*cell))
+            groups.append(group)
+        for group in groups:
+            for pid in group['pids']:
+                rows.append((geomName, pid, group))
+        meshGroups[geomName] = groups
+    #MESH_GROUPS of a FROM body are not used: its faces are PIDs of another file, set them in that file's section
+    for section, body in fullCaseSetupDict.items():
+        if section.startswith('MOVE') and ''.join(body.get('FROM', [''])).strip() not in ('', 'self'):
+            ownGroups = [g for g in body.get('MESH_GROUPS', ['']) if g != '']
+            if ownGroups:
+                print('\t\tWARNING: [%s] MESH_GROUPS %s is not used (FROM body): set its faces in the MESH_GROUPS of [%s]'
+                      % (section, ' '.join(ownGroups), ''.join(body['FROM']).strip()))
+    if rows:
+        print('\n\tMesh groups (layer sizes in mm at the surface cell size):')
+        print('\t\t%-32s %-14s %-6s %-5s %-10s %-9s %-8s %-8s %-6s %-8s %s'
+              % ('patch', 'group', 'level', 'edge', 'layers', 'sizes', 'first', 'final', 'ratio', 'total', 'thermal layer'))
+        for geomName, pid, group in rows:
+            level = ('%d %d' % group['level'] if group['level'] else '-').ljust(6) + ' ' + \
+                    ('%d' % group['edgeLevel'] if group['edgeLevel'] is not None else '-').ljust(5)
+            if group['stack']:
+                first, final, total, ratio = group['stack']
+                layer = ('%-10d %-9s %-8.3g %-8.3g %-6.2f %-8.3g'
+                         % (group['layers'], group['mode'], 1e3*first, 1e3*final, ratio, 1e3*total))
+            elif group['layers'] in (0, -1):
+                layer = '%-10s' % ('0 (fixed)' if group['layers'] == 0 else '-1 (slip)')
+            else:
+                layer = '%-10s' % ('none' if group.get('autoNone') else 'GEOM')
+            print(('\t\t%-32s %-14s %s %s %s' % ('%s_%s' % (geomName, pid), group['name'], level, layer,
+                                                   '%.3g' % (1e3*group['depth']) if group['depth'] else '')).rstrip())
+    return meshGroups
+
+
+def getEdgeRefs(meshGroups, geomDict, mshDir):
+    #EDGE_LEVEL groups: the triangles of their PIDs (file units) for EDGE-<geometry>-<group>.stl, whose feature edges
+    #(the outline of the faces and their sharp edges) snappy refines at EDGE_LEVEL; sets group['edgeFile']
+    edgeRefs = []
+    for geom in geomDict:
+        geomName = stripExt(geom)
+        groups = [group for group in meshGroups.get(geomName, []) if group['edgeLevel'] is not None]
+        if not groups:
+            continue
+        tris = geometryIO.readSurfaceTriangles(os.path.join(mshDir, geom))
+        for group in groups:
+            group['edgeFile'] = 'EDGE-%s-%s.stl' % (geomName, group['name'])
+            edgeRefs.append({'file': group['edgeFile'], 'geomName': geomName,
+                             'baseTris': dict((pid, tris[pid]) for pid in group['pids'])})
+    return edgeRefs
+
+
+def writeEdgeGeometry(edgeRefs, triDir=os.path.join('constant', 'triSurface'), shifts=None):
+    #EDGE-*.stl of the EDGE_LEVEL groups in triDir, PIDs of moving bodies shifted like their geometry ({geometry: {pid:
+    #(dx, dy, dz)}} in file units); old EDGE files of an earlier setup are removed. returns the files written
+    shifts = shifts or {}
+    os.makedirs(triDir, exist_ok=True)
+    current = [edgeRef['file'] for edgeRef in edgeRefs]
+    for name in os.listdir(triDir):
+        if name.startswith('EDGE-') and name not in current and stripExt(name) + '.stl' not in current:
+            os.remove(os.path.join(triDir, name))
+    for edgeRef in edgeRefs:
+        pidShift = shifts.get(edgeRef['geomName'], {})
+        path = os.path.join(triDir, edgeRef['file'])
+        if os.path.islink(path):
+            os.remove(path)
+        motionUtilities.writeStlTriangles(path, dict((pid, t + np.array(pidShift.get(pid, (0.0, 0.0, 0.0))))
+                                                     for pid, t in edgeRef['baseTris'].items()))
+    return current
 
 
 #----- system dicts
@@ -387,7 +740,7 @@ def writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict):
     return bbox
 
 
-def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=None):
+def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=None, meshGroups=None):
     print('\n\tWriting snappyHexMeshDict...')
     refinement = fullCaseSetupDict['GLOBAL_REFINEMENT']
     locInMesh = [v for v in refinement['LOC_IN_MESH'] if v != '']
@@ -402,8 +755,12 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
     #On the base grid (faces everywhere) it is an error; on a finer level only where the point's cell is refined that
     #far (near a wall), a warning. The moved segment points sit in z-refined end gaps: shifted a little off any face
     baseCell = float(getVal(fullCaseSetupDict, 'GLOBAL_REFINEMENT', 'BASE_CELL'))
+    meshGroups = meshGroups or {}
     maxLevel = max([int(geomDict[geom]['refinement']) for geom in geomDict]
-                   + [int(gapRef['level']) for gapRef in (motionInfo['gapRefs'] if motionInfo else [])])
+                   + [int(gapRef['level']) for gapRef in (motionInfo['gapRefs'] if motionInfo else [])]
+                   + [group['level'][1] for groups in meshGroups.values() for group in groups if group['level']]
+                   + [group['edgeLevel'] for groups in meshGroups.values() for group in groups
+                      if group['edgeLevel'] is not None])
     point = [float(v) for v in locInMesh]
     onGrid, onFine = gridAxes(point, baseCell, 0), gridAxes(point, baseCell, maxLevel)
     if onGrid or onFine:
@@ -426,6 +783,25 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
         sys.exit('ERROR! GLOBAL_REFINEMENT FEATURE_LEVEL must be surface or a refinement level, got %s!' % (featureLevel))
     featAngle = refinement.get('FEAT_EDGE_ANGLE', ['150'])[0]
     geometryArray, surfaceArray, layerArray, featureArray, extractArray = [], [], [], [], []
+    #MESH_GROUPS EDGE_LEVEL: feature edges of the group's own STL (outline of its faces + sharp edges) at that level
+    for geom in geomDict:
+        geomName = stripExt(geom)
+        for group in meshGroups.get(geomName, []):
+            if group.get('edgeFile'):
+                featureArray.append('        { file "%s.eMesh"; scale %s; level %d; }'
+                                    % (stripExt(group['edgeFile']), geomDict[geom]['scale'], group['edgeLevel']))
+                extractArray.append('%s { extractionMethod extractFromSurface; includedAngle %s; '
+                                    'subsetFeatures { nonManifoldEdges no; openEdges yes; } writeObj no; }'
+                                    % (group['edgeFile'], featAngle))
+    #walls without layers next to walls with layers: nSurfaceLayers -1 lets their points slide along the wall to make
+    #room for the neighbour's layers, 0 holds them (v2412: zeroFixedValue). With 0 side walls a layer stack on the
+    #end faces of a box was cut back from the edges (absolute sizes: removed completely), with -1 it was complete.
+    #Only in cases with mesh-group layers, so the meshes of other cases do not change
+    zeroMode = refinement.get('ZERO_LAYERS', ['slip'])[0]
+    if zeroMode not in ('slip', 'fixed'):
+        sys.exit('ERROR! GLOBAL_REFINEMENT ZERO_LAYERS must be slip or fixed!')
+    groupLayers = any(group['stack'] for groups in meshGroups.values() for group in groups)
+    zeroLayers = -1 if zeroMode == 'slip' and groupLayers else 0
     for geom in geomDict:
         geomName = stripExt(geom)
         geomFile = geom.replace('.gz', '')
@@ -446,17 +822,39 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
             surfaceArray.append('        %s { level (%s %s); faceZone %s; cellZone %s; cellZoneInside inside; }'
                                 % (geomName, level, level, geomName, geomName))
             continue
-        #per-region levels by PID name (regex) from system/snappyRefinementDict
-        surfaceArray.append('        %s { level (%s %s); patchInfo { type wall; } regions { #include "snappyRefinementDict" } }'
-                            % (geomName, level, level))
+        #per-region levels: MESH_GROUPS LEVEL by exact PID (an exact key wins over the regex keys), then by PID name
+        #keyword (regex) from system/snappyRefinementDict
+        regionLevels = ''.join('%s { level (%d %d); } ' % ((pid,) + group['level'])
+                               for group in meshGroups.get(geomName, []) if group['level'] for pid in group['pids'])
+        surfaceArray.append('        %s { level (%s %s); patchInfo { type wall; } regions { %s#include "snappyRefinementDict" } }'
+                            % (geomName, level, level, regionLevels))
+        nLayers = int(geomDict[geom]['layers'])
         layerArray.append('        "%s_.*" { nSurfaceLayers %s; expansionRatio %s;}'
-                          % (geomName, geomDict[geom]['layers'], geomDict[geom]['expansion']))
+                          % (geomName, nLayers if nLayers > 0 else zeroLayers, geomDict[geom]['expansion']))
     #gap faces: no layers, written after the file-wide entry (last matching regex wins)
     for geom in geomDict:
         geomName = stripExt(geom)
         gapPids = [p for p in fullCaseSetupDict[geomName].get('GAP_PIDS', ['']) if p != '']
         for kw in gapPids:
-            layerArray.append('        "%s_.*%s.*" { nSurfaceLayers 0; }' % (geomName, kw))
+            layerArray.append('        "%s_.*%s.*" { nSurfaceLayers %d; }' % (geomName, kw, zeroLayers))
+    #MESH_GROUPS layers by exact patch, last (after the file-wide and gap entries)
+    reportLines = []
+    for geom in geomDict:
+        geomName = stripExt(geom)
+        for group in meshGroups.get(geomName, []):
+            entry = 'nSurfaceLayers %d;' % (zeroLayers) if group.get('autoNone') else group['entry']
+            if entry is None:
+                continue
+            for pid in group['pids']:
+                patch = '%s_%s' % (geomName, pid)
+                layerArray.append('        "%s" { %s }' % (patch, entry))
+                if group['stack']:
+                    reportLines.append('%s %s %d %.6g' % (patch, group['name'], group['layers'], group['stack'][0]))
+    #patches with mesh-group layers for meshUtilities/layerReport.py (coverage after snappy, every remesh segment)
+    os.makedirs('system', exist_ok=True)
+    with open(os.path.join('system', 'meshGroups'), 'w') as f:
+        f.write('#patch group layers firstLayerThickness (written by internalSetup, read by layerReport.py)\n')
+        f.write(''.join(line + '\n' for line in reportLines))
     #gap refinement: distance band around a per-body STL of the gap faces
     regionArray = []
     for gapRef in (motionInfo['gapRefs'] if motionInfo else []):
@@ -609,7 +1007,9 @@ def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGr
         if isBuoyant(fullCaseSetupDict):
             initArray.append('p_rgh uniform %.9g;' % (pInit))
     turbModel = getTurbulence(fullCaseSetupDict)
-    wallFunctionNames = {'low': 'lowReynolds', 'high': 'highReynolds'}
+    #low: resolved walls; lowReynoldsInternal sets omega by omegaWallFunction (the shared lowReynolds option fixes omega
+    #at 1e-8, near zero at the wall instead of 6 nu/(beta1 y^2): kOmegaSST blew up in one omega solve)
+    wallFunctionNames = {'low': 'lowReynoldsInternal', 'high': 'highReynolds'}
     if turbModel != 'laminar':
         simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
         initArray += ['k uniform %s;' % (simControl['INIT_K'][0]), 'omega uniform %s;' % (simControl['INIT_OMEGA'][0]),
@@ -631,6 +1031,12 @@ def writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGr
                 continue
             moving = group.get('moving', [])
             static = [pid for pid in group['pids'] if pid not in moving]
+            #slip keeps U.n = 0 on static walls whose points slide with the mesh, but those faces sweep a little volume
+            #each step: gas crosses them (noSlip walls get slidingWallVelocity instead, which follows the face)
+            if static and group['U'] == 'slip' and staticMotion == 'slidingMesh':
+                print('\t\tWARNING: %s group %s is slip on a moving mesh: its faces leak gas where their points slide '
+                      '(about 0.5-1 %% of the mass per cycle in tests). Use noSlip for a sealed wall'
+                      % (geomName, group['name']))
             for pids, motion, suffix in ((static, staticMotion, ''), (moving, 'movingMesh', '_moving')):
                 if len(pids) == 0:
                     continue
@@ -1908,9 +2314,36 @@ def writeTurbulenceInternal(templateLoc, fullCaseSetupDict):
     copyTemplate(templateLoc, 'constant/turbulenceProperties', 'constant/turbulenceProperties', replaceDict)
 
 
+def getEndTime(fullCaseSetupDict):
+    #END_TIME in GLOBAL_CONTROL (s): a transient run that is not cyclic, None when blank (run length from the cycles)
+    value = ''.join(fullCaseSetupDict['GLOBAL_CONTROL'].get('END_TIME', [''])).strip()
+    if value == '':
+        return None
+    try:
+        endTime = float(value)
+    except ValueError:
+        sys.exit('ERROR! GLOBAL_CONTROL END_TIME must be a time in s or blank (got "%s")!' % (value))
+    if endTime <= 0:
+        sys.exit('ERROR! GLOBAL_CONTROL END_TIME must be positive!')
+    if getMoveSections(fullCaseSetupDict):
+        sys.exit('ERROR! GLOBAL_CONTROL END_TIME is for cases without moving bodies: with MOVE bodies the run '
+                 'length is N_CYCLES at FREQ (leave END_TIME blank)!')
+    return endTime
+
+
 def getRunTimes(fullCaseSetupDict):
-    #endTime and writeInterval from FREQ, N_CYCLES, WRITE_PER_CYCLE
+    #endTime and writeInterval from FREQ, N_CYCLES, WRITE_PER_CYCLE, or END_TIME, WRITE_INTERVAL (not cyclic)
     control = fullCaseSetupDict['GLOBAL_CONTROL']
+    endTime = getEndTime(fullCaseSetupDict)
+    if endTime is not None:
+        value = ''.join(control.get('WRITE_INTERVAL', [''])).strip()
+        try:
+            writeInterval = float(value) if value else endTime/20.0
+        except ValueError:
+            sys.exit('ERROR! GLOBAL_CONTROL WRITE_INTERVAL must be a time in s or blank (got "%s")!' % (value))
+        if writeInterval <= 0:
+            sys.exit('ERROR! GLOBAL_CONTROL WRITE_INTERVAL must be positive!')
+        return endTime, writeInterval
     freq = float(control['FREQ'][0])
     nCycles = float(control['N_CYCLES'][0])
     writePerCycle = float(control['WRITE_PER_CYCLE'][0])
@@ -1962,19 +2395,32 @@ def writeControlDictInternal(templateLoc, fullCaseSetupDict):
         copyTemplate(templateLoc, 'system/controlDict', 'system/controlDict', replaceDict)
         return
     endTime, writeInterval = getRunTimes(fullCaseSetupDict)
-    print('\t\t%s cycles at %s Hz: endTime %.6g s, write every %.6g s'
-          % (control['N_CYCLES'][0], control['FREQ'][0], endTime, writeInterval))
+    cyclic = getEndTime(fullCaseSetupDict) is None
+    if cyclic:
+        print('\t\t%s cycles at %s Hz: endTime %.6g s, write every %.6g s'
+              % (control['N_CYCLES'][0], control['FREQ'][0], endTime, writeInterval))
+    else:
+        print('\t\tnot cyclic (END_TIME): endTime %.6g s, write every %.6g s' % (endTime, writeInterval))
     initDt, maxCo, maxDt, adjustDt = getTimeStep(fullCaseSetupDict)
     if adjustDt == 'yes':
         print('\t\tadjustable time step: maxCo %s, maxDeltaT %s' % (maxCo, maxDt))
-    else:
+    elif cyclic:
         print('\t\tfixed time step %s (MAX_CO 0 or blank), %.6g steps per cycle'
               % (maxDt, 1.0/(float(control['FREQ'][0])*float(maxDt))))
+    else:
+        print('\t\tfixed time step %s (MAX_CO 0 or blank), %.6g steps' % (maxDt, endTime/float(maxDt)))
         #without time step adjustment the writes only land on the interval if it is a whole number of steps
         steps = writeInterval/float(maxDt)
         if abs(steps - round(steps)) > 1e-6*steps:
             print('\t\tWARNING! write interval %.6g s is not a whole number of time steps (%.4g): write times '
                   'will be the first step past each interval' % (writeInterval, steps))
+    #one outer corrector (PISO) is only accurate around Co 1 on the moving mesh; a larger limit (or none, fixed step)
+    #lets the step run at MAX_DT whatever the Courant number does (Co 10 seen in end gaps just after a remesh map)
+    nOuter = int(fullCaseSetupDict['GLOBAL_SIM_CONTROL'].get('N_OUTER_CORR', ['1'])[0])
+    if nOuter == 1 and (adjustDt == 'no' or float(maxCo) > 1):
+        print('\t\tWARNING: N_OUTER_CORR 1 (PISO) with %s: the Courant number is not held near 1. Check COURANT_MAX '
+              'and COURANT_ABOVE_1 in the summary (or the log); if Co stays above ~1, lower MAX_DT or use '
+              'N_OUTER_CORR 3 (no relaxation)' % ('a fixed time step' if adjustDt == 'no' else 'MAX_CO %s' % (maxCo)))
     replaceDict = {'SOLVER': getVal(fullCaseSetupDict, 'GLOBAL_SIM_CONTROL', 'SOLVER'),
                    'STARTFROM': control['STARTFROM'][0], 'ENDTIME': '%.9g' % endTime,
                    'INIT_DT': initDt, 'WRITE_INTERVAL': '%.9g' % writeInterval,
@@ -2083,9 +2529,12 @@ def writeNumericsInternal(templateLoc, fullCaseSetupDict, pressureBC=False):
     #linearUpwind keeps it stable at large Co (010 diverged at Co 2.4 with limitedLinearV)
     #steady: bounded convection terms (continuity is only met at convergence)
     bounded = 'bounded ' if steady else ''
-    divTurb = ['div(phi,k)      %sGauss linearUpwind grad(k);' % (bounded),
-               'div(phi,omega)  %sGauss linearUpwind grad(omega);' % (bounded),
-               'div(phi,epsilon) %sGauss linearUpwind grad(epsilon);' % (bounded)]
+    #turbulence fields upwind: linearUpwind took omega below zero next to the walls in every step (kOmegaSST, static
+    #demo: bounding each step, min -42; upwind: none, mean gas T within 1e-3 K), and negative omega next to the large
+    #wall values of omegaWallFunction blew up the omega solve in an engine run
+    divTurb = ['div(phi,k)      %sGauss upwind;' % (bounded),
+               'div(phi,omega)  %sGauss upwind;' % (bounded),
+               'div(phi,epsilon) %sGauss upwind;' % (bounded)]
     pRef = ''
     if getFlow(fullCaseSetupDict) == 'incompressible':
         divSchemes = ['div(phi,U)      %sGauss linearUpwind grad(U);' % (bounded)] + divTurb \
@@ -2162,6 +2611,20 @@ def functionObject(name, entries, fieldWriter=False):
     return '\n'.join(lines)
 
 
+def minMaxFields(fullCaseSetupDict):
+    #fields solved for this flow type and turbulence model (fieldMinMax)
+    fields = ['U', 'p']
+    if isBuoyant(fullCaseSetupDict):
+        fields.append('p_rgh')
+    compressible = getFlow(fullCaseSetupDict) != 'incompressible'
+    if compressible:
+        fields += ['T', 'rho']
+    turbModel = getTurbulence(fullCaseSetupDict)
+    if turbModel != 'laminar':
+        fields += ['k', 'epsilon' if turbModel == 'kEpsilon' else 'omega', 'nut'] + (['alphat'] if compressible else [])
+    return fields
+
+
 def writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo=None, porous=None):
     #gas averages, mass (must stay constant in a closed volume) and wall heat flux for compressible runs,
     #pressure force per moving body and area-averaged p on each motion face (both flow types)
@@ -2180,6 +2643,10 @@ def writeFunctionObjectsInternal(wallGroups, fullCaseSetupDict, motionInfo=None,
     fos = [functionObject('gasAvg', volume + [('operation', 'volAverage;'),
                                               ('fields', '(p);' if incompressible else '(p T rho);'),
                                               ('writeFields', 'false;')])]
+    #min/max and their cell locations of every solved field each step: shows where a run starts to blow up
+    fos.append(functionObject('fieldMinMax', [('type', 'fieldMinMax;'), ('libs', '(fieldFunctionObjects);'),
+                                              ('mode', 'magnitude;'), ('location', 'true;'),
+                                              ('fields', '(%s);' % (' '.join(minMaxFields(fullCaseSetupDict))))]))
     #inlets and outlets: flux (kg/s compressible, m3/s incompressible, + out of the domain) and area-averaged p, T
     for patch in flowPatches:
         surface = [('type', 'surfaceFieldValue;'), ('libs', '(fieldFunctionObjects);'), ('regionType', 'patch;'),
@@ -2708,6 +3175,8 @@ def writeMotionGeometry(motionInfo, mshDir, angle=None, triDir=os.path.join('con
         motionUtilities.writeStlTriangles(os.path.join(triDir, gapRef['file']),
                                           dict((pid, t + dz) for pid, t in gapRef['baseTris'].items()))
         written.append(gapRef['file'])
+    #edge refinement STLs (MESH_GROUPS EDGE_LEVEL) with the moving PIDs at this angle
+    written += writeEdgeGeometry(motionInfo.get('edgeRefs', []), triDir, motionShifts(motionInfo, angle))
     return written
 
 
@@ -3066,6 +3535,9 @@ def addSetupInfo(fullCaseSetupDict, wallGroups, motionInfo=None):
                                         'FLOW': [getFlow(fullCaseSetupDict)],
                                         'STEADY': ['yes' if isSteady(fullCaseSetupDict) else 'no'],
                                         'RHO_REF': ['%.6g' % (getGasDensity(fullCaseSetupDict))]}
+    #transient without cycles (END_TIME): post averages over the end of the run instead of whole cycles
+    if not isSteady(fullCaseSetupDict) and getEndTime(fullCaseSetupDict) is not None:
+        fullCaseSetupDict['SETUP_INFO']['CYCLIC'] = ['no']
     if motionInfo:
         fullCaseSetupDict['SETUP_INFO']['START_ANGLE'] = ['%.6g' % (motionInfo['startAngle'])]
         #remeshing: start angle of each mesh (deg, mod 360)

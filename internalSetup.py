@@ -91,8 +91,9 @@ def findPidBodies(pidDict):
     return bodies
 
 
-#FROM bodies: no BC_GROUPS (their faces are one group), U_DEFAULT / T_DEFAULT blank = the file's defaults
-FROM_UNUSED = ('BC_GROUPS',)
+#FROM bodies: no BC_GROUPS (their faces are one group) and no MESH_GROUPS (set in the file's section),
+#U_DEFAULT / T_DEFAULT blank = the file's defaults
+FROM_UNUSED = ('BC_GROUPS', 'MESH_GROUPS')
 FROM_BLANK = ('U_DEFAULT', 'T_DEFAULT')
 
 
@@ -202,13 +203,18 @@ def main(argv=None):
                  % (fullCaseSetupDict['GLOBAL_SIM_CONTROL']['SOLVER'][0]))
     movingPids = motionInfo['movingPids'] if motionInfo else {}
     wallGroups = writeInternal.getWallGroups(geomDict, fullCaseSetupDict, pidDict, movingPids)
+    meshGroups = writeInternal.getMeshGroups(geomDict, fullCaseSetupDict, pidDict, wallGroups, motionInfo)
+    edgeRefs = writeInternal.getEdgeRefs(meshGroups, geomDict, mshDir)
 
     setupCore.linkGeomFiles(geomDict, caseDir, jobPath)
     if motionInfo:
+        motionInfo['edgeRefs'] = edgeRefs
         writeInternal.writeMotionGeometry(motionInfo, mshDir)
         writeInternal.writeRemeshMeshes(motionInfo, mshDir)
+    else:
+        writeInternal.writeEdgeGeometry(edgeRefs)
     writeInternal.writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict)
-    writeInternal.writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo)
+    writeInternal.writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo, meshGroups)
     writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, fullCaseSetupDict, wallGroups)
     writeInternal.writeThermoInternal(templateLoc, fullCaseSetupDict)
     fanNames = writeInternal.writeFanBaffles(geomDict, fullCaseSetupDict)

@@ -9,5 +9,6 @@ ZONE_PIDS =
 U_DEFAULT = noSlip
 T_DEFAULT = adiabatic
 BC_GROUPS = 
+MESH_GROUPS = 
 GAP_PIDS = 
 GAP_CELLS = 6

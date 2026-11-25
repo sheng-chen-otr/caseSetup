@@ -86,6 +86,58 @@ def getGroupSettings(config):
     return groups
 
 
+def gasConstants(caseDir):
+    #specific gas constant R and Cp of the perfect gas from constant/thermophysicalProperties, (None, None) if missing
+    path = os.path.join(caseDir, 'constant', 'thermophysicalProperties')
+    if not os.path.isfile(path):
+        return None, None
+    with open(path) as f:
+        text = f.read()
+    molWeight = re.search(r'\bmolWeight\s+([-+0-9.eE]+)\s*;', text)
+    cp = re.search(r'\bCp\s+([-+0-9.eE]+)\s*;', text)
+    if not molWeight or not cp:
+        return None, None
+    return 8314.46/float(molWeight.group(1)), float(cp.group(1))
+
+
+def isothermalT(config):
+    #reference T of the isothermal limit: the fixed wall T when every fixed-T group has the same one, else INIT_T
+    fixed = set()
+    for setting in getGroupSettings(config).values():
+        tokens = setting.split()
+        if len(tokens) == 2 and tokens[0] == 'fixed':
+            fixed.add(float(tokens[1]))
+    if len(fixed) == 1:
+        return fixed.pop(), 'fixed wall T'
+    return float(getSetting(config, 'GLOBAL_MATERIAL', 'INIT_T', '300') or 300), 'INIT_T'
+
+
+def idealGasSummary(caseDir, config, t, mass, volume, p, gasT, t0, t1):
+    #ideal-gas limits over the averaging cycles: polytropic exponent n of p V^n = const fitted to the loop (1 =
+    #isothermal, gamma = adiabatic), p over the isothermal p = m R T_ref / V, gas T swing, loop work over p V
+    sel = window(t, t0, t1)
+    out = {}
+    fit = np.polyfit(np.log(volume[sel]), np.log(p[sel]), 1)
+    out['POLY_N'] = float(-fit[0])
+    if gasT is not None:
+        out['T_SWING'] = float(gasT[sel].max() - gasT[sel].min())
+    pV = timeMean(t, p*volume, t0, t1)
+    if pV > 0:
+        out['PV_WORK_REL'] = float(integrate(volume[sel], p[sel])/pV)
+    R, cp = gasConstants(caseDir)
+    if R is None:
+        return out
+    tRef, source = isothermalT(config)
+    dev = p[sel]*volume[sel]/(mass[sel]*R*tRef) - 1.0
+    out['GAMMA'] = float(cp/(cp - R))
+    out['T_ISO_REF'] = tRef
+    out['P_ISO_DEV_MAX'] = float(dev[np.argmax(np.abs(dev))])
+    print('\tideal gas: n = %.4f (isothermal 1, adiabatic %.4f), p/p_iso - 1 up to %+.3g %% (T_ref %g K, %s), '
+          'gas T swing %.3g K' % (out['POLY_N'], out['GAMMA'], 100*out['P_ISO_DEV_MAX'], tRef, source,
+                                  out.get('T_SWING', float('nan'))))
+    return out
+
+
 #----- logs
 
 def clockTime(path):
@@ -145,6 +197,41 @@ def solverLogs(caseDir, solver):
     if os.path.isfile(current):
         logs.append(current)
     return logs
+
+
+def solverQuality(logs, t0, t1, pCap):
+    #per time step in t0 < t <= t1 from the solver logs: the Courant number (the line printed before "Time = ", for
+    #that step) and the iterations of the last p solve of the step (the final one). returns (Co max, share of steps
+    #with Co > 1, share of steps whose final p solve stopped at the iteration cap, number of steps)
+    coPending = None
+    steps = []
+    for path in logs:
+        with open(path, errors='replace') as f:
+            for line in f:
+                if line.startswith('Courant Number mean'):
+                    m = re.match(r'^Courant Number mean:\s*(\S+)\s+max:\s*(\S+)', line)
+                    if m:
+                        coPending = float(m.group(2))
+                elif line.startswith('Time = '):
+                    try:
+                        t = float(line.split('=', 1)[1])
+                    except ValueError:
+                        continue
+                    steps.append([t, coPending, None])
+                    coPending = None
+                elif 'Solving for p' in line and steps:
+                    m = re.search(r'Solving for (p|p_rgh),.*No Iterations (\d+)', line)
+                    if m:
+                        steps[-1][2] = int(m.group(2))
+    steps = [s for s in steps if t0 < s[0] <= t1 + 1e-12]
+    if not steps:
+        return None, None, None, 0
+    co = [s[1] for s in steps if s[1] is not None]
+    pIter = [s[2] for s in steps if s[2] is not None]
+    coMax = max(co) if co else None
+    above = sum(1 for c in co if c > 1.0)/len(co) if co else None
+    capped = sum(1 for n in pIter if n >= pCap)/len(pIter) if pIter else None
+    return coMax, above, capped, len(steps)
 
 
 def cellCount(caseDir):
@@ -442,7 +529,7 @@ def porousSummary(post, t0, t1):
 
 #----- summary
 
-def buildSummary(caseDir, avgCycles=1, avgIters=50):
+def buildSummary(caseDir, avgCycles=1, avgIters=50, avgTime=None):
     start = time.time()
     caseDir = os.path.abspath(caseDir)
     config = readCaseSetup(caseDir)
@@ -492,20 +579,32 @@ def buildSummary(caseDir, avgCycles=1, avgIters=50):
     names, gasAvg = readDat(os.path.join(post, 'gasAvg'), 'volFieldValue')
     endTime = float(gasAvg[-1, 0]) if gasAvg is not None else 0.0
 
-    #steady solvers: results averaged over the last avgIters iterations, no cycles
-    if getSetting(config, 'SETUP_INFO', 'STEADY', 'no') == 'yes':
+    #steady solvers: results averaged over the last avgIters iterations; transient runs without cycles (END_TIME):
+    #over the last avgTime seconds (default the last 10 % of the run)
+    steady = getSetting(config, 'SETUP_INFO', 'STEADY', 'no') == 'yes'
+    if steady or getSetting(config, 'SETUP_INFO', 'CYCLIC', 'yes') == 'no':
         for key in ['FREQ', 'N_CYCLES']:
             summary.pop(key, None)
-        summary['N_ITER'] = getSetting(config, 'GLOBAL_CONTROL', 'N_ITER')
-        summary['END_ITER'] = int(round(endTime))
+        if steady:
+            summary['N_ITER'] = getSetting(config, 'GLOBAL_CONTROL', 'N_ITER')
+            summary['END_ITER'] = int(round(endTime))
+        else:
+            summary['END_TIME_SET'] = getSetting(config, 'GLOBAL_CONTROL', 'END_TIME')
+            summary['END_TIME'] = round(endTime, 9)
         summary['FINISHED'] = 'yes' if summary['COMPLETION_DATE'] else 'no'
         if gasAvg is None:
             print('\tWARNING: no gasAvg output yet, results left empty')
             summary['POST_TIME'] = hours(time.time() - start + (exportTime or 0.0))
             return summary
-        t0, t1 = max(float(gasAvg[0, 0]), endTime - avgIters), endTime
-        summary['AVG_ITERS'] = int(round(t1 - t0))
-        print('\taveraging over iterations %d to %d' % (int(t0), int(t1)))
+        if steady:
+            t0, t1 = max(float(gasAvg[0, 0]), endTime - avgIters), endTime
+            summary['AVG_ITERS'] = int(round(t1 - t0))
+            print('\taveraging over iterations %d to %d' % (int(t0), int(t1)))
+        else:
+            span = avgTime if avgTime else 0.1*endTime
+            t0, t1 = max(float(gasAvg[0, 0]), endTime - span), endTime
+            summary['AVG_TIME'] = t1 - t0
+            print('\taveraging over t = %.6g to %.6g s' % (t0, t1))
         for k, name in enumerate(names[1:], start=1):
             field = re.sub(r'^volAverage\((.*)\)$', r'\1', name).upper()
             summary['%s_MEAN' % (field)] = timeMean(gasAvg[:, 0], gasAvg[:, k], t0, t1)
@@ -513,6 +612,9 @@ def buildSummary(caseDir, avgCycles=1, avgIters=50):
         summary.update(porousSummary(post, t0, t1))
         if compressible:
             summary.update(heatSummary(config, post, t0, t1))
+            mNames, mass = readDat(os.path.join(post, 'gasMass'), 'volFieldValue')
+            if mass is not None and not steady and not flowGroups(config):
+                summary['MASS_DRIFT'] = float(mass[-1, 1]/mass[0, 1] - 1.0)
         summary['POST_TIME'] = hours(time.time() - start + (exportTime or 0.0))
         return summary
 
@@ -539,6 +641,22 @@ def buildSummary(caseDir, avgCycles=1, avgIters=50):
     else:
         t0, t1 = (cyclesDone - nAvg)/freq, cyclesDone/freq
     print('\taveraging over cycles %d to %d (t = %.6g to %.6g s)' % (cyclesDone - nAvg + 1, cyclesDone, t0, t1))
+
+    #solver quality over the same cycles: Courant number (PISO is only accurate around 1) and p solves cut off at the
+    #iteration cap (a stalled pressure solve looks like any other step otherwise)
+    pCap = int(float(getSetting(config, 'GLOBAL_SIM_CONTROL', 'P_MAX_ITER', '1000') or 1000))
+    coMax, coAbove, pCapped, nSteps = solverQuality(solverLogs(caseDir, solver), t0, t1, pCap)
+    if nSteps:
+        summary['COURANT_MAX'] = round(coMax, 4) if coMax is not None else ''
+        summary['COURANT_ABOVE_1'] = round(coAbove, 4) if coAbove is not None else ''
+        summary['P_CAP_FRACTION'] = round(pCapped, 4) if pCapped is not None else ''
+        nOuter = int(float(getSetting(config, 'GLOBAL_SIM_CONTROL', 'N_OUTER_CORR', '1') or 1))
+        if coAbove is not None and coAbove > 0.05 and nOuter == 1:
+            print('\tWARNING: Courant number above 1 in %.0f %% of the steps (max %.3g) with N_OUTER_CORR 1: lower '
+                  'MAX_DT or use 3 outer correctors' % (100*coAbove, coMax))
+        if pCapped is not None and pCapped > 0.02:
+            print('\tWARNING: the final p solve stopped at P_MAX_ITER %d in %.0f %% of the steps: check the p '
+                  'residuals in the log (round-off floor or a stalled solve)' % (pCap, 100*pCapped))
 
     #gas averages over the window (time-weighted, the time step varies)
     if gasAvg is not None:
@@ -633,6 +751,11 @@ def buildSummary(caseDir, avgCycles=1, avgIters=50):
                 summary['PV_WORK'] = integrate(volume[sel], pAvg[sel])/nAvg
                 summary['GAS_VOLUME_MIN'] = float(volume[sel].min())
                 summary['GAS_VOLUME_MAX'] = float(volume[sel].max())
+                gasT = None
+                if 'volAverage(T)' in names:
+                    gasT = np.interp(mass[:, 0], gasAvg[:, 0], gasAvg[:, names.index('volAverage(T)')])
+                summary.update(idealGasSummary(caseDir, config, mass[:, 0], mass[:, 1], volume, pAvg, gasT,
+                                               t0, t1))
         summary.update(heatSummary(config, post, t0, t1))
 
     #inlets and outlets of a through-flow case, porous zones
@@ -832,7 +955,8 @@ def pvData(caseDir, nLoops=3):
         #closed: a later cycle follows, or the data reach the cycle end within two samples
         closed = k < nCycles - 1 or phase[-1] >= 360.0*(k + 1) - 2.0*float(np.max(np.diff(phase[sel])))
         cycles.append({'cycle': k + 1, 'angle': phase[sel] - 360.0*k, 'volume': volume[sel], 'pAvg': pAvg[sel],
-                       'pCrown': None if pCrown is None else pCrown[sel], 'closed': bool(closed)})
+                       'pCrown': None if pCrown is None else pCrown[sel], 'mass': mass[sel, 1],
+                       'closed': bool(closed)})
     return {'theta0': theta0, 'crown': crownLabel, 'cycles': cycles}
 
 
@@ -877,7 +1001,7 @@ def flowSeries(caseDir):
 
 
 def writeFlowPlot(caseDir, plt):
-    #flowConvergence.png for steady runs
+    #flowConvergence.png for steady runs and transient runs without cycles (against time)
     series = flowSeries(caseDir)
     panels = []
     if series['residuals']:
@@ -902,7 +1026,8 @@ def writeFlowPlot(caseDir, plt):
         ax.set_ylabel(label, fontsize=9)
         ax.legend(fontsize=8)
         ax.grid(True)
-    axes[-1, 0].set_xlabel('iteration')
+    steady = getSetting(readCaseSetup(os.path.abspath(caseDir)), 'SETUP_INFO', 'STEADY', 'no') == 'yes'
+    axes[-1, 0].set_xlabel('iteration' if steady else 'time [s]')
     axes[0, 0].set_title('%s convergence' % (os.path.basename(os.path.abspath(caseDir))))
     path = os.path.join(os.path.abspath(caseDir), 'flowConvergence.png')
     fig.savefig(path, dpi=200, bbox_inches='tight')
@@ -942,6 +1067,17 @@ def writePvPlot(caseDir, plt, nLoops=3):
             ax[1, 1].plot(v, 100.0*(p/np.exp(fit[0] + fit[1]*np.log(v)) - 1.0), color=colour, lw=1.6,
                           label='cycle %d (n = %.3f)' % (c['cycle'], -fit[1]))
         last = data['cycles'][-1]
+        #ideal-gas limits through the last cycle: isothermal p = m R T_ref / V, adiabatic p V^gamma through its largest volume
+        R, cp = gasConstants(os.path.abspath(caseDir))
+        if R is not None:
+            tRef, source = isothermalT(readCaseSetup(os.path.abspath(caseDir)))
+            gamma = cp/(cp - R)
+            v = np.linspace(last['volume'].min(), last['volume'].max(), 200)
+            k = int(np.argmax(last['volume']))
+            ax[0, 0].plot(v*1e6, float(np.mean(last['mass']))*R*tRef/v/1e5, '--', color=PLOT_INK2, lw=1.0,
+                          label='isothermal (%g K)' % (tRef))
+            ax[0, 0].plot(v*1e6, last[key][k]*(last['volume'][k]/v)**gamma/1e5, ':', color=PLOT_INK2, lw=1.2,
+                          label='adiabatic (gamma = %.3f)' % (gamma))
         ax[1, 0].plot(last['angle'], last['volume']*1e6, color=PLOT_INK2, lw=1.6)
         ax[0, 0].set(xlabel='gas volume [cm$^3$]', ylabel='p [bar]', title='p-V loops (area = work per cycle, + out of the gas)')
         ax[0, 1].set(xlabel='crank angle from the start angle [deg]', ylabel='p [bar]', title='p vs crank angle')
@@ -977,8 +1113,10 @@ def writePlots(caseDir, nLoops=3):
     caseDir = os.path.abspath(caseDir)
     caseName = os.path.basename(caseDir)
     written = []
-    #steady runs: flowConvergence.png only
-    if getSetting(readCaseSetup(caseDir), 'SETUP_INFO', 'STEADY', 'no') == 'yes':
+    #steady runs and transient runs without cycles: flowConvergence.png only
+    config = readCaseSetup(caseDir)
+    if (getSetting(config, 'SETUP_INFO', 'STEADY', 'no') == 'yes'
+            or getSetting(config, 'SETUP_INFO', 'CYCLIC', 'yes') == 'no'):
         path = writeFlowPlot(caseDir, plt)
         return [path] if path else []
 
@@ -1059,13 +1197,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Summary and plots of an internalSetup case (summary.csv, pV.png, cycleConvergence.png)')
     parser.add_argument('cases', nargs='*', default=['.'], help='case directories (default: current directory)')
     parser.add_argument('--avgCycles', type=int, default=1, help='average results over the last N complete cycles (default 1)')
+    parser.add_argument('--avgTime', type=float, default=None,
+                        help='transient runs without cycles (END_TIME): average over the last AVGTIME s (default: last 10 %%)')
     parser.add_argument('--pvCycles', type=int, default=3, help='number of last cycles overlaid in pV.png (default 3)')
     parser.add_argument('--noPlots', action='store_true', help='summary only')
     parser.add_argument('--gsheet', action='store_true', help='push the summary to the database gsheet (gsheetInternal.py)')
     args = parser.parse_args(argv)
     for case in args.cases:
         print('\n\tPost-processing %s...' % (os.path.abspath(case)))
-        summary = buildSummary(case, args.avgCycles)
+        summary = buildSummary(case, args.avgCycles, avgTime=args.avgTime)
         path = writeSummary(summary, case)
         print('\twritten %s' % (path))
         for key in ['CYCLES_DONE', 'AVG_ENERGY', 'AVG_POWER', 'MASS_DRIFT']:

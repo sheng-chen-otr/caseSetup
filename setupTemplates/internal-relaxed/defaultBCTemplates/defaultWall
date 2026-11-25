@@ -2,5 +2,6 @@
 U_DEFAULT = noSlip
 T_DEFAULT = adiabatic
 BC_GROUPS = 
+MESH_GROUPS = 
 ANCHOR_PIDS = 
 GAP_PIDS = 

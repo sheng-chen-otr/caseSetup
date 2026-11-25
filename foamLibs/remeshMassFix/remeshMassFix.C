@@ -293,6 +293,11 @@ int main(int argc, char *argv[])
         )
     );
 
+    // remeshCover is removed only when every step of -combine (and -mass) is done: remeshRun.py takes a remeshed
+    // time that still has it as an unfinished map and runs -combine again (a job that died in between started
+    // the solver on unfilled cells without the mass fix)
+    fileName coverPath;
+
     if (args.found("writeCover"))
     {
         volScalarField cover
@@ -336,7 +341,7 @@ int main(int argc, char *argv[])
             nFields += combineFields<vector>(mesh, objects, cover, minCover, nUncovered, nUnfilled);
             Info<< "coverage of the new cells by the old mesh: min " << gMin(cover.primitiveField())
                 << ", max " << gMax(cover.primitiveField()) << endl;
-            rm(cover.objectPath());
+            coverPath = cover.objectPath();
         }
         for (const word& name : matrixFields(mesh, IOobjectList(mesh, runTime.timeName())))
         {
@@ -435,6 +440,10 @@ int main(int argc, char *argv[])
         {
             FatalErrorInFunction << "no rho in " << runTime.timeName() << exit(FatalError);
         }
+        if (!coverPath.empty())
+        {
+            rm(coverPath);
+        }
         Info<< "End" << endl;
         return 0;
     }
@@ -459,6 +468,11 @@ int main(int argc, char *argv[])
             << " (gas mass " << mass0 << " -> " << mass << ")" << endl;
     }
 
+    // the map is finished: its marker goes last
+    if (!coverPath.empty())
+    {
+        rm(coverPath);
+    }
     Info<< "End" << endl;
     return 0;
 }

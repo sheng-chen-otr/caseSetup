@@ -33,6 +33,14 @@ wallFunction
             value       uniform 0;
         }
     }
+    lowReynoldsInternal
+    {
+        alphat
+        {
+            type        fixedValue;
+            value       uniform 0;
+        }
+    }
 }
 
 heatTransfer

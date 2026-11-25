@@ -147,14 +147,24 @@ def test_run_loop_steps(tmp_path, repo_root, monkeypatch):
     #stopped at the end of seg01 (99 deg, a hair short): map onto seg02
     _writeTime(tmp_path, '0.003', '98.99999999999')
     assert rr.nextStep() == 'map seg02 0.003'
-    #mapFieldsPar output in meshes/seg02/processor*/0.003, then graft
+    #remeshCover written on the old mesh before mapping (job died before the graft): still the whole map
+    for k in range(2):
+        (tmp_path / ('processor%d' % k) / '0.003' / 'remeshCover').write_text('old cover\n')
+    assert rr.nextStep() == 'map seg02 0.003'
+    #mapFieldsPar output in meshes/seg02/processor*/0.003 (remeshCover mapped too), then graft
     for k in range(2):
         mapped = tmp_path / 'meshes' / 'seg02' / ('processor%d' % k) / '0.003'
         os.makedirs(mapped)
-        for field in ['p', 'U', 'rho']:
+        for field in ['p', 'U', 'rho', 'remeshCover']:
             (mapped / field).write_text('mapped %s\n' % field)
     rr.graft('seg02', '0.003', '5e-07')
     t = tmp_path / 'processor1' / '0.003'
+    assert sorted(os.listdir(t)) == ['U', 'p', 'pointDisplacement', 'polyMesh', 'remeshCover', 'rho', 'uniform']
+    #the fill / mass fix has not run (remeshCover still there): finish the map before solving
+    assert rr.nextStep() == 'combine seg02 0.003'
+    #remeshMassFix -combine removes remeshCover as its last step
+    for k in range(2):
+        (tmp_path / ('processor%d' % k) / '0.003' / 'remeshCover').unlink()
     assert sorted(os.listdir(t)) == ['U', 'p', 'pointDisplacement', 'polyMesh', 'rho', 'uniform']
     assert (t / 'p').read_text() == 'mapped p\n'
     assert sorted(os.listdir(t / 'polyMesh')) == ['faces', 'points', 'points0', 'remeshSegment']
@@ -202,3 +212,20 @@ def test_done_within_one_step_of_end_time(tmp_path, repo_root, monkeypatch):
     assert rr.nextStep() == 'solve seg01 0.0998'
     _writeTime(tmp_path, '0.09995', '98.5')
     assert rr.nextStep() == 'done'
+
+
+def test_unfinished_write_step_set_aside(tmp_path, repo_root, monkeypatch, capsys):
+    #a solver that crashed in its last (write) step leaves a time with the crank state at the stop angle and no fields:
+    #renamed to <time>.incomplete in every processor, the loop goes on from the last finished time
+    rr = _remeshRun(repo_root)
+    _fakeCase(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    _writeTime(tmp_path, '0.002', '95.0')
+    _writeTime(tmp_path, '0.003', '98.99999999999')
+    for k in range(2):
+        for field in ['p', 'U', 'phi', 'meshPhi']:
+            (tmp_path / ('processor%d' % k) / '0.003' / field).unlink()
+    assert rr.nextStep() == 'solve seg01 0.002'
+    for k in range(2):
+        assert sorted(os.listdir(tmp_path / ('processor%d' % k))) == ['0', '0.002', '0.003.incomplete']
+    assert 'time 0.003 had no fields' in capsys.readouterr().err

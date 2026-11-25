@@ -527,6 +527,8 @@ def test_compressible_dicts_unchanged(tmp_path, monkeypatch, repo_root):
     writeInternal.writeFunctionObjectsInternal({}, full)
     schemes = (tmp_path / 'system/fvSchemes').read_text()
     assert 'div(meshPhi,p)' in schemes and 'div(((rho*nuEff)*dev2(T(grad(U)))))' in schemes
+    #turbulence fields upwind (linearUpwind took omega below zero next to the walls every step)
+    assert 'div(phi,k)      Gauss upwind;' in schemes and 'div(phi,omega)  Gauss upwind;' in schemes
     assert 'pRef' not in (tmp_path / 'system/fvSolution').read_text()
     fos = (tmp_path / 'system/internalFunctionObjects').read_text()
     assert 'gasMass' in fos and 'fields          (p T rho);' in fos
@@ -903,6 +905,24 @@ def test_steady_numerics_and_control(tmp_path, monkeypatch, repo_root):
     control = (tmp_path / 'system/controlDict').read_text()
     assert 'endTime         400;' in control and 'deltaT          1;' in control
     assert 'writeInterval   100;' in control and 'adjustTimeStep  no;' in control
+
+
+def test_end_time_not_cyclic(tmp_path, monkeypatch, repo_root):
+    #END_TIME: transient run of a set length, write every WRITE_INTERVAL (blank = END_TIME/20), not with MOVE bodies
+    monkeypatch.chdir(tmp_path)
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    assert writeInternal.getEndTime(full) is None
+    assert writeInternal.getRunTimes(full) == pytest.approx((3/10.0, 1/200.0))
+    full['GLOBAL_CONTROL']['END_TIME'] = ['2.5']
+    assert writeInternal.getRunTimes(full) == pytest.approx((2.5, 0.125))
+    full['GLOBAL_CONTROL']['WRITE_INTERVAL'] = ['0.5']
+    writeInternal.writeControlDictInternal(templateLoc, full)
+    control = (tmp_path / 'system/controlDict').read_text()
+    assert 'endTime         2.5;' in control and 'writeInterval   0.5;' in control
+    assert writeInternal.addSetupInfo(full, {})['SETUP_INFO']['CYCLIC'] == ['no']
+    full['MOVE-piston'] = {'MOTION_FILE': ['m.csv']}
+    with pytest.raises(SystemExit):
+        writeInternal.getEndTime(full)
 
 
 def test_buoyant_thermo_and_gravity(tmp_path, monkeypatch, repo_root):
@@ -1303,6 +1323,29 @@ def test_static_walls_slide_in_a_moving_mesh(tmp_path, monkeypatch, repo_root):
     assert 'libs            (stirlingMotion);' in control and control.index('libs') < control.index('functions')
     options = open(os.path.join(repo_root, 'zeroTemplates', 'boundaryConditions', 'fluid', 'wallOptions')).read()
     assert 'slidingMesh' in options and 'slidingWallVelocity' in options
+    #resolved (low) walls: omega from omegaWallFunction, not the shared lowReynolds option's fixed 1e-8
+    geomDict['WALL-pipe.stl']['wallmodel'] = 'low'
+    writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, full, wallGroups)
+    wall = [l for l in (tmp_path / 'system/caseProperties').read_text().splitlines() if 'category wall;' in l][0]
+    assert 'wallFunction lowReynoldsInternal;' in wall
+    block = options[options.index('lowReynoldsInternal'):]
+    block = block[:block.index('nuTilda')]
+    assert 'omegaWallFunction' in block and '1e-8' not in block
+
+
+def test_slip_wall_on_moving_mesh_warns(tmp_path, monkeypatch, repo_root, capsys):
+    #slip has U.n = 0 on faces that sweep volume as their points slide: gas leaks, so the setup says so
+    geomDict, wallGroups = _pipeCase(tmp_path, monkeypatch)
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    walls = [g for groups in wallGroups.values() for g in groups if not g['flow']]
+    for group in walls:
+        group['U'] = 'slip'
+    capsys.readouterr()
+    writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, full, wallGroups)
+    assert 'leak' not in capsys.readouterr().out
+    full['MOVE-displacer'] = {'FROM': ['self']}
+    writeInternal.writeCasePropertiesInternal(templateLoc, geomDict, full, wallGroups)
+    assert 'is slip on a moving mesh: its faces leak gas' in capsys.readouterr().out
 
 
 def test_from_body_own_bc(capsys):
@@ -1315,11 +1358,15 @@ def test_from_body_own_bc(capsys):
     assert groups['MOVE-crown']['pids'] == ['MOVE-crown'] and groups['MOVE-crown']['T'] == ['adiabatic']
     assert groups['MOVE-crown']['U'] == 'noSlip' and groups['MOVE-crown']['moving'] == ['MOVE-crown']
     assert groups['WALL-cyl_default']['pids'] == ['WALL-liner', 'WALL-bottom'] and groups['WALL-cyl_default']['T'] == ['fixed', 295.0]
-    assert 'movingWall' in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert 'movingWall' in out
+    #a T different from the file's default is pointed out (its meaning changed on 2026-11-24)
+    assert 'NOTE: [MOVE-crown] faces use its own T_DEFAULT (adiabatic), not the WALL-cyl default (fixed 295.0)' in out
     #blank T: the file's default
     full['MOVE-crown']['T_DEFAULT'] = ['']
     groups = dict((g['name'], g) for g in writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})['WALL-cyl'])
     assert groups['MOVE-crown']['T'] == ['fixed', 295.0]
+    assert 'NOTE' not in capsys.readouterr().out
     #the same faces in a group of the wall file as well: error (one place for U and T)
     full['WALL-cyl']['BC_GROUPS'], full['WALL-cyl']['crown'] = ['crown'], ['PIDS', 'crown', 'T', 'adiabatic']
     with pytest.raises(SystemExit, match='set its U and T in one place'):
@@ -1330,3 +1377,327 @@ def test_from_body_own_bc(capsys):
     capsys.readouterr()
     writeInternal.getWallGroups(geomDict, full, pidDict, {'WALL-cyl': ['MOVE-crown']})
     assert 'WARNING: [MOVE-crown] BC_GROUPS face is not used (FROM body)' in capsys.readouterr().out
+
+
+#----- mesh groups (surface level and wall layers per PID)
+
+def test_parseMeshGroupLine():
+    group = writeInternal.parseMeshGroupLine(['PIDS', 'hot', 'cold', 'LEVEL', '2', '3', 'LAYERS', '6', 'FIRST', '1e-4',
+                                              'FINAL', '0.5'], 'g')
+    assert group['keywords'] == ['hot', 'cold'] and group['level'] == (2, 3) and group['layers'] == 6
+    #FIRST without SIZES: mixed (absolute first layer, final relative)
+    assert group['sizes'] == {'FIRST': 1e-4, 'FINAL': 0.5} and group['mode'] == 'mixed'
+    assert writeInternal.parseMeshGroupLine(['PIDS', 'hot', 'LEVEL', '3'], 'g')['level'] == (3, 3)
+    auto = writeInternal.parseMeshGroupLine(['PIDS', 'hot', 'LAYERS', 'auto'], 'g')
+    assert auto['layers'] == 'auto' and auto['mode'] == 'mixed'
+    assert writeInternal.parseMeshGroupLine(['PIDS', 'hot', 'LAYERS', '3'], 'g')['mode'] == 'relative'
+    absolute = writeInternal.parseMeshGroupLine('PIDS hot LAYERS 5 SIZES absolute FIRST 1e-4 EXPANSION 1.2 MIN 5e-5'.split(), 'g')
+    assert absolute['mode'] == 'absolute' and absolute['min'] == 5e-5
+    assert writeInternal.parseMeshGroupLine(['PIDS', 'side', 'LAYERS', '-1'], 'g')['layers'] == -1
+
+
+@pytest.mark.parametrize('line, message', [
+    ('hot LAYERS 3', 'must start with PIDS'),
+    ('PIDS hot', 'sets nothing'),
+    ('PIDS hot LEVEL 3 2', 'max below min'),
+    ('PIDS hot LEVEL a', 'refinement levels'),
+    ('PIDS hot LAYERS -2', 'number of layers, auto, 0'),
+    ('PIDS hot LEVEL 2 FIRST 1e-4', 'need LAYERS'),
+    ('PIDS hot LAYERS -1 FIRST 1e-4', 'adds no layers, no sizes'),
+    ('PIDS hot LAYERS 4 SIZES other', 'SIZES must be one of'),
+    ('PIDS hot LAYERS 4 FIRST 1e-4 EXPANSION 1.2', 'SIZES mixed takes FIRST'),
+    ('PIDS hot LAYERS 4 SIZES absolute FIRST 1e-4 FINAL 1e-3 TOTAL 2e-3', 'at most two of'),
+    ('PIDS hot LAYERS 4 SIZES absolute EXPANSION 1.2', 'SIZES absolute needs FIRST, FINAL or TOTAL'),
+    ('PIDS hot LAYERS auto FIRST 1e-4', 'LAYERS auto sets the first layer'),
+    ('PIDS hot LAYERS auto SIZES relative', 'LAYERS auto sets the first layer'),
+    ('PIDS hot LAYERS 4 FIRST 0', 'one positive number')])
+def test_parseMeshGroupLine_errors(line, message):
+    with pytest.raises(SystemExit, match=message):
+        writeInternal.parseMeshGroupLine(line.split(' '), 'g')
+
+
+def _meshGroupCase(repo_root, **groups):
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    full['GLOBAL_MATERIAL']['GAS'] = ['helium']
+    full['GLOBAL_MATERIAL']['CHARGE_PRESSURE'] = ['1.261e6']
+    full['GLOBAL_CONTROL']['FREQ'] = ['5']
+    full['WALL-chamber'] = wall(BC_GROUPS='hotEnd coldEnd', hotEnd='PIDS hot T fixed 600', coldEnd='PIDS cold T fixed 300',
+                                MESH_GROUPS=' '.join(groups.keys()), GAP_PIDS='')
+    for name, line in groups.items():
+        full['WALL-chamber'][name] = line.split(' ')
+    geomDict = {'WALL-chamber.stl': {'refinement': '1', 'scale': '1', 'layers': '0', 'expansion': '1.2'}}
+    pidDict = {'WALL-chamber': ['hot', 'cold', 'sideWall']}
+    wallGroups = writeInternal.getWallGroups(geomDict, full, pidDict)
+    return templateLoc, full, geomDict, pidDict, wallGroups
+
+
+def test_thermal_depth():
+    #sqrt(2 alpha/omega), helium at 12.61 bar and 300 K, 5 Hz: alpha = mu cp/Pr/(rho cp)
+    full = _material(GAS='helium', CHARGE_PRESSURE='1.261e6')
+    full['GLOBAL_CONTROL'] = {'FREQ': ['5']}
+    rho = 1.261e6*4.003/(8314.46*300.0)
+    alpha = 1.99e-5/0.67/rho
+    assert writeInternal.thermalDepth(full, 300.0) == pytest.approx(np.sqrt(2.0*alpha/(2.0*np.pi*5.0)))
+    #sutherland: thicker at the hot wall (alpha ~ T^1.7)
+    full['GLOBAL_MATERIAL']['TRANSPORT'] = ['sutherland']
+    assert writeInternal.thermalDepth(full, 600.0) > 1.5*writeInternal.thermalDepth(full, 300.0)
+
+
+@pytest.mark.parametrize('sizes', [{'FIRST': 1e-4, 'EXPANSION': 1.2}, {'FIRST': 1e-4, 'TOTAL': 7.44e-4},
+                                   {'FINAL': 2.0736e-4, 'TOTAL': 7.44e-4}, {'FINAL': 2.0736e-4, 'EXPANSION': 1.2},
+                                   {'TOTAL': 7.44e-4, 'EXPANSION': 1.2}, {'FIRST': 1e-4, 'FINAL': 2.0736e-4}])
+def test_stack_geometry(sizes):
+    #5 layers from 0.1 mm growing 1.2x: final 0.207 mm, total 0.744 mm, from any two of the four sizes
+    first, final, total, ratio = writeInternal.stackGeometry(sizes, 5)
+    assert first == pytest.approx(1e-4, rel=1e-3) and final == pytest.approx(2.0736e-4, rel=1e-3)
+    assert total == pytest.approx(7.44e-4, rel=1e-3) and ratio == pytest.approx(1.2, rel=1e-3)
+
+
+def test_layer_entries(repo_root):
+    #every entry names its thicknessModel (a patch entry without it only reads the global model's keys)
+    entry = lambda line, cell=0.002: writeInternal.layerEntry(writeInternal.parseMeshGroupLine(line.split(), 'g'), cell,
+                                                              1.2, 0.4, 0.1)
+    text, stack = entry('PIDS hot LAYERS 5 SIZES absolute FIRST 1e-4 EXPANSION 1.2')
+    assert text == ('nSurfaceLayers 5; thicknessModel firstAndExpansion; relativeSizes false; expansionRatio 1.2; '
+                    'firstLayerThickness 0.0001; minThickness 7.4416e-05;')
+    assert stack[2] == pytest.approx(7.4416e-4)
+    #absolute FIRST + FINAL: no snappy model of its own, the growth ratio between them
+    text, stack = entry('PIDS hot LAYERS 5 SIZES absolute FIRST 1e-4 FINAL 2.0736e-4 MIN 5e-5')
+    assert 'thicknessModel firstAndExpansion;' in text and 'expansionRatio 1.2;' in text and 'minThickness 5e-05;' in text
+    #relative: GEOM-like, sizes x the cell; only EXPANSION given -> FINAL_LAYER_THICKNESS
+    text, stack = entry('PIDS hot LAYERS 3 EXPANSION 1.3')
+    assert text == ('nSurfaceLayers 3; thicknessModel finalAndExpansion; relativeSizes true; expansionRatio 1.3; '
+                    'finalLayerThickness 0.4; minThickness 0.1;')
+    assert stack[1] == pytest.approx(0.4*0.002)
+    text, stack = entry('PIDS hot LAYERS 3 SIZES relative TOTAL 1.5')
+    assert 'thicknessModel overallAndExpansion;' in text and 'thickness 1.5;' in text and 'expansionRatio 1.2;' in text
+    assert stack[2] == pytest.approx(0.003)
+    #mixed: absolute first, final relative
+    text, stack = entry('PIDS hot LAYERS 6 FIRST 1e-4')
+    assert text == ('nSurfaceLayers 6; thicknessModel firstAndRelativeFinal; relativeSizes true; '
+                    'firstLayerThickness 0.0001; finalLayerThickness 0.4; minThickness 0.1;')
+    assert stack[0] == pytest.approx(1e-4) and stack[1] == pytest.approx(8e-4)
+
+
+def test_mesh_groups_auto_layers(repo_root, capsys):
+    templateLoc, full, geomDict, pidDict, wallGroups = _meshGroupCase(
+        repo_root, heat='PIDS hot cold LAYERS auto', sides='PIDS side LEVEL 2 3')
+    groups = dict((g['name'], g) for g in writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)['WALL-chamber'])
+    heat = groups['heat']
+    assert heat['pids'] == ['hot', 'cold']
+    #the colder wall (300 K) sets the depth, the first layer is a tenth of it; growing to 0.4 x the 2 mm cell would make
+    #a 3.2 mm stack, so it is capped at 2 depths (absolute sizes), growing at most 1.3x
+    depth = writeInternal.thermalDepth(full, 300.0)
+    first, final, total, ratio = heat['stack']
+    assert heat['depth'] == pytest.approx(depth) and first == pytest.approx(depth/10.0)
+    assert heat['cell'] == pytest.approx(0.002) and heat['mode'] == 'absolute'
+    assert total == pytest.approx(2.0*depth) and ratio <= 1.3 + 1e-9
+    assert writeInternal.stackGeometry({'FIRST': first, 'TOTAL': total}, heat['layers'] - 1)[3] > 1.3
+    assert 'thicknessModel firstAndOverall; relativeSizes false;' in heat['entry']
+    #finer surface cells: the stack up to 0.4 x the cell stays below the cap, mixed sizes as before
+    full['WALL-chamber']['heat'] = 'PIDS hot cold LEVEL 3 LAYERS auto'.split()
+    fine = dict((g['name'], g) for g in writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)['WALL-chamber'])['heat']
+    assert fine['mode'] == 'mixed' and fine['stack'][1] == pytest.approx(0.4*0.0005) and fine['stack'][2] < 2.0*depth
+    assert 'thicknessModel firstAndRelativeFinal;' in fine['entry']
+    full['WALL-chamber']['heat'] = 'PIDS hot cold LAYERS auto'.split()
+    assert groups['sides']['level'] == (2, 3) and groups['sides']['layers'] is None
+    out = capsys.readouterr().out
+    assert 'Mesh groups' in out and 'WALL-chamber_hot' in out and 'WALL-chamber_sideWall' in out
+    #cells already finer than the first layer: no layers, written like the walls without layers
+    full['WALL-chamber']['heat'] = 'PIDS hot cold LEVEL 6 LAYERS auto'.split()
+    groups = dict((g['name'], g) for g in writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)['WALL-chamber'])
+    assert groups['heat']['autoNone'] and groups['heat']['layers'] is None
+    assert 'already fine for the thermal layer' in capsys.readouterr().out
+
+
+def test_mesh_groups_errors(repo_root, capsys):
+    templateLoc, full, geomDict, pidDict, wallGroups = _meshGroupCase(
+        repo_root, heat='PIDS hot LAYERS 4', both='PIDS ho LEVEL 2')
+    with pytest.raises(SystemExit, match='matches mesh groups heat and both'):
+        writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    templateLoc, full, geomDict, pidDict, wallGroups = _meshGroupCase(repo_root, heat='PIDS top LAYERS 4')
+    with pytest.raises(SystemExit, match='keyword "top" matches no PID'):
+        writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    templateLoc, full, geomDict, pidDict, wallGroups = _meshGroupCase(repo_root, heat='PIDS hot LAYERS 4')
+    full['WALL-chamber']['MESH_GROUPS'] = ['hotEnd']
+    with pytest.raises(SystemExit, match='in BC_GROUPS and MESH_GROUPS'):
+        writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    #auto needs a cyclic run
+    templateLoc, full, geomDict, pidDict, wallGroups = _meshGroupCase(repo_root, heat='PIDS hot LAYERS auto')
+    full['GLOBAL_CONTROL']['END_TIME'] = ['2']
+    with pytest.raises(SystemExit, match='cyclic runs only'):
+        writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    #layers on a gap face, layers growing too fast, final layer above the cell: warnings
+    templateLoc, full, geomDict, pidDict, wallGroups = _meshGroupCase(
+        repo_root, heat='PIDS side LAYERS 2 FIRST 1e-5', thick='PIDS hot LAYERS 2 SIZES absolute FINAL 0.003')
+    full['WALL-chamber']['GAP_PIDS'] = ['side']
+    writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    out = capsys.readouterr().out
+    assert "puts layers on the GAP_PIDS faces ['sideWall']" in out and 'use more LAYERS' in out
+    assert 'thicker than the 2 mm surface cell' in out
+
+
+def test_mesh_groups_snappy_dict(tmp_path, monkeypatch, repo_root):
+    templateLoc, full, geomDict, pidDict, wallGroups = _meshGroupCase(
+        repo_root, heat='PIDS hot cold LAYERS 6 FIRST 1e-4', sides='PIDS side LEVEL 2 3')
+    meshGroups = writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    full['WALL-chamber']['GAP_PIDS'] = ['side']
+    monkeypatch.chdir(tmp_path)
+    writeInternal.writeSnappyInternal(templateLoc, geomDict, full, None, meshGroups)
+    snappy = (tmp_path / 'system/snappyHexMeshDict').read_text()
+    #exact region levels before the keyword include (an exact key wins over the regex keys)
+    assert 'regions { sideWall { level (2 3); } #include "snappyRefinementDict" }' in snappy
+    #per-patch layers after the file-wide and the gap entries (last matching entry wins), absolute first layer with
+    #the final layer relative to the cell (firstAndRelativeFinal)
+    hot = ('"WALL-chamber_hot" { nSurfaceLayers 6; thicknessModel firstAndRelativeFinal; relativeSizes true; '
+           'firstLayerThickness 0.0001; finalLayerThickness 0.4; minThickness 0.1; }')
+    assert hot in snappy
+    #walls without layers slide (-1) next to the layered ones: the file-wide GEOM 0 and the gap faces
+    assert '"WALL-chamber_.*" { nSurfaceLayers -1; expansionRatio 1.2;}' in snappy
+    assert '"WALL-chamber_.*side.*" { nSurfaceLayers -1; }' in snappy
+    assert snappy.index('"WALL-chamber_.*" {') < snappy.index('"WALL-chamber_.*side.*"') < snappy.index(hot)
+    #patches with layers for the coverage report
+    report = (tmp_path / 'system/meshGroups').read_text().splitlines()
+    assert report[1:] == ['WALL-chamber_hot heat 6 0.0001', 'WALL-chamber_cold heat 6 0.0001']
+    #ZERO_LAYERS fixed: 0 as before; an explicit LAYERS 0 / -1 in a group is kept
+    full['GLOBAL_REFINEMENT']['ZERO_LAYERS'] = ['fixed']
+    full['WALL-chamber']['sides'] = 'PIDS side LAYERS -1'.split()
+    meshGroups = writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    writeInternal.writeSnappyInternal(templateLoc, geomDict, full, None, meshGroups)
+    snappy = (tmp_path / 'system/snappyHexMeshDict').read_text()
+    assert '"WALL-chamber_.*" { nSurfaceLayers 0; expansionRatio 1.2;}' in snappy
+    assert '"WALL-chamber_sideWall" { nSurfaceLayers -1; }' in snappy
+    #no mesh-group layers: GEOM 0 stays 0 (the dicts of existing cases do not change)
+    full['GLOBAL_REFINEMENT']['ZERO_LAYERS'] = ['slip']
+    full['WALL-chamber']['heat'] = 'PIDS hot cold LEVEL 2'.split()
+    meshGroups = writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    writeInternal.writeSnappyInternal(templateLoc, geomDict, full, None, meshGroups)
+    snappy = (tmp_path / 'system/snappyHexMeshDict').read_text()
+    assert '"WALL-chamber_.*" { nSurfaceLayers 0; expansionRatio 1.2;}' in snappy
+    full['GLOBAL_REFINEMENT']['ZERO_LAYERS'] = ['maybe']
+    with pytest.raises(SystemExit, match='ZERO_LAYERS must be slip or fixed'):
+        writeInternal.writeSnappyInternal(templateLoc, geomDict, full, None, meshGroups)
+
+
+def test_layer_report(tmp_path, repo_root, capsys):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('layerReport', os.path.join(repo_root, 'meshUtilities', 'layerReport.py'))
+    layerReport = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(layerReport)
+    (tmp_path / 'meshGroups').write_text('#patch group layers first\nWALL-chamber_hot heat 8 0.0001\n'
+                                         'WALL-chamber_cold heat 8 0.0001\nWALL-chamber_crown heat 8 0.0001\n')
+    (tmp_path / 'log.snappyHexMesh').write_text(
+        'patch        faces        layers        overall thickness\n'
+        '                      target   mesh     [m]       [%]\n'
+        '-----        -----    -----    ----     ---       ---\n'
+        'WALL-chamber_hot  1024     8        5.05     0.00217   66.9\n'
+        'WALL-chamber_cold 1024     8        1.2      0.0004    12.0\n'
+        'WALL-chamber_side 4096     2        1.65     0.00118   64.7\n'
+        '\nLayer mesh : cells:29924\n')
+    layerReport.main([str(tmp_path / 'log.snappyHexMesh'), str(tmp_path / 'meshGroups'), '--name', 'seg02'])
+    out = capsys.readouterr().out
+    lines = dict((patch, [line for line in out.splitlines() if patch + ' ' in line][0])
+                 for patch in ('WALL-chamber_hot', 'WALL-chamber_cold'))
+    assert 'seg02: layers of the mesh groups' in out
+    assert 'WARNING' not in lines['WALL-chamber_hot'] and '5.05' in lines['WALL-chamber_hot']
+    assert 'WARNING' in lines['WALL-chamber_cold']
+    assert 'WALL-chamber_crown (heat) not in the layer table' in out
+    #no mesh groups with layers: nothing printed
+    (tmp_path / 'meshGroups').write_text('#patch group layers first\n')
+    layerReport.main([str(tmp_path / 'log.snappyHexMesh'), str(tmp_path / 'meshGroups')])
+    assert capsys.readouterr().out == ''
+
+
+def test_scripts_run_layer_report(tmp_path, monkeypatch, repo_root):
+    case = _writeScripts(tmp_path, monkeypatch, repo_root, ['motion_a'])
+    run = (case / 'runScript').read_text()
+    assert run.index('$RUN snappyHexMesh') < run.index("layerReport.py' log.snappyHexMesh system/meshGroups;")
+    #negative cell volumes stop the meshing (case mesh and every remeshing segment), other checkMesh failures do not
+    assert "grep -q 'Zero or negative cell volume' log.checkMesh" in run
+    import json
+    for setup in ('internal', 'internal-relaxed'):
+        with open(os.path.join(repo_root, 'setupTemplates', setup, 'defaultCluster', 'slurm', 'clusterDict')) as f:
+            remesh = json.load(f)['run']['remeshMesh']
+        assert "grep -q 'Zero or negative cell volume' meshes/$s/log.checkMesh" in remesh
+        assert 'ERROR: negative cell volumes in meshes/$s' in remesh
+
+
+#----- mesh groups: EDGE_LEVEL (feature edges of some PIDs, e.g. the hole rims of the displacer faces)
+
+def test_edge_level_parse():
+    group = writeInternal.parseMeshGroupLine('PIDS bottom top EDGE_LEVEL 4'.split(), 'g')
+    assert group['edgeLevel'] == 4 and group['layers'] is None and group['level'] is None
+    with pytest.raises(SystemExit, match='EDGE_LEVEL takes one refinement level'):
+        writeInternal.parseMeshGroupLine('PIDS bottom EDGE_LEVEL 4 5'.split(), 'g')
+
+
+def test_edge_level_gap_warning(repo_root, capsys):
+    #rims opening into a gap refined to level 3: only level 4 removes the skewed faces
+    templateLoc, full, geomDict, pidDict, wallGroups = _meshGroupCase(repo_root, rims='PIDS hot EDGE_LEVEL 3')
+    motionInfo = {'gapRefs': [{'level': 3}]}
+    writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups, motionInfo)
+    assert 'EDGE_LEVEL 3 is not above the gap refinement level 3' in capsys.readouterr().out
+    full['WALL-chamber']['rims'] = 'PIDS hot EDGE_LEVEL 4'.split()
+    writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups, motionInfo)
+    assert 'not above the gap refinement' not in capsys.readouterr().out
+
+
+def test_edge_level_geometry_and_snappy(tmp_path, monkeypatch, repo_root):
+    templateLoc, full, geomDict, pidDict, wallGroups = _meshGroupCase(repo_root, rims='PIDS hot cold EDGE_LEVEL 4')
+    msh = tmp_path / 'MSH'
+    msh.mkdir()
+    (msh / 'WALL-chamber.stl').write_text(STL)
+    meshGroups = writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    edgeRefs = writeInternal.getEdgeRefs(meshGroups, geomDict, str(msh))
+    assert [e['file'] for e in edgeRefs] == ['EDGE-WALL-chamber-rims.stl']
+    case = tmp_path / 'case'
+    case.mkdir()
+    monkeypatch.chdir(case)
+    #an EDGE file of an earlier setup is removed
+    (case / 'constant/triSurface').mkdir(parents=True)
+    (case / 'constant/triSurface/EDGE-WALL-chamber-old.stl').write_text('solid a\nendsolid a\n')
+    #moving PIDs are shifted like their geometry (cold moved by +0.5 here)
+    writeInternal.writeEdgeGeometry(edgeRefs, shifts={'WALL-chamber': {'cold': (0.0, 0.0, 0.5)}})
+    assert sorted(os.listdir(case / 'constant/triSurface')) == ['EDGE-WALL-chamber-rims.stl']
+    tris = geometryIO.readSurfaceTriangles(str(case / 'constant/triSurface/EDGE-WALL-chamber-rims.stl'))
+    assert list(tris) == ['hot', 'cold']
+    assert np.allclose(tris['hot'][:, :, 2], 0.0) and np.allclose(tris['cold'][:, :, 2], 1.5)
+    writeInternal.writeSnappyInternal(templateLoc, geomDict, full, None, meshGroups)
+    snappy = (case / 'system/snappyHexMeshDict').read_text()
+    assert '{ file "EDGE-WALL-chamber-rims.eMesh"; scale 1; level 4; }' in snappy
+    extract = (case / 'system/surfaceFeatureExtractDict').read_text()
+    assert 'EDGE-WALL-chamber-rims.stl { extractionMethod extractFromSurface;' in extract
+    assert 'openEdges yes;' in extract
+
+
+def test_mesh_groups_from_self_no_warning(repo_root, capsys):
+    #MESH_GROUPS of a body with its own file (FROM = self) are used; only a body made of another file's PIDs warns
+    templateLoc, full, geomDict, pidDict, wallGroups = _meshGroupCase(repo_root, heat='PIDS hot LEVEL 2')
+    full['MOVE-displacer'] = {'FROM': ['self'], 'MESH_GROUPS': ['rims']}
+    writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    assert 'is not used (FROM body)' not in capsys.readouterr().out
+    full['MOVE-displacer']['FROM'] = ['WALL-chamber']
+    writeInternal.getMeshGroups(geomDict, full, pidDict, wallGroups)
+    assert 'MESH_GROUPS rims is not used (FROM body)' in capsys.readouterr().out
+
+
+def test_field_min_max_function_object(tmp_path, monkeypatch, repo_root):
+    #fieldMinMax of every solved field with its cell location, each step: where a run starts to blow up
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    assert writeInternal.minMaxFields(full) == ['U', 'p', 'T', 'rho']
+    full['GLOBAL_SIM_CONTROL']['TURB_MODEL'] = ['kOmegaSST']
+    assert writeInternal.minMaxFields(full) == ['U', 'p', 'T', 'rho', 'k', 'omega', 'nut', 'alphat']
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'system').mkdir()
+    writeInternal.writeFunctionObjectsInternal({}, full)
+    fos = (tmp_path / 'system/internalFunctionObjects').read_text()
+    block = fos[fos.index('fieldMinMax\n{'):]
+    block = block[:block.index('}')]
+    assert 'type            fieldMinMax;' in block and 'location        true;' in block
+    assert 'fields          (U p T rho k omega nut alphat);' in block and 'writeControl    timeStep;' in block
+    full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['pimpleFoam']
+    full['GLOBAL_SIM_CONTROL']['TURB_MODEL'] = ['kEpsilon']
+    assert writeInternal.minMaxFields(full) == ['U', 'p', 'k', 'epsilon', 'nut']
+    full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['buoyantSimpleFoam']
+    full['GLOBAL_SIM_CONTROL']['TURB_MODEL'] = ['laminar']
+    assert writeInternal.minMaxFields(full) == ['U', 'p', 'p_rgh', 'T', 'rho']

@@ -23,6 +23,9 @@ wallFunction
     lowReynolds
     {
     }
+    lowReynoldsInternal
+    {
+    }
 }
 
 

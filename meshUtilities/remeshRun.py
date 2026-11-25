@@ -21,7 +21,8 @@ and limitations.
 #(system/remeshSegments). a remeshed time directory holds the new mesh (polyMesh incl. points0 and a
 #remeshSegment marker), the solver restarts from it and stops at the end angle of that mesh.
 #usage, from the case directory:
-#  python3 remeshRun.py next               prints "solve <seg> <time>", "map <seg> <time>" or "done"
+#  python3 remeshRun.py next               prints "solve <seg> <time>", "map <seg> <time>", "combine <seg> <time>"
+#                                          (a map whose fill / mass fix did not finish) or "done"
 #  python3 remeshRun.py prepare <seg> <time> sets meshes/<seg>/system/controlDict to start at <time> (mapFieldsPar target)
 #  python3 remeshRun.py graft <seg> <time> moves the fields mapped onto meshes/<seg> (mapFieldsPar) and the mesh
 #                                          into processor*/<time>, ready for the restart
@@ -78,6 +79,37 @@ def timeDirs(procDir):
         except ValueError:
             continue
     return sorted(times)
+
+
+def setAsideIncomplete(procDirs):
+    #a time directory without p is from a step that did not finish: the crank motion solver writes uniform/crankState
+    #at the start of a write step, the fields only come at its end, so a solver that crashed in that step left a time
+    #with the stop angle and no fields (the loop then took it as a segment end, the map found no gas). Renamed to
+    #<time>.incomplete in every processor (OpenFOAM and this loop skip it), nothing is deleted
+    moved = []
+    while True:
+        times = timeDirs(procDirs[0])
+        if not times:
+            break
+        tValue, tName = times[-1]
+        timeDir = os.path.join(procDirs[0], tName)
+        if not os.path.isfile(os.path.join(timeDir, 'uniform', 'crankState')) or \
+           any(os.path.isfile(os.path.join(timeDir, name)) for name in ('p', 'p.gz', 'p_rgh', 'p_rgh.gz')):
+            break
+        for procDir in procDirs:
+            src = os.path.join(procDir, tName)
+            if os.path.isdir(src):
+                dst = src + '.incomplete'
+                n = 1
+                while os.path.exists(dst):
+                    n += 1
+                    dst = '%s.incomplete%d' % (src, n)
+                os.rename(src, dst)
+        moved.append(tName)
+    if moved:
+        sys.stderr.write('time %s had no fields (a step that did not finish): renamed to <time>.incomplete in every '
+                         'processor directory\n' % (', '.join(moved)))
+    return moved
 
 
 def findTime(procDir, value):
@@ -146,6 +178,7 @@ def nextStep():
     procDir = procDirs[0]
     controlDict = os.path.join('system', 'controlDict')
     endTime = float(readEntry(controlDict, 'endTime'))
+    setAsideIncomplete(procDirs)
     tValue, tName = timeDirs(procDir)[-1]
     #the solver writes its last step and stops within one step of endTime (crank solver, remeshing)
     lastStep = float(readEntry(controlDict, 'maxDeltaT') or readEntry(controlDict, 'deltaT') or 0.0)
@@ -159,6 +192,10 @@ def nextStep():
     mesh = meshSegment(procDir, tValue)
     if seg != mesh:
         return 'map %s %s' % (seg, tName)
+    #a map that did not finish: remeshMassFix -combine removes remeshCover as its very last step, so a grafted time
+    #that still has it ended between the graft and the mass fix (the solver would start on unfilled cells)
+    if any(os.path.isfile(os.path.join(procDir, tName, name)) for name in ('remeshCover', 'remeshCover.gz')):
+        return 'combine %s %s' % (seg, tName)
     #the solver has to get past this time, otherwise the loop would run it again forever
     last = open(stateFile).read().split() if os.path.isfile(stateFile) else []
     if last[:2] == ['solve', tName]:

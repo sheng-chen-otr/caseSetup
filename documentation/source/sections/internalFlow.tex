@@ -101,8 +101,38 @@ Each \codeword{WALL} and \codeword{MOVE} geometry gets a section with the same n
     A PID that matches two groups and a keyword that matches no PID are errors. PIDs in no group form the group \codeword{<file>_default}.
     \item \codeword{ANCHOR_PIDS} [\codeword{str}] - flat faces that hold the mesh still for the motion solver, normally the hot and cold end faces (\codeword{WALL} only). Add any fixed step or port end that lies between an anchor and a moving body, otherwise its faces move with the mesh. The setup warns about such faces.
     \item \codeword{GAP_PIDS} [\codeword{str}] - wall side of the displacer side gap. Used for the gap refinement, see Section \ref{sec:motion}.
+    \item \codeword{MESH_GROUPS} [\codeword{str}] - surface refinement and wall layers per PID, see below.
 \end{itemize}
 Faces that move with a body always get \codeword{movingWallVelocity}, whatever U is set to. In an incompressible run (\codeword{pimpleFoam}) there is no temperature field and the T settings are ignored (the setup prints a note).
+
+\subsection{Mesh Groups}
+The GEOM line sets one surface level and one layer setting for a whole file. \codeword{MESH_GROUPS} overrides them per PID, in the same way as \codeword{BC_GROUPS} (\codeword{WALL} and \codeword{MOVE} sections; the faces of a \codeword{FROM} body are set in the section of the file they are in):
+\begin{lstlisting}
+    MESH_GROUPS = heat holes gap
+    heat = PIDS hot cold LAYERS auto
+    holes = PIDS hole LEVEL 3 4
+    gap = PIDS side LAYERS 0
+\end{lstlisting}
+\begin{itemize}
+    \item \codeword{LEVEL <min> [<max>]} - surface refinement level of these PIDs (one value = min and max).
+    \item \codeword{EDGE_LEVEL <n>} - refinement level of the edges of these PIDs: the outline of their faces (e.g. the hole rims and the outer edge of a displacer face) and the sharp edges inside them. The tool writes the PIDs to \codeword{constant/triSurface/EDGE-<file>-<group>.stl} (moving PIDs shifted to the start angle, and to every remeshing segment's angle) and \codeword{surfaceFeatureExtract} takes its feature edges, so only these edges are refined, not every edge of the file (\codeword{FEATURE_LEVEL}).
+    \item \codeword{LAYERS <n>} - number of layers. \codeword{LAYERS 0}: no layers, the wall points are held; \codeword{LAYERS -1}: no layers, the wall points slide along the wall to make room for the layers of the walls next to it.
+    \item \codeword{SIZES relative | absolute | mixed} - units of the layer sizes. \codeword{relative}: fractions of the local cell size (as the GEOM line), \codeword{absolute}: m, \codeword{mixed}: \codeword{FIRST} in m and \codeword{FINAL} relative, so the stack starts at a fixed first cell and blends into the cells next to it (\codeword{thicknessModel firstAndRelativeFinal}). Default \codeword{mixed} with \codeword{FIRST} or \codeword{LAYERS auto}, else \codeword{relative}.
+    \item \codeword{FIRST}, \codeword{FINAL}, \codeword{TOTAL}, \codeword{EXPANSION} - layer sizes: first and final layer, total thickness and growth ratio. Any two of them set the stack (the matching snappy \codeword{thicknessModel} is written for every entry). With one, the second is the GEOM expansion ratio; with none, \codeword{FINAL_LAYER_THICKNESS} and the GEOM expansion ratio (\codeword{relative} only, \codeword{absolute} needs a thickness). \codeword{mixed} takes \codeword{FIRST} and \codeword{FINAL} only.
+    \item \codeword{MIN} - \codeword{minThickness} (smallest total thickness kept) in the units of \codeword{SIZES}, default \codeword{MIN_LAYER_THICKNESS} (relative, mixed) or a tenth of the total thickness (absolute).
+    \item \codeword{LAYERS auto} - sizes the layers for the thermal layer of an oscillating flow. The penetration depth $\delta = \sqrt{2\alpha/\omega}$, with $\alpha = k/(\rho c_p)$ of the gas at \codeword{CHARGE_PRESSURE} and the wall temperature (\codeword{fixed} T of the PID's BC group, else \codeword{INIT_T}) and $\omega = 2\pi$\codeword{FREQ}, is taken at the coldest wall of the group (the thinnest layer). The first layer is $\delta/10$ and the layers grow at most 1.3 times per layer up to the final layer, but the whole stack is at most $2\delta$ thick (then absolute sizes, first layer $\delta/10$, total $2\delta$, as many layers as a growth of 1.3 needs). A stack growing up to the cell size did not fit the end gaps: snappy shrinks the mesh next to the wall to make room for the layers, and in a thin end gap of flat z-split cells that inverted cells (demo segment mesh: 3.3\,mm stack, 60 negative volumes; capped at 1.7\,mm: none, and all layers on the hot face). Cyclic runs only.
+\end{itemize}
+A PID in two mesh groups, a keyword that matches no PID and a mesh group with the name of a BC group are errors. The setup prints a table of every patch in a mesh group: level, layers, first and final layer, growth ratio, total thickness and the thermal penetration depth. It warns when the layers grow more than 1.5 times per layer (use more layers) and when a mesh group puts layers on \codeword{GAP_PIDS} faces (the mesh group wins there).
+
+Edges of displacer faces that open into the refined side gap or the holes, inside an end-gap z band: the flat z-split cells snapped onto the sharp edge give highly skewed faces (checkMesh skewness above 4) unless the edge is refined one level above the gap refinement. Demo segment mesh: displacer edges at the gap level 3 left 752 faces with skewness up to 4.3 (8.5 with all displacer edges at level 3), at level 4 none (Mesh OK, max 3.9). The setup warns when an \codeword{EDGE_LEVEL} is not above the gap refinement level.
+
+Walls without layers next to walls with layers: by default (\codeword{[GLOBAL_REFINEMENT] ZERO_LAYERS = slip}) every patch that gets no layers in a case with mesh-group layers (GEOM layers 0, \codeword{GAP_PIDS}) is written with \codeword{nSurfaceLayers -1}, so its points slide and the layers of the neighbouring walls reach the corners. With 0 the points are held and snappy cuts the layer stack back from the edges (test box, side walls 0: about 84\,\% of the thickness with relative or mixed sizes, absolute sizes removed completely; side walls -1: all layers in every mode). \codeword{ZERO_LAYERS = fixed} keeps 0. An explicit \codeword{LAYERS 0} or \codeword{-1} in a mesh group is written as given. Cases without mesh-group layers are not changed.
+
+\textbf{NOTE:} \codeword{snappyHexMesh} cannot be made to repair bad cells: its quality checks only undo the steps that make the mesh worse, and when the layer iterations (\codeword{nLayerIter}) run out it writes the mesh with whatever illegal faces are left. The run script therefore stops the meshing when \codeword{checkMesh} finds zero or negative cell volumes in the case mesh or any remeshing segment (other failed checks, such as skewness, are only printed); the usual cause is a layer stack too thick for a thin gap.
+
+\textbf{NOTE:} \codeword{snappyHexMesh} drops layers where they do not fit (narrow gaps, sharp edges, mesh quality) without stopping. After every \codeword{snappyHexMesh} run (the case mesh and every remeshing segment) the run script prints the layer coverage of the mesh-group patches (\codeword{meshUtilities/layerReport.py}, from the layer table at the end of \codeword{log.snappyHexMesh}) with a warning where less than half of the layers or of the thickness was added. Check it for every segment: a face covered in one segment mesh and not in the next changes the wall heat flux at the map.
+
+Why: on a heat-exchanging wall the wall heat flux depends on how many cells sit inside the thermal layer ($\delta \approx 0.8$\,mm for air at 10\,Hz, about 1--2\,mm for helium at 12.6\,bar and 5\,Hz). With cells of the base size the flux differs between meshes, which shows up as heat added at every remeshing map. Check that the wall heat flux (\codeword{HEAT_<group>}) does not change with the layer settings.
 
 \subsection{Run Control}
 \begin{lstlisting}
@@ -119,6 +149,8 @@ Faces that move with a body always get \codeword{movingWallVelocity}, whatever U
     \item \codeword{FREQ} [\codeword{float,Hz}] - engine speed. With the crank drive it is the start speed.
     \item \codeword{N_CYCLES} [\codeword{float}] - number of cycles to run, \codeword{endTime = N_CYCLES/FREQ}.
     \item \codeword{WRITE_PER_CYCLE} [\codeword{int}] - number of written times per cycle.
+    \item \codeword{END_TIME} [\codeword{float,s}] - transient runs that are not cyclic (through-flow, warm-up, no \codeword{MOVE} bodies): run length in s, used instead of \codeword{FREQ}, \codeword{N_CYCLES} and \codeword{WRITE_PER_CYCLE}. Blank (default) = cyclic run. With \codeword{MOVE} bodies it is an error. The summary then averages over the end of the run (\codeword{postInternal.py --avgTime}, default the last 10\,\%) instead of whole cycles, and \codeword{flowConvergence.png} is plotted against time.
+    \item \codeword{WRITE_INTERVAL} [\codeword{float,s}] - write interval with \codeword{END_TIME}, blank = \codeword{END_TIME}/20.
     \item \codeword{MAX_CO} [\codeword{float}] - Courant number limit for the adjustable time step. Set it to \codeword{0} or leave it blank (\codeword{MAX_CO =}) for a fixed time step equal to \codeword{MAX_DT} (\codeword{adjustTimeStep no}). With a fixed step the setup prints the number of steps per cycle, and warns if the write interval is not a whole number of steps (the writes then happen at the first step past each interval).
     \item \codeword{MAX_DT} [\codeword{float,s}] - largest time step (adjustable), or the time step (fixed).
     \item \codeword{INIT_DT} [\codeword{float,s}] - first time step of an adjustable run, not used with a fixed step.
@@ -645,6 +677,7 @@ Written to \codeword{system/internalFunctionObjects}, every time step:
 \begin{itemize}
     \item \codeword{gasAvg} - volume-averaged p (and T, $\rho$ for compressible).
     \item \codeword{gasMass} - total gas mass (compressible). It must stay constant in a closed volume. A drift shows a mesh motion or solver tolerance problem.
+    \item \codeword{fieldMinMax} - minimum and maximum of every solved field (U as magnitude, p, T, $\rho$, and k, $\omega$ or $\varepsilon$, $\nu_t$, $\alpha_t$ with a turbulence model) with the cell and its location, every time step, in the log and \codeword{postProcessing/fieldMinMax}. Shows where a run starts to blow up.
     \item \codeword{wallHeatFlux} - heat flux on every wall patch (compressible), positive = into the gas.
     \item \codeword{force_<body>} - force on the moving faces of each body.
     \item \codeword{p_<patch>} - area-averaged pressure on each moving zone face.
@@ -887,12 +920,22 @@ V(t) = \frac{m(t)}{\bar{\rho}(t)} .
 \end{equation}
 over the window. A loop run clockwise in the p--V plot gives positive work (out of the gas). \codeword{PV_WORK} uses one mean pressure for the whole gas. The body work uses the pressure on each face, so the two differ by the pressure differences inside the engine (flow loss through the regenerator and the holes): $\mathrm{PV\_WORK} - \mathrm{AVG\_ENERGY}$ is roughly the work lost to flow friction per cycle. \codeword{pV.png} plots the last \codeword{--pvCycles} cycles (an unfinished last cycle is marked): the p--V loops with their work, p and $V$ against the crank angle, and the loop shape as $p/(C V^{-n}) - 1$ with $C$, $n$ fitted to each cycle. The pressure is the area average on the faces of the body whose motion table follows the gas volume (the piston crown, so the loop area is the piston work), or $\bar{p}$ when no such body is found.
 
+\paragraph{Ideal-gas limits.} For a gas spring (closed cylinder, one piston) the loop can be checked against the two ideal-gas limits. \codeword{POLY_N} is the exponent $n$ of $p V^n = C$ fitted to $\bar{p}$ and $V$ over the window: 1 for isothermal, $\gamma$ (\codeword{GAMMA}, from Cp and molWeight in \codeword{thermophysicalProperties}) for adiabatic. \codeword{P_ISO_DEV_MAX} is the largest $\bar{p}V/(m R T_\mathrm{ref}) - 1$, with $T_\mathrm{ref}$ (\codeword{T_ISO_REF}) the fixed wall temperature when every fixed-T group has the same one, else \codeword{INIT_T}. \codeword{T_SWING} is the range of the mean gas temperature and \codeword{PV_WORK_REL} is \codeword{PV_WORK} over the mean of $\bar{p}V$, the hysteresis loss in the form of the gas-spring literature. Whether a gas spring should be near isothermal follows from the oscillating-flow P\'eclet number $Pe_\omega = \omega D_h^2/(4\alpha)$, with $D_h = 4V/A_\mathrm{wall}$ and $\alpha = k/(\rho c_p)$ at the charge pressure ($\alpha \propto 1/p$): isothermal for $Pe_\omega \ll 1$, adiabatic for $Pe_\omega \gg 1$, with the largest loss in between. \codeword{pV.png} draws the isothermal curve and the adiabatic curve through the largest volume under the last loop.
+
 \paragraph{Mass drift.}
 A closed volume must keep its mass:
 \begin{equation}
 \mathrm{MASS\_DRIFT} = \frac{m(t_{end})}{m(0)} - 1 .
 \end{equation}
 \codeword{cycleConvergence.png} shows $m(t_k)/m(0) - 1$ at the end of every cycle. A drift comes from the mesh motion (space conservation) or a loose pressure tolerance, not from the physics. Values around $10^{-6}$ are fine. A drift of $10^{-3}$ shifts the mean pressure by the same fraction.
+
+\paragraph{Solver checks.}
+Over the same averaging cycles, read from the solver logs (restarts included):
+\begin{itemize}
+    \item \codeword{COURANT_MAX} - the largest Courant number of any step.
+    \item \codeword{COURANT_ABOVE_1} - the share of steps with a Courant number above 1. With \codeword{N_OUTER_CORR = 1} (PISO) the pressure--velocity coupling is only accurate around 1, so keep this near 0; the summary warns above 5\,\%. Thin end gaps near TDC and the first steps after a remesh map are where it rises.
+    \item \codeword{P_CAP_FRACTION} - the share of steps whose final pressure solve stopped at \codeword{P_MAX_ITER} instead of reaching its tolerance. Above 2\,\% the summary warns: check the p residuals in the log, a round-off floor (slow cases, fine meshes) is harmless, a stalled solve is not.
+\end{itemize}
 
 \subsubsection{Heat, Through-Flow and Porous Zones}
 \paragraph{Heat per BC group.}
