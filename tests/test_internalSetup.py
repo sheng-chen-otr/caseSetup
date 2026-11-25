@@ -1701,3 +1701,26 @@ def test_field_min_max_function_object(tmp_path, monkeypatch, repo_root):
     full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['buoyantSimpleFoam']
     full['GLOBAL_SIM_CONTROL']['TURB_MODEL'] = ['laminar']
     assert writeInternal.minMaxFields(full) == ['U', 'p', 'p_rgh', 'T', 'rho']
+
+
+def test_pimple_residual_control(tmp_path, monkeypatch, repo_root):
+    #several outer correctors: the step ends once U, e and p are below OUTER_TOL / OUTER_TOL_P, so a large
+    #N_OUTER_CORR only costs where a step needs it; one outer corrector (PISO): no residualControl
+    templateLoc, full = _fullDefaults(repo_root, 'rhoPimpleFoam')
+    monkeypatch.chdir(tmp_path)
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    assert 'residualControl' not in (tmp_path / 'system/fvSolution').read_text()
+    full['GLOBAL_SIM_CONTROL']['N_OUTER_CORR'] = ['8']
+    writeInternal.writeNumericsInternal(templateLoc, full)
+    text = (tmp_path / 'system/fvSolution').read_text()
+    pimple = text[text.index('PIMPLE'):]
+    assert 'nOuterCorrectors 8;' in pimple
+    for line in ['p      { tolerance 0.0001; relTol 0; }', 'U      { tolerance 1e-05; relTol 0; }',
+                 'e      { tolerance 1e-05; relTol 0; }']:
+        assert line in pimple
+    #incompressible: no energy; blank tolerances: no residualControl (every outer corrector runs)
+    full['GLOBAL_SIM_CONTROL']['SOLVER'] = ['pimpleFoam']
+    assert [l.split()[0] for l in writeInternal.outerResidualControl(full)[2:-1]] == ['p', 'U']
+    full['GLOBAL_SIM_CONTROL']['OUTER_TOL_P'] = ['']
+    full['GLOBAL_SIM_CONTROL']['OUTER_TOL'] = ['']
+    assert writeInternal.outerResidualControl(full) == []

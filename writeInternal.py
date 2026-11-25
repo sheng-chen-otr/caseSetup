@@ -2517,7 +2517,30 @@ def getAlgorithm(fullCaseSetupDict, pRef, pressureBC):
              '    nNonOrthogonalCorrectors %s;' % (simControl['N_NONORTH_CORR'][0]), '    correctPhi no;']
     if pRef:
         lines.append(pRef)
+    lines += outerResidualControl(fullCaseSetupDict)
     return '\n'.join(lines + ['}'])
+
+
+def outerResidualControl(fullCaseSetupDict):
+    #PIMPLE residualControl: with several outer correctors a time step ends once the initial residuals of the latest
+    #solves are below OUTER_TOL_P (pressure) and OUTER_TOL (U, e), then one final iteration (v2412 pimpleControl), so
+    #N_OUTER_CORR is an upper limit for the hard steps, not the cost of every step. Blank = always all of them
+    simControl = fullCaseSetupDict['GLOBAL_SIM_CONTROL']
+    if int(simControl['N_OUTER_CORR'][0]) < 2:
+        return []
+    tolP = ''.join(simControl.get('OUTER_TOL_P', ['1e-4'])).strip()
+    tol = ''.join(simControl.get('OUTER_TOL', ['1e-5'])).strip()
+    entries = []
+    if tolP:
+        entries.append(('p_rgh' if isBuoyant(fullCaseSetupDict) else 'p', float(tolP)))
+    if tol:
+        entries.append(('U', float(tol)))
+        if getFlow(fullCaseSetupDict) != 'incompressible':
+            entries.append(('e', float(tol)))
+    if not entries:
+        return []
+    return (['    residualControl', '    {'] +
+            ['        %-6s { tolerance %g; relTol 0; }' % (name, value) for name, value in entries] + ['    }'])
 
 
 def writeNumericsInternal(templateLoc, fullCaseSetupDict, pressureBC=False):
