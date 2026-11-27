@@ -846,15 +846,16 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
     reportLines = []
     for geom in geomDict:
         geomName = stripExt(geom)
-        for group in meshGroups.get(geomName, []):
-            entry = 'nSurfaceLayers %d;' % (zeroLayers) if group.get('autoNone') else group['entry']
-            if entry is None:
-                continue
-            for pid in group['pids']:
-                patch = '%s_%s' % (geomName, pid)
-                layerArray.append('        "%s" { %s }' % (patch, entry))
-                if group['stack']:
-                    reportLines.append('%s %s %d %.6g' % (patch, group['name'], group['layers'], group['stack'][0]))
+        if not geomName.startswith('REF-'):
+            for group in meshGroups.get(geomName, []):
+                entry = 'nSurfaceLayers %d;' % (zeroLayers) if group.get('autoNone') else group['entry']
+                if entry is None:
+                    continue
+                for pid in group['pids']:
+                    patch = '%s_%s' % (geomName, pid)
+                    layerArray.append('        "%s" { %s }' % (patch, entry))
+                    if group['stack']:
+                        reportLines.append('%s %s %d %.6g' % (patch, group['name'], group['layers'], group['stack'][0]))
     #patches with mesh-group layers for meshUtilities/layerReport.py (coverage after snappy, every remesh segment)
     os.makedirs('system', exist_ok=True)
     with open(os.path.join('system', 'meshGroups'), 'w') as f:
