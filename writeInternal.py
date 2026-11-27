@@ -832,9 +832,9 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
                                 for group in meshGroups.get(geomName, []) if group['level'] for pid in group['pids'])
             surfaceArray.append('        %s { level (%s %s); patchInfo { type wall; } regions { %s#include "snappyRefinementDict" } }'
                                 % (geomName, level, level, regionLevels))
-        nLayers = int(geomDict[geom]['layers'])
-        layerArray.append('        "%s_.*" { nSurfaceLayers %s; expansionRatio %s;}'
-                          % (geomName, nLayers if nLayers > 0 else zeroLayers, geomDict[geom]['expansion']))
+            nLayers = int(geomDict[geom]['layers'])
+            layerArray.append('        "%s_.*" { nSurfaceLayers %s; expansionRatio %s;}'
+                            % (geomName, nLayers if nLayers > 0 else zeroLayers, geomDict[geom]['expansion']))
     #gap faces: no layers, written after the file-wide entry (last matching regex wins)
     for geom in geomDict:
         geomName = stripExt(geom)
