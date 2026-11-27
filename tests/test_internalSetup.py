@@ -93,6 +93,14 @@ def test_readSurfacePIDs_obj_groups_and_objects(tmp_path):
     assert geometryIO.readSurfacePIDs(str(path)) == ['bodyA']
 
 
+def test_readGeomPIDs_skips_refinement_regions(tmp_path):
+    (tmp_path / 'REF-hot.stl').write_text('solid\nendsolid\n')
+    (tmp_path / 'WALL-a.stl').write_text(STL)
+    pidDict = writeInternal.readGeomPIDs(
+        {'REF-hot.stl': {'scale': '1'}, 'WALL-a.stl': {'scale': '1'}}, str(tmp_path))
+    assert pidDict == {'REF-hot': [], 'WALL-a': ['hot', 'cold', 'sideWall']}
+
+
 #----- BC groups
 
 def test_parseGroupLine_full():
@@ -175,6 +183,22 @@ def test_background_mesh_whole_cells_and_margin():
     assert np.allclose(lo, [-0.06, -0.06, -0.008]) and np.allclose(hi, [0.06, 0.06, 0.068])
     assert list(n) == [30, 30, 19]
     assert np.allclose(lo + n*0.004, hi)
+
+
+def test_background_mesh_excludes_refinement_regions(tmp_path, monkeypatch):
+    full = {'GLOBAL_REFINEMENT': {'BASE_CELL': ['0.1']}}
+    geom = {'WALL-a.stl': {'scale': '1'}, 'REF-box.stl': {'scale': '1'}}
+    checked = []
+
+    monkeypatch.setattr(writeInternal.geometryIO, 'surfaceBoundingBox',
+                        lambda path: checked.append(path) or (0.0, 0.0, 0.0, 1.0, 1.0, 1.0))
+    monkeypatch.setattr(writeInternal, 'copyTemplate', lambda *args: None)
+    monkeypatch.chdir(tmp_path)
+
+    bbox = writeInternal.writeBlockMeshInternal(str(tmp_path), geom, full)
+
+    assert bbox == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+    assert len(checked) == 1
 
 
 def test_run_times():

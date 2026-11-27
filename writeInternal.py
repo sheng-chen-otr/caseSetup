@@ -151,6 +151,10 @@ def readGeomPIDs(geomDict, mshDir):
         geomPath = os.path.join(mshDir, geom)
         if not os.path.isfile(geomPath):
             sys.exit('ERROR! Geometry %s not found in %s!' % (geom, mshDir))
+        geomName = stripExt(geom)
+        if geomName.startswith('REF-'):
+            pidDict[geomName] = []
+            continue
         pids = geometryIO.readSurfacePIDs(geomPath)
         if len(pids) == 0 or any(pid == '' for pid in pids):
             sys.exit('ERROR! %s has unnamed PIDs (STL "solid" without a name / OBJ without groups)!' % (geom))
@@ -727,8 +731,12 @@ def writeBlockMeshInternal(templateLoc, geomDict, fullCaseSetupDict):
     baseCell = float(getVal(fullCaseSetupDict, 'GLOBAL_REFINEMENT', 'BASE_CELL'))
     allBox = []
     for geom in geomDict:
+        if stripExt(geom).startswith('REF-'):
+            continue
         scale = float(geomDict[geom]['scale'])
         allBox.append(np.array(geometryIO.surfaceBoundingBox(caseGeomPath(geom)))*scale)
+    if not allBox:
+        sys.exit('ERROR! No physical geometry (WALL/MOVE/FAN/POR) found for the blockMesh domain!')
     allBox = np.array(allBox)
     bbox = list(allBox[:, :3].min(axis=0)) + list(allBox[:, 3:].max(axis=0))
     lo, hi, n = getBackgroundMesh(bbox, baseCell)
