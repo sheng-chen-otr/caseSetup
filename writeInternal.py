@@ -838,9 +838,10 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
     #gap faces: no layers, written after the file-wide entry (last matching regex wins)
     for geom in geomDict:
         geomName = stripExt(geom)
-        gapPids = [p for p in fullCaseSetupDict[geomName].get('GAP_PIDS', ['']) if p != '']
-        for kw in gapPids:
-            layerArray.append('        "%s_.*%s.*" { nSurfaceLayers %d; }' % (geomName, kw, zeroLayers))
+        if not geomName.startswith('REF-'):
+            gapPids = [p for p in fullCaseSetupDict[geomName].get('GAP_PIDS', ['']) if p != '']
+            for kw in gapPids:
+                layerArray.append('        "%s_.*%s.*" { nSurfaceLayers %d; }' % (geomName, kw, zeroLayers))
     #MESH_GROUPS layers by exact patch, last (after the file-wide and gap entries)
     reportLines = []
     for geom in geomDict:
