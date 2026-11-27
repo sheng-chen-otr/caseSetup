@@ -786,13 +786,14 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
     #MESH_GROUPS EDGE_LEVEL: feature edges of the group's own STL (outline of its faces + sharp edges) at that level
     for geom in geomDict:
         geomName = stripExt(geom)
-        for group in meshGroups.get(geomName, []):
-            if group.get('edgeFile'):
-                featureArray.append('        { file "%s.eMesh"; scale %s; level %d; }'
-                                    % (stripExt(group['edgeFile']), geomDict[geom]['scale'], group['edgeLevel']))
-                extractArray.append('%s { extractionMethod extractFromSurface; includedAngle %s; '
-                                    'subsetFeatures { nonManifoldEdges no; openEdges yes; } writeObj no; }'
-                                    % (group['edgeFile'], featAngle))
+        if not geomName.startswith('REF-'):
+            for group in meshGroups.get(geomName, []):
+                if group.get('edgeFile'):
+                    featureArray.append('        { file "%s.eMesh"; scale %s; level %d; }'
+                                        % (stripExt(group['edgeFile']), geomDict[geom]['scale'], group['edgeLevel']))
+                    extractArray.append('%s { extractionMethod extractFromSurface; includedAngle %s; '
+                                        'subsetFeatures { nonManifoldEdges no; openEdges yes; } writeObj no; }'
+                                        % (group['edgeFile'], featAngle))
     #walls without layers next to walls with layers: nSurfaceLayers -1 lets their points slide along the wall to make
     #room for the neighbour's layers, 0 holds them (v2412: zeroFixedValue). With 0 side walls a layer stack on the
     #end faces of a box was cut back from the edges (absolute sizes: removed completely), with -1 it was complete.
@@ -826,10 +827,11 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
         #per-region levels: MESH_GROUPS LEVEL by exact PID (an exact key wins over the regex keys), then by PID name
         #keyword (regex) from system/snappyRefinementDict
         #   regionLevels=''.join('%s { mode inside; levels ((1E15 %s));}')  #GEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n'
-        regionLevels = ''.join('%s { level (%d %d); } ' % ((pid,) + group['level'])
-                               for group in meshGroups.get(geomName, []) if group['level'] for pid in group['pids'])
-        surfaceArray.append('        %s { level (%s %s); patchInfo { type wall; } regions { %s#include "snappyRefinementDict" } }'
-                            % (geomName, level, level, regionLevels))
+        if not geomName.startswith('REF-'):
+            regionLevels = ''.join('%s { level (%d %d); } ' % ((pid,) + group['level'])
+                                for group in meshGroups.get(geomName, []) if group['level'] for pid in group['pids'])
+            surfaceArray.append('        %s { level (%s %s); patchInfo { type wall; } regions { %s#include "snappyRefinementDict" } }'
+                                % (geomName, level, level, regionLevels))
         nLayers = int(geomDict[geom]['layers'])
         layerArray.append('        "%s_.*" { nSurfaceLayers %s; expansionRatio %s;}'
                           % (geomName, nLayers if nLayers > 0 else zeroLayers, geomDict[geom]['expansion']))
