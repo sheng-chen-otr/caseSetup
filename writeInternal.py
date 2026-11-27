@@ -808,10 +808,11 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
         level = geomDict[geom]['refinement']
         geometryArray.append('    %s { type triSurfaceMesh; name %s; file "%s"; scale %s; }'
                              % (geomFile, geomName, geomFile, geomDict[geom]['scale']))
-        featureArray.append('        { file "%s.eMesh"; scale %s; level %s; }'
-                            % (geomName, geomDict[geom]['scale'], level if featureLevel == 'surface' else featureLevel))
-        extractArray.append('%s { extractionMethod extractFromSurface; includedAngle %s; '
-                            'subsetFeatures { nonManifoldEdges no; openEdges yes; } writeObj no; }' % (geomFile, featAngle))
+        if not geomName.startswith('REF-'):
+            featureArray.append('        { file "%s.eMesh"; scale %s; level %s; }'
+                                % (geomName, geomDict[geom]['scale'], level if featureLevel == 'surface' else featureLevel))
+            extractArray.append('%s { extractionMethod extractFromSurface; includedAngle %s; '
+                                'subsetFeatures { nonManifoldEdges no; openEdges yes; } writeObj no; }' % (geomFile, featAngle))
         #fan disk: internal faceZone, made into a cyclic fan baffle by createBaffles after the zero directory
         if geomName.startswith('FAN'):
             surfaceArray.append('        %s { level (%s %s); faceZone %s; faceType internal; }'
@@ -824,6 +825,7 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
             continue
         #per-region levels: MESH_GROUPS LEVEL by exact PID (an exact key wins over the regex keys), then by PID name
         #keyword (regex) from system/snappyRefinementDict
+        #   regionLevels=''.join('%s { mode inside; levels ((1E15 %s));}')  #GEOM_NAME {mode inside; levels ((1E15 REF_LEVEL));}\n'
         regionLevels = ''.join('%s { level (%d %d); } ' % ((pid,) + group['level'])
                                for group in meshGroups.get(geomName, []) if group['level'] for pid in group['pids'])
         surfaceArray.append('        %s { level (%s %s); patchInfo { type wall; } regions { %s#include "snappyRefinementDict" } }'
@@ -862,6 +864,12 @@ def writeSnappyInternal(templateLoc, geomDict, fullCaseSetupDict, motionInfo=Non
                              % (gapRef['file'], gapRef['name'], gapRef['file']))
         regionArray.append('        %s { mode distance; levels ((%.6g %d)); }'
                            % (gapRef['name'], gapRef['distance'], gapRef['level']))
+    # add refinement region defined by geometry
+    for geom in geomDict:
+        if geom.startswith('REF-'):
+            refLevel = geomDict[geom]['refinement']
+            regionArray.append('        %s { mode inside; levels ((1E15 %s)); }' % (stripExt(geom),refLevel))
+    
     #one dict per meshing angle: the case mesh, then meshes/segNN for remeshing (own LOC_IN_MESH and end-gap bands)
     meshSetups = motionInfo.get('meshSetups') if motionInfo else None
     if not meshSetups:

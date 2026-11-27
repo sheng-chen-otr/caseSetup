@@ -30,7 +30,7 @@ import writeInternal
 
 #available addon keywords (REGN, SMP come in a later phase)
 addonKeyWords = ['WALL', 'MOVE', 'FAN', 'POR', 'REGN', 'SMP']
-supportedPrefixes = ['WALL', 'MOVE', 'FAN', 'POR']
+supportedPrefixes = ['WALL', 'MOVE', 'FAN', 'POR','REF']
 geomColumnNames = ['scale', 'refinement', 'layers', 'expansion', 'wallmodel']
 configName = 'internalSetup'
 

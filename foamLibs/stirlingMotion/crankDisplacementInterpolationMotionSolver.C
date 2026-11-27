@@ -158,7 +158,7 @@ void Foam::crankDisplacementInterpolationMotionSolver::readCoeffs()
             mesh().time(),
             IOobject::READ_IF_PRESENT,
             IOobject::NO_WRITE,
-            IOobject::NO_REGISTER
+            false    // not registered (bool: IOobject::NO_REGISTER only exists from v2306)
         )
     );
     if (state.found("theta"))
@@ -381,7 +381,7 @@ void Foam::crankDisplacementInterpolationMotionSolver::writeState() const
             mesh().time(),
             IOobject::NO_READ,
             IOobject::NO_WRITE,
-            IOobject::NO_REGISTER
+            false    // not registered
         )
     );
     state.add("theta", radToDeg(theta_));
