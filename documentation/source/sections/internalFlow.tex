@@ -64,6 +64,9 @@ Every geometry file needs a prefix that says what the whole body is:
 \begin{itemize}
     \item \codeword{WALL} - static walls (chamber, cylinder liner, hot and cold end faces).
     \item \codeword{MOVE} - a rigid moving body (displacer). A body whose faces are part of another file (e.g. a piston crown in the chamber file) has a \codeword{MOVE} section without a file of its own, see \codeword{FROM} below.
+    \item \codeword{FAN} - an internal planar disk across a duct or pipe. The fan creates a pressure jump; it is described in the Fans section.
+    \item \codeword{POR} - a closed porous region for Darcy--Forchheimer drag and optional matrix heat transfer.
+    \item \codeword{REF} - a closed STL refinement region. It refines every background cell inside the surface at the level in the GEOM column. It does not create patches, PIDs or an addon section.
 \end{itemize}
 \codeword{REGN} (regenerator) and \codeword{SMP} (sample surfaces) are reserved prefixes and are not available yet.
 
@@ -1063,7 +1066,7 @@ p = p_m + p_a \cos(\theta - \varphi), \qquad p_a = 20\,\textrm{kPa}, \quad \varp
 \subsection{Limitations}
 \begin{itemize}
     \item Motion along z only, bodies in line (no alpha engines), \codeword{displacementInterpolation} only.
-    \item Sample surfaces (\codeword{SMP}) are not available yet. Regenerators and heater/cooler cores are porous zones (Section \ref{sec:porous}); a linear initial matrix temperature along the holes is not available yet.
+    \item Sample surfaces (\codeword{SMP}) are not available yet. Regenerators and heater/cooler cores are porous zones (Section \ref{sec:porous}); \codeword{SOLID_T = 600 300} is available for a linear initial matrix temperature along z.
     \item No \codeword{--continue} option yet. With the crank drive, raising \codeword{N_CYCLES} and rewriting the controlDict (\codeword{-d}) is enough, since the crank tables cover one cycle and repeat. With prescribed motion the motion tables only cover \codeword{N_CYCLES}, so the full setup has to be rerun as well.
-    \item No p--V or cycle-convergence plots yet, only the summary and the flow images.
+    \item Remeshing is not supported for \codeword{FAN} baffles.
 \end{itemize}
